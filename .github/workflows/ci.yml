@@ -19,5 +19,6 @@ jobs:
           cache: npm
       - run: brew install ffmpeg
       - run: npm ci --ignore-scripts
+      - run: npm run cli:build
       - run: npm run verify
       - run: npm pack --dry-run
