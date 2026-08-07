@@ -1,0 +1,3365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:cut-av-ir:3",
+  "title": "CutAVIR v3",
+  "description": "Closed structural schema for CUT language 0.4 audiovisual intermediate representation. Cross-reference, canonical-rational, graph-cycle, content-hash, and budget invariants are additionally enforced by validateCutAvIr.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "language",
+    "compiler",
+    "project",
+    "sourceHash",
+    "buildId",
+    "determinism",
+    "timebase",
+    "modules",
+    "resources",
+    "compositions",
+    "scenes",
+    "nodes",
+    "signals",
+    "jobs",
+    "outputs",
+    "assertions"
+  ],
+  "properties": {
+    "format": { "const": "cut-av-ir" },
+    "version": { "const": 3 },
+    "language": { "const": "0.4" },
+    "compiler": { "$ref": "#/$defs/nonEmptyString" },
+    "project": { "$ref": "#/$defs/nonEmptyString" },
+    "sourceHash": { "$ref": "#/$defs/sha256" },
+    "buildId": { "$ref": "#/$defs/sha256" },
+    "determinism": { "$ref": "#/$defs/determinism" },
+    "timebase": { "$ref": "#/$defs/timebase" },
+    "modules": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "sourceModules": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/sourceModule" }
+    },
+    "features": {
+      "$ref": "#/$defs/features"
+    },
+    "resources": {
+      "type": "object",
+      "maxProperties": 10000,
+      "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+      "additionalProperties": { "$ref": "#/$defs/resource" }
+    },
+    "compositions": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/composition" }
+    },
+    "scenes": {
+      "type": "object",
+      "maxProperties": 10000,
+      "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+      "additionalProperties": { "$ref": "#/$defs/scene" }
+    },
+    "nodes": {
+      "type": "object",
+      "maxProperties": 100000,
+      "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+      "additionalProperties": { "$ref": "#/$defs/node" }
+    },
+    "signals": {
+      "type": "object",
+      "maxProperties": 100000,
+      "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+      "additionalProperties": { "$ref": "#/$defs/signal" }
+    },
+    "jobs": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/job" }
+    },
+    "outputs": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/output" }
+    },
+    "assertions": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/assertion" }
+    },
+    "annotations": {
+      "$ref": "#/$defs/annotations"
+    },
+    "linkedEdits": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/linkedEdit" }
+    },
+    "timelineEdits": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/timelineEditPlan" }
+    },
+    "semanticMatches": {
+      "$ref": "#/$defs/semanticMatches"
+    },
+    "transcriptMediaAuthorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/transcriptMediaAuthority" }
+    },
+    "transcriptBindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/transcriptBinding" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1048576
+    },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+      "not": { "enum": ["__proto__", "prototype", "constructor"] }
+    },
+    "safeRecordKey": {
+      "type": "string",
+      "maxLength": 1048576,
+      "not": { "enum": ["__proto__", "prototype", "constructor"] }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complexTextShaping"],
+      "properties": {
+        "complexTextShaping": {
+          "$ref": "#/$defs/complexTextShapingIdentity"
+        }
+      }
+    },
+    "complexTextShapingIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "version", "harfbuzzjs", "harfbuzz", "bidiJs", "policies", "integrity"],
+      "properties": {
+        "format": { "const": "cut-reference-complex-text-backend" },
+        "version": { "const": 1 },
+        "harfbuzzjs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["packageVersion", "manifestSha256", "entrySha256", "glueSha256", "wasmSha256"],
+          "properties": {
+            "packageVersion": { "const": "1.4.0" },
+            "manifestSha256": { "const": "33cb095c48f71baba2639303ea929a504cd30b2f239e71e6766a350a966480ed" },
+            "entrySha256": { "const": "5d757236e5de85575525428d37e2cb81fb349b5bea82bbbe5a9bf2e13d32dbc2" },
+            "glueSha256": { "const": "d64d3aecca9424ee0d0ad2f98354f795e93b0dc512f14f6819e45b96ac521524" },
+            "wasmSha256": { "const": "64c8f422b7d31120ab010da3bba7cc248bf721dcd8be331a5b17971b7897f4b9" }
+          }
+        },
+        "harfbuzz": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtimeVersion", "clusterLevel"],
+          "properties": {
+            "runtimeVersion": { "const": "14.2.1" },
+            "clusterLevel": { "const": "MONOTONE_GRAPHEMES" }
+          }
+        },
+        "bidiJs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["packageVersion", "unicodeVersion", "manifestSha256", "implementationSha256"],
+          "properties": {
+            "packageVersion": { "const": "1.0.3" },
+            "unicodeVersion": { "const": "13.0.0" },
+            "manifestSha256": { "const": "c2579f7705ab96dcc6192ab5a317d87760d2be7c67d72976d85edb4181bec5de" },
+            "implementationSha256": { "const": "5b58433ed951be70376bee55cb9a98cdce788e00cd2fa5f881cbcb1dcad03102" }
+          }
+        },
+        "policies": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fallback", "wrap", "selector", "normalization", "hostFontFallback"],
+          "properties": {
+            "fallback": { "const": "first-whole-token-capable-locked-face-v1" },
+            "wrap": { "const": "explicit-lf-or-ascii-space-whole-token-v1" },
+            "selector": { "const": "harfbuzz-cluster-atomic-logical-or-visual-v1" },
+            "normalization": { "const": "none" },
+            "hostFontFallback": { "const": false }
+          }
+        },
+        "integrity": { "const": "30d9dc223a4d1170626372925cef36946002c993319dd4efdca6912f269837fb" }
+      }
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "oneOf": [
+            {
+              "maxLength": 256,
+              "pattern": "^(?:0|[1-9][0-9]{0,255})$"
+            },
+            {
+              "maxLength": 257,
+              "pattern": "^-[1-9][0-9]{0,255}$"
+            }
+          ]
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "nonZeroRational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "oneOf": [
+            {
+              "maxLength": 256,
+              "pattern": "^[1-9][0-9]{0,255}$"
+            },
+            {
+              "maxLength": 257,
+              "pattern": "^-[1-9][0-9]{0,255}$"
+            }
+          ]
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "positiveRational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[1-9][0-9]{0,255}$"
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "nonNegativeRational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^(?:0|[1-9][0-9]{0,255})$"
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "line": { "$ref": "#/$defs/positiveSafeInteger" },
+        "column": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/sourcePosition" },
+        "end": { "$ref": "#/$defs/sourcePosition" }
+      }
+    },
+    "expandedProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "span", "symbol"],
+      "properties": {
+        "module": { "$ref": "#/$defs/nonEmptyString" },
+        "span": { "$ref": "#/$defs/sourceSpan" },
+        "symbol": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "span"],
+      "properties": {
+        "module": { "$ref": "#/$defs/nonEmptyString" },
+        "span": { "$ref": "#/$defs/sourceSpan" },
+        "symbol": { "$ref": "#/$defs/nonEmptyString" },
+        "expandedFrom": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/expandedProvenance" }
+        }
+      }
+    },
+    "annotationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+    },
+    "annotationName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "annotationComment": {
+      "type": "string",
+      "maxLength": 16384
+    },
+    "annotationColor": {
+      "type": "string",
+      "pattern": "^#[0-9a-f]{6}(?:[0-9a-f]{2})?$"
+    },
+    "annotationRole": {
+      "enum": ["beat", "chapter", "cue", "edit", "note", "review", "sync", "transcript", "custom"]
+    },
+    "annotationGrid": {
+      "enum": ["frame", "sample"]
+    },
+    "marker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "compositionId", "name", "color", "role", "comment", "grid", "at", "provenance"],
+      "properties": {
+        "kind": { "const": "marker" },
+        "id": { "$ref": "#/$defs/annotationId" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "name": { "$ref": "#/$defs/annotationName" },
+        "color": { "$ref": "#/$defs/annotationColor" },
+        "role": { "$ref": "#/$defs/annotationRole" },
+        "comment": { "$ref": "#/$defs/annotationComment" },
+        "grid": { "$ref": "#/$defs/annotationGrid" },
+        "at": { "$ref": "#/$defs/rational" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "compositionId", "name", "color", "role", "comment", "grid", "range", "provenance"],
+      "properties": {
+        "kind": { "const": "region" },
+        "id": { "$ref": "#/$defs/annotationId" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "name": { "$ref": "#/$defs/annotationName" },
+        "color": { "$ref": "#/$defs/annotationColor" },
+        "role": { "$ref": "#/$defs/annotationRole" },
+        "comment": { "$ref": "#/$defs/annotationComment" },
+        "grid": { "$ref": "#/$defs/annotationGrid" },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "duration"],
+          "properties": {
+            "start": { "$ref": "#/$defs/rational" },
+            "duration": { "$ref": "#/$defs/rational" }
+          }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["markers", "regions"],
+      "properties": {
+        "markers": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/marker" }
+        },
+        "regions": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/region" }
+        }
+      },
+      "anyOf": [
+        { "properties": { "markers": { "minItems": 1 } } },
+        { "properties": { "regions": { "minItems": 1 } } }
+      ]
+    },
+    "semanticMatchAuthoredId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+    },
+    "semanticMatchBasis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "origin"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "origin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "$ref": "#/$defs/rational" },
+            "y": { "$ref": "#/$defs/rational" }
+          }
+        }
+      }
+    },
+    "semanticMatchSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "kind", "compositionId", "sceneId", "authoredId", "cameraNodeId", "localSpaceNodeId", "basis", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "version": { "const": 1 },
+        "kind": { "const": "semantic-match-subject" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "authoredId": { "$ref": "#/$defs/semanticMatchAuthoredId" },
+        "cameraNodeId": { "$ref": "#/$defs/safeId" },
+        "localSpaceNodeId": { "$ref": "#/$defs/safeId" },
+        "basis": { "$ref": "#/$defs/semanticMatchBasis" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "semanticMatchSide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sceneId", "subjectId", "cameraNodeId", "localSpaceNodeId"],
+      "properties": {
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "subjectId": { "$ref": "#/$defs/safeId" },
+        "cameraNodeId": { "$ref": "#/$defs/safeId" },
+        "localSpaceNodeId": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "semanticMatchTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "scale", "rotation"],
+      "properties": {
+        "x": { "$ref": "#/$defs/rational" },
+        "y": { "$ref": "#/$defs/rational" },
+        "scale": { "$ref": "#/$defs/rational" },
+        "rotation": { "$ref": "#/$defs/rational" },
+        "color": { "type": "string", "pattern": "^#[0-9a-f]{6}$" }
+      }
+    },
+    "semanticMatchTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "kind", "compositionId", "authoredId", "cut", "duration", "outgoingWindow", "incomingWindow", "outgoing", "incoming", "target", "easing", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "version": { "const": 1 },
+        "kind": { "const": "semantic-match-transition" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "authoredId": { "$ref": "#/$defs/semanticMatchAuthoredId" },
+        "cut": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "outgoingWindow": { "$ref": "#/$defs/interval" },
+        "incomingWindow": { "$ref": "#/$defs/interval" },
+        "outgoing": { "$ref": "#/$defs/semanticMatchSide" },
+        "incoming": { "$ref": "#/$defs/semanticMatchSide" },
+        "target": { "$ref": "#/$defs/semanticMatchTarget" },
+        "easing": { "enum": ["linear", "inCubic", "outCubic", "inOutCubic"] },
+        "velocity": { "enum": ["settle", "carry"] },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "semanticMatches": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "subjects", "transitions"],
+      "properties": {
+        "version": { "const": 1 },
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256000,
+          "items": { "$ref": "#/$defs/semanticMatchSubject" }
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128000,
+          "items": { "$ref": "#/$defs/semanticMatchTransition" }
+        }
+      }
+    },
+    "transcriptWordId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "transcriptWord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "start", "end", "text", "join"],
+      "properties": {
+        "id": { "$ref": "#/$defs/transcriptWordId" },
+        "start": { "$ref": "#/$defs/rational" },
+        "end": { "$ref": "#/$defs/rational" },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "join": { "enum": ["none", "space"] },
+        "speaker": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "transcriptMedia": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "audioStreamIndex", "audioSampleRate", "duration"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "audioStreamIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "audioSampleRate": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 768000
+        },
+        "duration": { "$ref": "#/$defs/rational" },
+        "videoStreamIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "videoFrameRate": { "$ref": "#/$defs/rational" },
+        "videoDuration": { "$ref": "#/$defs/rational" },
+        "audioVideoPresentationDelta": {
+          "$ref": "#/$defs/nonZeroRational"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["videoStreamIndex"] },
+          "then": { "required": ["videoFrameRate"] }
+        },
+        {
+          "if": { "required": ["videoFrameRate"] },
+          "then": { "required": ["videoStreamIndex"] }
+        },
+        {
+          "if": { "required": ["videoDuration"] },
+          "then": { "required": ["videoStreamIndex", "videoFrameRate"] }
+        },
+        {
+          "if": { "required": ["audioVideoPresentationDelta"] },
+          "then": {
+            "required": [
+              "videoStreamIndex",
+              "videoFrameRate",
+              "videoDuration"
+            ]
+          }
+        }
+      ]
+    },
+    "transcriptMediaAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "identity",
+        "version",
+        "kind",
+        "compositionId",
+        "sceneId",
+        "transcriptResourceId",
+        "audioResourceId",
+        "audioStreamIndex",
+        "videoResourceId",
+        "videoStreamIndex",
+        "videoFrameRate",
+        "videoDuration",
+        "audioAt",
+        "videoAt",
+        "videoRate",
+        "provenance"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "identity": { "$ref": "#/$defs/sha256" },
+        "version": { "const": 1 },
+        "kind": { "const": "transcript-media-authority" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "transcriptResourceId": { "$ref": "#/$defs/safeId" },
+        "audioResourceId": { "$ref": "#/$defs/safeId" },
+        "audioStreamIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "videoResourceId": { "$ref": "#/$defs/safeId" },
+        "videoStreamIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "videoFrameRate": { "$ref": "#/$defs/positiveRational" },
+        "videoDuration": { "$ref": "#/$defs/positiveRational" },
+        "audioAt": { "$ref": "#/$defs/nonNegativeRational" },
+        "videoAt": { "$ref": "#/$defs/nonNegativeRational" },
+        "videoRate": { "$ref": "#/$defs/positiveRational" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "transcriptBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "kind",
+        "compositionId",
+        "sceneId",
+        "transcriptResourceId",
+        "audioResourceId",
+        "from",
+        "through",
+        "selectedWordCount",
+        "selectedIdsSha256",
+        "text",
+        "words",
+        "sourceRange",
+        "destinationRange",
+        "media",
+        "provenance"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "version": { "const": 1 },
+        "kind": { "const": "transcript-edit" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "transcriptResourceId": { "$ref": "#/$defs/safeId" },
+        "audioResourceId": { "$ref": "#/$defs/safeId" },
+        "from": { "$ref": "#/$defs/transcriptWordId" },
+        "through": { "$ref": "#/$defs/transcriptWordId" },
+        "selectedWordCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "selectedIdsSha256": { "$ref": "#/$defs/sha256" },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "words": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/transcriptWord" }
+        },
+        "sourceRange": { "$ref": "#/$defs/interval" },
+        "destinationRange": { "$ref": "#/$defs/interval" },
+        "linkId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?:[^\\u0000-\\u0020\\u007f]|[^\\u0000-\\u0020\\u007f][^\\u0000-\\u001f\\u007f]*[^\\u0000-\\u0020\\u007f])$"
+        },
+        "mediaAuthorityId": { "$ref": "#/$defs/safeId" },
+        "media": { "$ref": "#/$defs/transcriptMedia" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "linkedEdit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "kind", "compositionId", "sceneId", "linkId", "keep", "pictureTrackId", "audioTrackId", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/safeId" },
+            "version": { "const": 1 },
+            "kind": { "const": "linked-trim" },
+            "compositionId": { "$ref": "#/$defs/safeId" },
+            "sceneId": { "$ref": "#/$defs/safeId" },
+            "linkId": { "$ref": "#/$defs/editorialLink" },
+            "keep": { "$ref": "#/$defs/interval" },
+            "pictureTrackId": { "$ref": "#/$defs/safeId" },
+            "audioTrackId": { "$ref": "#/$defs/safeId" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "kind", "compositionId", "sceneId", "linkId", "range", "pictureTrackId", "audioTrackId", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/safeId" },
+            "version": { "const": 1 },
+            "kind": { "const": "linked-ripple-delete" },
+            "compositionId": { "$ref": "#/$defs/safeId" },
+            "sceneId": { "$ref": "#/$defs/safeId" },
+            "linkId": { "$ref": "#/$defs/editorialLink" },
+            "range": { "$ref": "#/$defs/interval" },
+            "pictureTrackId": { "$ref": "#/$defs/safeId" },
+            "audioTrackId": { "$ref": "#/$defs/safeId" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "kind", "compositionId", "sceneId", "linkId", "range", "linkSegmentIds", "pictureTrackId", "audioTrackId", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/safeId" },
+            "version": { "const": 2 },
+            "kind": { "const": "linked-ripple-delete" },
+            "compositionId": { "$ref": "#/$defs/safeId" },
+            "sceneId": { "$ref": "#/$defs/safeId" },
+            "linkId": { "$ref": "#/$defs/editorialLink" },
+            "range": { "$ref": "#/$defs/interval" },
+            "linkSegmentIds": { "$ref": "#/$defs/linkSegmentIds" },
+            "pictureTrackId": { "$ref": "#/$defs/safeId" },
+            "audioTrackId": { "$ref": "#/$defs/safeId" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        }
+      ]
+    },
+    "effectKind": {
+      "enum": ["pure", "read", "analyze", "generate", "external"]
+    },
+    "nodeDomain": {
+      "enum": ["visual", "audio", "av", "data", "output"]
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string", "maxLength": 1048576 },
+        {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/jsonValue" }
+        },
+        {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    },
+    "nullValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": { "kind": { "const": "null" } }
+    },
+    "booleanValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "boolean" },
+        "value": { "type": "boolean" }
+      }
+    },
+    "stringValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": { "type": "string", "maxLength": 1048576 }
+      }
+    },
+    "colorValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "color" },
+        "value": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$" }
+      }
+    },
+    "quantityValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "dimension", "magnitude", "unit"],
+      "oneOf": [
+        { "properties": { "dimension": { "const": "scalar" }, "unit": { "const": "scalar" } } },
+        { "properties": { "dimension": { "const": "time" }, "unit": { "const": "s" } } },
+        { "properties": { "dimension": { "const": "length" }, "unit": { "const": "px" } } },
+        { "properties": { "dimension": { "const": "ratio" }, "unit": { "const": "ratio" } } },
+        { "properties": { "dimension": { "const": "angle" }, "unit": { "const": "deg" } } },
+        { "properties": { "dimension": { "const": "gain" }, "unit": { "const": "db" } } },
+        { "properties": { "dimension": { "const": "frequency" }, "unit": { "const": "hz" } } },
+        { "properties": { "dimension": { "const": "loudness" }, "unit": { "const": "lufs" } } },
+        { "properties": { "dimension": { "const": "true-peak" }, "unit": { "const": "dbtp" } } },
+        { "properties": { "dimension": { "const": "sample-peak" }, "unit": { "const": "dbfs" } } }
+      ],
+      "properties": {
+        "kind": { "const": "quantity" },
+        "dimension": { "enum": ["scalar", "time", "length", "ratio", "angle", "gain", "frequency", "loudness", "true-peak", "sample-peak"] },
+        "magnitude": { "$ref": "#/$defs/rational" },
+        "unit": { "enum": ["scalar", "s", "px", "ratio", "deg", "db", "hz", "lufs", "dbtp", "dbfs"] }
+      }
+    },
+    "arrayValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": { "const": "array" },
+        "items": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/irValue" }
+        }
+      }
+    },
+    "objectValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": { "$ref": "#/$defs/irValue" }
+        }
+      }
+    },
+    "rangeValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "start", "end", "exclusive"],
+      "properties": {
+        "kind": { "const": "range" },
+        "start": { "$ref": "#/$defs/irValue" },
+        "end": { "$ref": "#/$defs/irValue" },
+        "exclusive": { "type": "boolean" }
+      }
+    },
+    "nodeRefValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "const": "node-ref" },
+        "id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "resourceRefValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "const": "resource-ref" },
+        "id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "timelineRefValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "const": "timeline-ref" },
+        "id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "symbolValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "const": "symbol" },
+        "name": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "unaryValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operator", "value"],
+      "properties": {
+        "kind": { "const": "unary" },
+        "operator": { "$ref": "#/$defs/nonEmptyString" },
+        "value": { "$ref": "#/$defs/irValue" }
+      }
+    },
+    "binaryValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operator", "left", "right"],
+      "properties": {
+        "kind": { "const": "binary" },
+        "operator": { "$ref": "#/$defs/nonEmptyString" },
+        "left": { "$ref": "#/$defs/irValue" },
+        "right": { "$ref": "#/$defs/irValue" }
+      }
+    },
+    "memberValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "object", "property"],
+      "properties": {
+        "kind": { "const": "member" },
+        "object": { "$ref": "#/$defs/irValue" },
+        "property": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "indexValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "object", "index"],
+      "properties": {
+        "kind": { "const": "index" },
+        "object": { "$ref": "#/$defs/irValue" },
+        "index": { "$ref": "#/$defs/irValue" }
+      }
+    },
+    "callValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "positional", "named", "effect"],
+      "properties": {
+        "kind": { "const": "call" },
+        "op": { "$ref": "#/$defs/nonEmptyString" },
+        "positional": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/irValue" }
+        },
+        "named": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": { "$ref": "#/$defs/irValue" }
+        },
+        "effect": { "$ref": "#/$defs/effectKind" }
+      }
+    },
+    "anchoredLengthValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "dimension", "magnitude", "unit"],
+      "properties": {
+        "kind": { "const": "quantity" },
+        "dimension": { "const": "length" },
+        "magnitude": { "$ref": "#/$defs/rational" },
+        "unit": { "const": "px" }
+      }
+    },
+    "anchoredVec2Value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "$ref": "#/$defs/anchoredLengthValue" },
+            "y": { "$ref": "#/$defs/anchoredLengthValue" }
+          }
+        }
+      }
+    },
+    "visualAnchorValueV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "positional", "named", "effect"],
+      "properties": {
+        "kind": { "const": "call" },
+        "op": { "const": "cut.visual.visual_anchor.v1" },
+        "positional": { "type": "array", "maxItems": 0 },
+        "named": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "local"],
+          "properties": {
+            "owner": { "$ref": "#/$defs/nodeRefValue" },
+            "local": { "$ref": "#/$defs/anchoredVec2Value" }
+          }
+        },
+        "effect": { "const": "pure" }
+      }
+    },
+    "compositionOffsetValueV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "positional", "named", "effect"],
+      "properties": {
+        "kind": { "const": "call" },
+        "op": { "const": "cut.visual.composition_offset.v1" },
+        "positional": { "type": "array", "maxItems": 0 },
+        "named": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["point", "by"],
+          "properties": {
+            "point": { "$ref": "#/$defs/anchoredSpatialPointValueV1" },
+            "by": { "$ref": "#/$defs/anchoredVec2Value" }
+          }
+        },
+        "effect": { "const": "pure" }
+      }
+    },
+    "anchoredSpatialPointValueV1": {
+      "oneOf": [
+        { "$ref": "#/$defs/anchoredVec2Value" },
+        { "$ref": "#/$defs/visualAnchorValueV1" },
+        { "$ref": "#/$defs/compositionOffsetValueV1" }
+      ]
+    },
+    "anchoredLineValueV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "positional", "named", "effect"],
+      "properties": {
+        "kind": { "const": "call" },
+        "op": { "const": "cut.visual.anchored_line_to.v1" },
+        "positional": { "type": "array", "maxItems": 0 },
+        "named": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["to"],
+          "properties": { "to": { "$ref": "#/$defs/anchoredSpatialPointValueV1" } }
+        },
+        "effect": { "const": "pure" }
+      }
+    },
+    "anchoredCubicValueV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "positional", "named", "effect"],
+      "properties": {
+        "kind": { "const": "call" },
+        "op": { "const": "cut.visual.anchored_cubic_to.v1" },
+        "positional": { "type": "array", "maxItems": 0 },
+        "named": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["control1", "control2", "to"],
+          "properties": {
+            "control1": { "$ref": "#/$defs/anchoredSpatialPointValueV1" },
+            "control2": { "$ref": "#/$defs/anchoredSpatialPointValueV1" },
+            "to": { "$ref": "#/$defs/anchoredSpatialPointValueV1" }
+          }
+        },
+        "effect": { "const": "pure" }
+      }
+    },
+    "anchoredPathGeometryValueV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "positional", "named", "effect"],
+      "properties": {
+        "kind": { "const": "call" },
+        "op": { "const": "cut.visual.anchored_path.v1" },
+        "positional": { "type": "array", "maxItems": 0 },
+        "named": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "segments", "closed"],
+          "properties": {
+            "start": { "$ref": "#/$defs/anchoredSpatialPointValueV1" },
+            "segments": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "items"],
+              "properties": {
+                "kind": { "const": "array" },
+                "items": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 256,
+                  "items": {
+                    "oneOf": [
+                      { "$ref": "#/$defs/anchoredLineValueV1" },
+                      { "$ref": "#/$defs/anchoredCubicValueV1" }
+                    ]
+                  }
+                }
+              }
+            },
+            "closed": { "$ref": "#/$defs/booleanValue" }
+          }
+        },
+        "effect": { "const": "pure" }
+      }
+    },
+    "irValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/nullValue" },
+        { "$ref": "#/$defs/booleanValue" },
+        { "$ref": "#/$defs/stringValue" },
+        { "$ref": "#/$defs/colorValue" },
+        { "$ref": "#/$defs/quantityValue" },
+        { "$ref": "#/$defs/arrayValue" },
+        { "$ref": "#/$defs/objectValue" },
+        { "$ref": "#/$defs/rangeValue" },
+        { "$ref": "#/$defs/nodeRefValue" },
+        { "$ref": "#/$defs/resourceRefValue" },
+        { "$ref": "#/$defs/timelineRefValue" },
+        { "$ref": "#/$defs/symbolValue" },
+        { "$ref": "#/$defs/unaryValue" },
+        { "$ref": "#/$defs/binaryValue" },
+        { "$ref": "#/$defs/memberValue" },
+        { "$ref": "#/$defs/indexValue" },
+        { "$ref": "#/$defs/callValue" }
+      ]
+    },
+    "imageSequenceAssetValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "version", "manifest", "frames", "width", "height", "frameRate", "frameCount"],
+          "properties": {
+            "format": {
+              "allOf": [
+                { "$ref": "#/$defs/stringValue" },
+                { "properties": { "value": { "const": "cut-image-sequence-source" } } }
+              ]
+            },
+            "version": {
+              "allOf": [
+                { "$ref": "#/$defs/quantityValue" },
+                {
+                  "properties": {
+                    "dimension": { "const": "scalar" },
+                    "magnitude": { "const": { "numerator": "1", "denominator": "1" } },
+                    "unit": { "const": "scalar" }
+                  }
+                }
+              ]
+            },
+            "manifest": { "$ref": "#/$defs/resourceRefValue" },
+            "frames": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "items"],
+              "properties": {
+                "kind": { "const": "array" },
+                "items": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 4096,
+                  "uniqueItems": true,
+                  "items": { "$ref": "#/$defs/resourceRefValue" }
+                }
+              }
+            },
+            "width": { "$ref": "#/$defs/anchoredLengthValue" },
+            "height": { "$ref": "#/$defs/anchoredLengthValue" },
+            "frameRate": { "$ref": "#/$defs/quantityValue" },
+            "frameCount": { "$ref": "#/$defs/quantityValue" }
+          }
+        }
+      }
+    },
+    "signalPayloadValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/booleanValue" },
+        { "$ref": "#/$defs/stringValue" },
+        { "$ref": "#/$defs/colorValue" },
+        { "$ref": "#/$defs/quantityValue" },
+        { "$ref": "#/$defs/arrayValue" },
+        { "$ref": "#/$defs/objectValue" },
+        { "$ref": "#/$defs/rangeValue" },
+        { "$ref": "#/$defs/nodeRefValue" },
+        { "$ref": "#/$defs/resourceRefValue" },
+        { "$ref": "#/$defs/timelineRefValue" },
+        { "$ref": "#/$defs/symbolValue" },
+        { "$ref": "#/$defs/unaryValue" },
+        { "$ref": "#/$defs/binaryValue" },
+        { "$ref": "#/$defs/memberValue" },
+        { "$ref": "#/$defs/indexValue" },
+        { "$ref": "#/$defs/callValue" }
+      ]
+    },
+    "signalValueType": {
+      "enum": ["Angle", "Frequency", "Gain", "Length", "Number", "Ratio", "Time", "TruePeak"]
+    },
+    "determinism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semantic", "decodedMedia", "bitstream"],
+      "properties": {
+        "semantic": { "enum": ["locked", "unlocked"] },
+        "decodedMedia": { "enum": ["verified", "unverified"] },
+        "bitstream": { "enum": ["verified", "unverified"] }
+      }
+    },
+    "timebase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultFps", "audioSampleRate"],
+      "properties": {
+        "defaultFps": { "$ref": "#/$defs/rational" },
+        "audioSampleRate": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specifier", "version", "integrity"],
+      "properties": {
+        "specifier": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "$ref": "#/$defs/nonEmptyString" },
+        "integrity": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sourceModule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specifier", "sha256", "bytes"],
+      "properties": {
+        "specifier": {
+          "type": "string",
+          "pattern": "^\\./(?:[^./][^/]*/)*[^./][^/]*\\.cut$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "locator", "state", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "enum": ["video", "audio", "image", "font", "data"] },
+        "locator": { "$ref": "#/$defs/nonEmptyString" },
+        "byteAuthority": { "$ref": "#/$defs/typedDataAssetAuthority" },
+        "streamSelection": { "$ref": "#/$defs/mediaStreamSelection" },
+        "proxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["locator"],
+          "properties": {
+            "locator": { "$ref": "#/$defs/nonEmptyString" },
+            "streamSelection": { "$ref": "#/$defs/mediaStreamSelection" }
+          }
+        },
+        "state": { "enum": ["unlocked", "locked"] },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "metadata": { "$ref": "#/$defs/jsonValue" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "locked" } }, "required": ["state"] },
+          "then": { "required": ["sha256"] },
+          "else": { "not": { "required": ["sha256"] } }
+        },
+        {
+          "if": { "required": ["streamSelection"] },
+          "then": { "properties": { "kind": { "enum": ["video", "audio"] } } }
+        },
+        {
+          "if": { "required": ["proxy"] },
+          "then": { "properties": { "kind": { "enum": ["video", "audio"] } } }
+        },
+        {
+          "if": { "required": ["byteAuthority"] },
+          "then": { "properties": { "kind": { "const": "data" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "audio" } }, "required": ["kind"] },
+          "then": {
+            "properties": {
+              "streamSelection": { "not": { "required": ["video"] } },
+              "proxy": {
+                "properties": {
+                  "streamSelection": { "not": { "required": ["video"] } }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "typedDataAssetAuthority": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "kind", "format", "policy", "identity"],
+          "properties": {
+            "version": { "const": 1 },
+            "kind": { "const": "caption" },
+            "format": { "enum": ["webvtt", "srt"] },
+            "policy": { "const": "strict-caption-sidecar-v1" },
+            "identity": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "kind", "format", "policy", "identity"],
+          "properties": {
+            "version": { "const": 1 },
+            "kind": { "const": "transcript" },
+            "format": { "const": "cut-transcript-v1" },
+            "policy": { "const": "strict-cut-transcript-sidecar-v1" },
+            "identity": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "kind", "format", "policy", "identity"],
+          "properties": {
+            "version": { "const": 1 },
+            "kind": { "const": "lut" },
+            "format": { "const": "cube" },
+            "policy": { "const": "strict-cube-encoded-srgb-v1" },
+            "identity": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "mediaStreamSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "video": { "$ref": "#/$defs/nonNegativeSafeInteger" },
+        "audio": { "$ref": "#/$defs/nonNegativeSafeInteger" }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "duration"],
+      "properties": {
+        "start": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "signalRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signal"],
+      "properties": { "signal": { "$ref": "#/$defs/safeId" } }
+    },
+    "mediaCamera2DRatioValue": {
+      "allOf": [
+        { "$ref": "#/$defs/quantityValue" },
+        {
+          "properties": {
+            "dimension": { "const": "ratio" },
+            "unit": { "const": "ratio" }
+          }
+        }
+      ]
+    },
+    "mediaCamera2DScalarValue": {
+      "allOf": [
+        { "$ref": "#/$defs/quantityValue" },
+        {
+          "properties": {
+            "dimension": { "const": "scalar" },
+            "unit": { "const": "scalar" }
+          }
+        }
+      ]
+    },
+    "mediaCamera2DAngleValue": {
+      "allOf": [
+        { "$ref": "#/$defs/quantityValue" },
+        {
+          "properties": {
+            "dimension": { "const": "angle" },
+            "unit": { "const": "deg" }
+          }
+        }
+      ]
+    },
+    "mediaCamera2DEdgeValue": {
+      "allOf": [
+        { "$ref": "#/$defs/stringValue" },
+        { "properties": { "value": { "enum": ["transparent", "clamp"] } } }
+      ]
+    },
+    "responsiveSlotMediaLengthValue": {
+      "allOf": [
+        { "$ref": "#/$defs/quantityValue" },
+        {
+          "properties": {
+            "dimension": { "const": "length" },
+            "unit": { "const": "px" }
+          }
+        }
+      ]
+    },
+    "responsiveSlotMediaScalarValue": {
+      "allOf": [
+        { "$ref": "#/$defs/quantityValue" },
+        {
+          "properties": {
+            "dimension": { "const": "scalar" },
+            "unit": { "const": "scalar" }
+          }
+        }
+      ]
+    },
+    "responsiveSlotMediaExactSlotValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["index", "weight", "left", "top", "right", "bottom", "width", "height"],
+          "properties": {
+            "index": { "$ref": "#/$defs/responsiveSlotMediaScalarValue" },
+            "weight": { "$ref": "#/$defs/responsiveSlotMediaScalarValue" },
+            "left": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "top": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "right": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "bottom": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "width": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "height": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" }
+          }
+        }
+      }
+    },
+    "responsiveSlotMediaRectValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["left", "top", "right", "bottom", "width", "height"],
+          "properties": {
+            "left": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "top": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "right": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "bottom": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "width": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "height": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" }
+          }
+        }
+      }
+    },
+    "responsiveSlotMediaLocalContextValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["originX", "originY", "width", "height"],
+          "properties": {
+            "originX": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "originY": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "width": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" },
+            "height": { "$ref": "#/$defs/responsiveSlotMediaLengthValue" }
+          }
+        }
+      }
+    },
+    "responsiveSlotMediaContextV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entries"],
+      "properties": {
+        "kind": { "const": "object" },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "version", "algorithm", "contextIdentity", "planIdentity", "stackNodeId", "slotNodeId", "index", "exactSlot", "rasterSlot", "localContext"],
+          "properties": {
+            "format": {
+              "allOf": [
+                { "$ref": "#/$defs/stringValue" },
+                { "properties": { "value": { "const": "cut-responsive-slot-media-context" } } }
+              ]
+            },
+            "version": { "$ref": "#/$defs/responsiveSlotMediaScalarValue" },
+            "algorithm": {
+              "allOf": [
+                { "$ref": "#/$defs/stringValue" },
+                { "properties": { "value": { "const": "cut-responsive-slot-media-context-v1" } } }
+              ]
+            },
+            "contextIdentity": {
+              "allOf": [
+                { "$ref": "#/$defs/stringValue" },
+                { "properties": { "value": { "pattern": "^[a-f0-9]{64}$" } } }
+              ]
+            },
+            "planIdentity": {
+              "allOf": [
+                { "$ref": "#/$defs/stringValue" },
+                { "properties": { "value": { "pattern": "^[a-f0-9]{64}$" } } }
+              ]
+            },
+            "stackNodeId": { "$ref": "#/$defs/stringValue" },
+            "slotNodeId": { "$ref": "#/$defs/stringValue" },
+            "index": { "$ref": "#/$defs/responsiveSlotMediaScalarValue" },
+            "exactSlot": { "$ref": "#/$defs/responsiveSlotMediaExactSlotValue" },
+            "rasterSlot": { "$ref": "#/$defs/responsiveSlotMediaRectValue" },
+            "localContext": { "$ref": "#/$defs/responsiveSlotMediaLocalContextValue" }
+          }
+        }
+      }
+    },
+    "mediaCamera2DInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "focusX": { "$ref": "#/$defs/mediaCamera2DRatioValue" },
+        "focusY": { "$ref": "#/$defs/mediaCamera2DRatioValue" },
+        "zoom": { "$ref": "#/$defs/mediaCamera2DScalarValue" },
+        "rotation": { "$ref": "#/$defs/mediaCamera2DAngleValue" },
+        "opacity": { "$ref": "#/$defs/mediaCamera2DRatioValue" },
+        "edge": { "$ref": "#/$defs/mediaCamera2DEdgeValue" },
+        "responsiveSlotContext": { "$ref": "#/$defs/responsiveSlotMediaContextV1" }
+      }
+    },
+    "mediaCamera2DProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "focusX": { "$ref": "#/$defs/signalRef" },
+        "focusY": { "$ref": "#/$defs/signalRef" },
+        "zoom": { "$ref": "#/$defs/signalRef" },
+        "rotation": { "$ref": "#/$defs/signalRef" },
+        "opacity": { "$ref": "#/$defs/signalRef" }
+      }
+    },
+    "timelineEditStableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+    },
+    "timelineEditMetadata": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^(?![Cc][Uu][Tt]\\.)(?:[A-Za-z][A-Za-z0-9_-]*\\.)+[A-Za-z][A-Za-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1024,
+        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+      }
+    },
+    "timelineEditRole": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "timelineEditAVTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "picture": { "$ref": "#/$defs/rational" },
+        "audio": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "timelineEditAVInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "picture": { "$ref": "#/$defs/interval" },
+        "audio": { "$ref": "#/$defs/interval" }
+      }
+    },
+    "timelineEditSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackIds"],
+      "properties": {
+        "trackIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/timelineEditStableId" }
+        },
+        "originIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/timelineEditStableId" }
+        },
+        "linkIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/timelineEditStableId" }
+        },
+        "range": { "$ref": "#/$defs/timelineEditAVInterval" },
+        "relation": { "enum": ["overlaps", "contained", "touches"] },
+        "allowUnlinked": { "type": "boolean" }
+      }
+    },
+    "timelineEditHandles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head", "tail"],
+      "properties": {
+        "head": { "$ref": "#/$defs/rational" },
+        "tail": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "timelineEditAudioPresentationClock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originDuration", "sliceOffset", "fadePolicy"],
+      "properties": {
+        "originDuration": { "$ref": "#/$defs/rational" },
+        "sliceOffset": { "$ref": "#/$defs/rational" },
+        "fadePolicy": { "const": "origin-relative" },
+        "authorityOriginId": { "$ref": "#/$defs/timelineEditStableId" }
+      }
+    },
+    "timelineEditSourceView": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "authorityId"],
+          "properties": {
+            "kind": { "const": "gap" },
+            "authorityId": { "$ref": "#/$defs/timelineEditStableId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source", "handles", "authorityId", "nodeId", "timeMap"],
+          "properties": {
+            "kind": { "const": "picture" },
+            "source": { "$ref": "#/$defs/interval" },
+            "handles": { "$ref": "#/$defs/timelineEditHandles" },
+            "authorityId": { "$ref": "#/$defs/timelineEditStableId" },
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "timeMap": { "$ref": "#/$defs/pictureTimeMap" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source", "handles", "authorityId", "nodeId", "rate", "fadeIn", "fadeOut", "presentationClock"],
+          "properties": {
+            "kind": { "const": "audio" },
+            "source": { "$ref": "#/$defs/interval" },
+            "handles": { "$ref": "#/$defs/timelineEditHandles" },
+            "authorityId": { "$ref": "#/$defs/timelineEditStableId" },
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "rate": { "$ref": "#/$defs/rational" },
+            "fadeIn": { "$ref": "#/$defs/rational" },
+            "fadeOut": { "$ref": "#/$defs/rational" },
+            "presentationClock": { "$ref": "#/$defs/timelineEditAudioPresentationClock" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source", "handles", "authorityId", "regionId", "sourceNodeId", "processorNodeIds", "graphAuthorityId", "rate", "fadeIn", "fadeOut", "presentationClock", "statePolicy"],
+          "properties": {
+            "kind": { "const": "processed-audio" },
+            "source": { "$ref": "#/$defs/interval" },
+            "handles": { "$ref": "#/$defs/timelineEditHandles" },
+            "authorityId": { "$ref": "#/$defs/timelineEditStableId" },
+            "regionId": { "$ref": "#/$defs/safeId" },
+            "sourceNodeId": { "$ref": "#/$defs/safeId" },
+            "processorNodeIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/safeId" }
+            },
+            "graphAuthorityId": { "$ref": "#/$defs/timelineEditStableId" },
+            "rate": { "$ref": "#/$defs/rational" },
+            "fadeIn": { "$ref": "#/$defs/rational" },
+            "fadeOut": { "$ref": "#/$defs/rational" },
+            "presentationClock": { "$ref": "#/$defs/timelineEditAudioPresentationClock" },
+            "statePolicy": { "const": "single-authorized-evaluation" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source", "handles", "authorityId", "nodeId", "compositionId", "rate", "sharedClock"],
+          "properties": {
+            "kind": { "const": "nested" },
+            "source": { "$ref": "#/$defs/interval" },
+            "handles": { "$ref": "#/$defs/timelineEditHandles" },
+            "authorityId": { "$ref": "#/$defs/timelineEditStableId" },
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "compositionId": { "$ref": "#/$defs/safeId" },
+            "rate": { "$ref": "#/$defs/rational" },
+            "sharedClock": { "const": true },
+            "placementPolicy": {
+              "enum": ["structural-only", "static-same-track-copy"]
+            }
+          }
+        }
+      ]
+    },
+    "timelineEditItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originId", "segmentId", "trackId", "domain", "destination", "sourceView", "metadata", "provenance"],
+      "allOf": [
+        {
+          "if": { "properties": { "domain": { "const": "picture" } }, "required": ["domain"] },
+          "then": { "properties": { "sourceView": { "properties": { "kind": { "enum": ["gap", "picture", "nested"] } } } } }
+        },
+        {
+          "if": { "properties": { "domain": { "const": "audio" } }, "required": ["domain"] },
+          "then": { "properties": { "sourceView": { "properties": { "kind": { "enum": ["gap", "audio", "processed-audio"] } } } } }
+        },
+        {
+          "if": { "properties": { "domain": { "const": "audiovisual" } }, "required": ["domain"] },
+          "then": { "properties": { "sourceView": { "properties": { "kind": { "enum": ["gap", "nested"] } } } } }
+        }
+      ],
+      "properties": {
+        "originId": { "$ref": "#/$defs/timelineEditStableId" },
+        "segmentId": { "$ref": "#/$defs/timelineEditStableId" },
+        "parentSegmentId": { "$ref": "#/$defs/timelineEditStableId" },
+        "trackId": { "$ref": "#/$defs/timelineEditStableId" },
+        "domain": { "enum": ["picture", "audio", "audiovisual"] },
+        "linkId": { "$ref": "#/$defs/timelineEditStableId" },
+        "destination": { "$ref": "#/$defs/interval" },
+        "sourceView": { "$ref": "#/$defs/timelineEditSourceView" },
+        "role": { "$ref": "#/$defs/timelineEditRole" },
+        "metadata": { "$ref": "#/$defs/timelineEditMetadata" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "timelineEditTrack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "domain", "order", "duration", "metadata", "items"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/timelineEditStableId" },
+        "domain": { "enum": ["picture", "audio", "audiovisual"] },
+        "order": { "type": "integer", "minimum": 0 },
+        "duration": { "$ref": "#/$defs/rational" },
+        "role": { "$ref": "#/$defs/timelineEditRole" },
+        "metadata": { "$ref": "#/$defs/timelineEditMetadata" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/timelineEditItem" }
+        }
+      }
+    },
+    "timelineEditPictureTransitionStyle": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "cross-dissolve" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "color"],
+          "properties": {
+            "kind": { "const": "dip" },
+            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "direction", "softness"],
+          "properties": {
+            "kind": { "const": "wipe" },
+            "direction": { "enum": ["left", "right", "up", "down"] },
+            "softness": { "$ref": "#/$defs/rational" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "direction"],
+          "properties": {
+            "kind": { "enum": ["push", "slide"] },
+            "direction": { "enum": ["left", "right", "up", "down"] }
+          }
+        }
+      ]
+    },
+    "timelineEditAudioTransitionStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["curve"],
+      "properties": {
+        "curve": { "enum": ["equal-power", "linear"] }
+      }
+    },
+    "timelineEditOperandPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "sourceOriginId", "originId", "destinationDuration", "metadata"],
+      "properties": {
+        "domain": { "enum": ["picture", "audio", "audiovisual"] },
+        "sourceOriginId": { "$ref": "#/$defs/timelineEditStableId" },
+        "originId": { "$ref": "#/$defs/timelineEditStableId" },
+        "destinationDuration": { "$ref": "#/$defs/rational" },
+        "metadata": { "$ref": "#/$defs/timelineEditMetadata" }
+      }
+    },
+    "timelineEditOperand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parts"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "parts": { "type": "array", "minItems": 2 } },
+            "required": ["parts"]
+          },
+          "then": { "required": ["linkId"] }
+        }
+      ],
+      "properties": {
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/timelineEditOperandPart" }
+        },
+        "linkId": { "$ref": "#/$defs/timelineEditStableId" }
+      }
+    },
+    "timelineEditTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "picture": { "$ref": "#/$defs/timelineEditSelection" },
+        "audio": { "$ref": "#/$defs/timelineEditSelection" },
+        "audiovisual": { "$ref": "#/$defs/timelineEditSelection" }
+      }
+    },
+    "timelineEditOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "selection", "at", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "const": "split" },
+            "selection": { "$ref": "#/$defs/timelineEditSelection" },
+            "at": { "$ref": "#/$defs/timelineEditAVTime" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "selection", "keep", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "const": "trim" },
+            "selection": { "$ref": "#/$defs/timelineEditSelection" },
+            "keep": { "$ref": "#/$defs/timelineEditAVInterval" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "selection", "range", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "enum": ["ripple-delete", "lift", "extract"] },
+            "selection": { "$ref": "#/$defs/timelineEditSelection" },
+            "range": { "$ref": "#/$defs/timelineEditAVInterval" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "selection", "range", "by", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "enum": ["slip", "slide"] },
+            "selection": { "$ref": "#/$defs/timelineEditSelection" },
+            "range": { "$ref": "#/$defs/timelineEditAVInterval" },
+            "by": { "$ref": "#/$defs/timelineEditAVTime" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "selection", "at", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "const": "boundary-adjust" },
+            "selection": { "$ref": "#/$defs/timelineEditSelection" },
+            "at": { "$ref": "#/$defs/timelineEditAVTime" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "targets", "at", "operand", "provenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "enum": ["insert", "overwrite"] },
+            "targets": { "$ref": "#/$defs/timelineEditTargets" },
+            "at": { "$ref": "#/$defs/timelineEditAVTime" },
+            "operand": { "$ref": "#/$defs/timelineEditOperand" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "left", "right", "at", "duration", "provenance"],
+          "anyOf": [
+            { "required": ["picture"] },
+            { "required": ["audio"] }
+          ],
+          "properties": {
+            "id": { "$ref": "#/$defs/timelineEditStableId" },
+            "kind": { "const": "transition" },
+            "left": { "$ref": "#/$defs/timelineEditSelection" },
+            "right": { "$ref": "#/$defs/timelineEditSelection" },
+            "at": { "$ref": "#/$defs/timelineEditAVTime" },
+            "duration": { "$ref": "#/$defs/timelineEditAVTime" },
+            "picture": { "$ref": "#/$defs/timelineEditPictureTransitionStyle" },
+            "audio": { "$ref": "#/$defs/timelineEditAudioTransitionStyle" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        }
+      ]
+    },
+    "timelineEditPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "id", "compositionId", "sceneId", "initialDuration", "finalDuration", "tracks", "operations", "provenance"],
+      "properties": {
+        "version": { "const": 1 },
+        "id": { "$ref": "#/$defs/timelineEditStableId" },
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "initialDuration": { "$ref": "#/$defs/rational" },
+        "finalDuration": { "$ref": "#/$defs/rational" },
+        "tracks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/timelineEditTrack" }
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/timelineEditOperation" }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "editorialSequenceTrack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "order", "destination"],
+      "properties": {
+        "nodeId": { "$ref": "#/$defs/safeId" },
+        "order": { "type": "integer", "minimum": 0 },
+        "destination": { "$ref": "#/$defs/interval" }
+      }
+    },
+    "pictureTimeMap": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "direction", "rate"],
+          "properties": {
+            "kind": { "const": "constant" },
+            "direction": { "enum": ["forward", "reverse"] },
+            "rate": { "$ref": "#/$defs/rational" },
+            "frameSelection": { "enum": ["nearest", "frame-blend"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "at"],
+          "properties": {
+            "kind": { "const": "freeze" },
+            "at": { "$ref": "#/$defs/rational" },
+            "frameSelection": { "const": "frame-blend" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "interpolation", "frameSelection", "points"],
+          "properties": {
+            "kind": { "const": "speed-ramp" },
+            "interpolation": { "const": "linear-rate" },
+            "frameSelection": { "enum": ["floor", "nearest", "frame-blend"] },
+            "points": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["at", "rate"],
+                "properties": {
+                  "at": { "$ref": "#/$defs/rational" },
+                  "rate": { "$ref": "#/$defs/rational" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "editorialPictureItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "allOf": [{ "if": { "required": ["linkSegmentId"] }, "then": { "required": ["linkId"] } }],
+          "required": ["nodeId", "order", "kind", "destination", "source"],
+          "properties": {
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "order": { "type": "integer", "minimum": 0 },
+            "kind": { "const": "picture" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "source": { "$ref": "#/$defs/interval" },
+            "timeMap": { "$ref": "#/$defs/pictureTimeMap" },
+            "linkId": { "$ref": "#/$defs/editorialLink" },
+            "editId": { "$ref": "#/$defs/timelineEditStableId" },
+            "role": { "$ref": "#/$defs/timelineEditRole" },
+            "metadata": { "$ref": "#/$defs/timelineEditMetadata" },
+            "linkSegmentId": { "$ref": "#/$defs/linkSegmentId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["nodeId", "order", "kind", "destination"],
+          "properties": {
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "order": { "type": "integer", "minimum": 0 },
+            "kind": { "const": "gap" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "editId": { "$ref": "#/$defs/timelineEditStableId" },
+            "role": { "$ref": "#/$defs/timelineEditRole" },
+            "metadata": { "$ref": "#/$defs/timelineEditMetadata" }
+          }
+        }
+      ]
+    },
+    "editorialLink": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "linkSegmentIds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": { "type": "string", "pattern": "^linked_segment_before_[0-9a-f]{16}$" },
+        "after": { "type": "string", "pattern": "^linked_segment_after_[0-9a-f]{16}$" }
+      }
+    },
+    "linkSegmentId": {
+      "oneOf": [
+        { "type": "string", "pattern": "^linked_segment_before_[0-9a-f]{16}$" },
+        { "type": "string", "pattern": "^linked_segment_after_[0-9a-f]{16}$" }
+      ]
+    },
+    "pictureEditItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "allOf": [{ "if": { "required": ["linkSegmentId"] }, "then": { "properties": { "inputs": { "required": ["link"] } } } }],
+          "required": ["origin", "kind", "destination", "inputs", "provenance", "source"],
+          "properties": {
+            "origin": { "$ref": "#/$defs/nonEmptyString" },
+            "kind": { "const": "picture" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "source": { "$ref": "#/$defs/interval" },
+            "timeMap": { "$ref": "#/$defs/pictureTimeMap" },
+            "linkSegmentId": { "$ref": "#/$defs/linkSegmentId" },
+            "inputs": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+              "additionalProperties": { "$ref": "#/$defs/irValue" }
+            },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origin", "kind", "destination", "inputs", "provenance"],
+          "properties": {
+            "origin": { "$ref": "#/$defs/nonEmptyString" },
+            "kind": { "const": "gap" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "inputs": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+              "additionalProperties": { "$ref": "#/$defs/irValue" }
+            },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        }
+      ]
+    },
+    "pictureTrackTransitionStyle": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "cross-dissolve" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "color"],
+          "properties": { "kind": { "const": "dip" }, "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "direction", "softness"],
+          "properties": { "kind": { "const": "wipe" }, "direction": { "enum": ["left", "right", "up", "down"] }, "softness": { "$ref": "#/$defs/rational" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "direction"],
+          "properties": { "kind": { "enum": ["push", "slide"] }, "direction": { "enum": ["left", "right", "up", "down"] } }
+        }
+      ]
+    },
+    "editorialPictureTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cut", "duration", "overlap", "outgoingNodeId", "incomingNodeId", "outgoingSource", "incomingSource", "style", "provenance"],
+      "properties": {
+        "cut": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "overlap": { "$ref": "#/$defs/interval" },
+        "outgoingNodeId": { "$ref": "#/$defs/safeId" },
+        "incomingNodeId": { "$ref": "#/$defs/safeId" },
+        "outgoingSource": { "$ref": "#/$defs/interval" },
+        "incomingSource": { "$ref": "#/$defs/interval" },
+        "style": { "$ref": "#/$defs/pictureTrackTransitionStyle" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "pictureEditOperation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "at", "provenance"],
+          "properties": { "kind": { "const": "split" }, "at": { "$ref": "#/$defs/rational" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "keep", "provenance"],
+          "properties": { "kind": { "const": "trim" }, "keep": { "$ref": "#/$defs/interval" }, "transactionId": { "$ref": "#/$defs/safeId" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "at", "item", "provenance"],
+          "properties": { "kind": { "const": "ripple-insert" }, "at": { "$ref": "#/$defs/rational" }, "item": { "$ref": "#/$defs/pictureEditItem" }, "transactionId": { "$ref": "#/$defs/safeId" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "range", "provenance"],
+              "properties": { "kind": { "const": "ripple-delete" }, "range": { "$ref": "#/$defs/interval" }, "provenance": { "$ref": "#/$defs/provenance" } }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "range", "transactionId", "transactionVersion", "provenance"],
+              "properties": { "kind": { "const": "ripple-delete" }, "range": { "$ref": "#/$defs/interval" }, "transactionId": { "$ref": "#/$defs/safeId" }, "transactionVersion": { "const": 1 }, "provenance": { "$ref": "#/$defs/provenance" } }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "range", "transactionId", "transactionVersion", "linkSegmentIds", "provenance"],
+              "properties": { "kind": { "const": "ripple-delete" }, "range": { "$ref": "#/$defs/interval" }, "transactionId": { "$ref": "#/$defs/safeId" }, "transactionVersion": { "const": 2 }, "linkSegmentIds": { "$ref": "#/$defs/linkSegmentIds" }, "provenance": { "$ref": "#/$defs/provenance" } }
+            }
+          ]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "range", "provenance"],
+          "properties": { "kind": { "enum": ["lift", "extract"] }, "range": { "$ref": "#/$defs/interval" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "range", "item", "provenance"],
+          "properties": { "kind": { "enum": ["overwrite", "replace"] }, "range": { "$ref": "#/$defs/interval" }, "item": { "$ref": "#/$defs/pictureEditItem" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "range", "by", "provenance"],
+          "properties": { "kind": { "enum": ["slip", "slide"] }, "range": { "$ref": "#/$defs/interval" }, "by": { "$ref": "#/$defs/rational" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "at", "duration", "style", "provenance"],
+          "properties": { "kind": { "const": "transition" }, "at": { "$ref": "#/$defs/rational" }, "duration": { "$ref": "#/$defs/rational" }, "style": { "$ref": "#/$defs/pictureTrackTransitionStyle" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        }
+      ]
+    },
+    "pictureEditOperationPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "sourceDuration", "baseItems", "operations"],
+      "properties": {
+        "version": { "const": 1 },
+        "sourceDuration": { "$ref": "#/$defs/rational" },
+        "baseItems": { "type": "array", "minItems": 1, "maxItems": 100000, "items": { "$ref": "#/$defs/pictureEditItem" } },
+        "operations": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/pictureEditOperation" } }
+      }
+    },
+    "audioEditItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "allOf": [{ "if": { "required": ["linkSegmentId"] }, "then": { "properties": { "inputs": { "required": ["linkId"] } } } }],
+          "required": ["origin", "kind", "destination", "source", "inputs", "provenance"],
+          "properties": {
+            "origin": { "$ref": "#/$defs/nonEmptyString" },
+            "kind": { "const": "clip" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "source": { "$ref": "#/$defs/interval" },
+            "linkSegmentId": { "$ref": "#/$defs/linkSegmentId" },
+            "inputs": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["resourceId"],
+              "properties": {
+                "resourceId": { "$ref": "#/$defs/safeId" },
+                "linkId": { "$ref": "#/$defs/editorialLink" },
+                "headHandle": { "$ref": "#/$defs/rational" },
+                "tailHandle": { "$ref": "#/$defs/rational" }
+              }
+            },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origin", "kind", "destination", "inputs", "provenance"],
+          "properties": {
+            "origin": { "$ref": "#/$defs/nonEmptyString" },
+            "kind": { "const": "gap" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "inputs": {
+              "type": "object",
+              "additionalProperties": false,
+              "maxProperties": 0
+            },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        }
+      ]
+    },
+    "audioEditOperation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "at", "provenance"],
+          "properties": { "kind": { "const": "split" }, "at": { "$ref": "#/$defs/rational" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "keep", "provenance"],
+          "properties": { "kind": { "const": "trim" }, "keep": { "$ref": "#/$defs/interval" }, "transactionId": { "$ref": "#/$defs/safeId" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "at", "item", "provenance"],
+          "properties": { "kind": { "const": "ripple-insert" }, "at": { "$ref": "#/$defs/rational" }, "item": { "$ref": "#/$defs/audioEditItem" }, "transactionId": { "$ref": "#/$defs/safeId" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "range", "provenance"],
+              "properties": { "kind": { "const": "ripple-delete" }, "range": { "$ref": "#/$defs/interval" }, "provenance": { "$ref": "#/$defs/provenance" } }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "range", "transactionId", "transactionVersion", "provenance"],
+              "properties": { "kind": { "const": "ripple-delete" }, "range": { "$ref": "#/$defs/interval" }, "transactionId": { "$ref": "#/$defs/safeId" }, "transactionVersion": { "const": 1 }, "provenance": { "$ref": "#/$defs/provenance" } }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "range", "transactionId", "transactionVersion", "linkSegmentIds", "provenance"],
+              "properties": { "kind": { "const": "ripple-delete" }, "range": { "$ref": "#/$defs/interval" }, "transactionId": { "$ref": "#/$defs/safeId" }, "transactionVersion": { "const": 2 }, "linkSegmentIds": { "$ref": "#/$defs/linkSegmentIds" }, "provenance": { "$ref": "#/$defs/provenance" } }
+            }
+          ]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "range", "provenance"],
+          "properties": { "kind": { "enum": ["lift", "extract"] }, "range": { "$ref": "#/$defs/interval" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "range", "item", "provenance"],
+          "properties": { "kind": { "enum": ["overwrite", "replace"] }, "range": { "$ref": "#/$defs/interval" }, "item": { "$ref": "#/$defs/audioEditItem" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "range", "by", "provenance"],
+          "properties": { "kind": { "enum": ["slip", "slide"] }, "range": { "$ref": "#/$defs/interval" }, "by": { "$ref": "#/$defs/rational" }, "provenance": { "$ref": "#/$defs/provenance" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "at", "duration", "curve", "provenance"],
+          "properties": { "kind": { "const": "crossfade" }, "at": { "$ref": "#/$defs/rational" }, "duration": { "$ref": "#/$defs/rational" }, "curve": { "enum": ["equal-power", "linear"] }, "provenance": { "$ref": "#/$defs/provenance" } }
+        }
+      ]
+    },
+    "audioCrossfadeOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "at", "duration", "curve", "provenance"],
+      "properties": {
+        "kind": { "const": "crossfade" },
+        "at": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "curve": { "enum": ["equal-power", "linear"] },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "audioRegionEditItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "kind", "regionId", "sourceNodeId", "processorNodeIds", "destination", "source", "inputs", "provenance"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "const": "region" },
+        "regionId": { "$ref": "#/$defs/safeId" },
+        "sourceNodeId": { "$ref": "#/$defs/safeId" },
+        "processorNodeIds": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "destination": { "$ref": "#/$defs/interval" },
+        "source": { "$ref": "#/$defs/interval" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resourceId"],
+          "properties": {
+            "resourceId": { "$ref": "#/$defs/safeId" },
+            "linkId": { "$ref": "#/$defs/editorialLink" },
+            "headHandle": { "$ref": "#/$defs/rational" },
+            "tailHandle": { "$ref": "#/$defs/rational" }
+          }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "audioEditOperationPlan": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "sourceDuration", "baseItems", "operations"],
+          "properties": {
+            "version": { "const": 1 },
+            "sourceDuration": { "$ref": "#/$defs/rational" },
+            "baseItems": { "type": "array", "minItems": 1, "maxItems": 10000, "items": { "$ref": "#/$defs/audioEditItem" } },
+            "operations": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/audioEditOperation" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "sourceDuration", "baseItems", "operations"],
+          "properties": {
+            "version": { "const": 2 },
+            "sourceDuration": { "$ref": "#/$defs/rational" },
+            "baseItems": { "type": "array", "minItems": 1, "maxItems": 10000, "items": { "$ref": "#/$defs/audioRegionEditItem" } },
+            "operations": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/audioCrossfadeOperation" } }
+          }
+        }
+      ]
+    },
+    "editorialAudioItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "allOf": [{ "if": { "required": ["linkSegmentId"] }, "then": { "required": ["linkId"] } }],
+          "required": ["nodeId", "order", "kind", "destination", "source"],
+          "properties": {
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "sourceNodeId": { "$ref": "#/$defs/safeId" },
+            "order": { "type": "integer", "minimum": 0 },
+            "kind": { "const": "audio" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "source": { "$ref": "#/$defs/interval" },
+            "linkId": { "$ref": "#/$defs/editorialLink" },
+            "editId": { "$ref": "#/$defs/timelineEditStableId" },
+            "role": { "$ref": "#/$defs/timelineEditRole" },
+            "metadata": { "$ref": "#/$defs/timelineEditMetadata" },
+            "linkSegmentId": { "$ref": "#/$defs/linkSegmentId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["nodeId", "order", "kind", "destination"],
+          "properties": {
+            "nodeId": { "$ref": "#/$defs/safeId" },
+            "order": { "type": "integer", "minimum": 0 },
+            "kind": { "const": "gap" },
+            "destination": { "$ref": "#/$defs/interval" },
+            "editId": { "$ref": "#/$defs/timelineEditStableId" },
+            "role": { "$ref": "#/$defs/timelineEditRole" },
+            "metadata": { "$ref": "#/$defs/timelineEditMetadata" }
+          }
+        }
+      ]
+    },
+    "editorialAudioTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cut", "duration", "overlap", "outgoingNodeId", "incomingNodeId", "outgoingSource", "incomingSource", "curve", "provenance"],
+      "properties": {
+        "cut": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "overlap": { "$ref": "#/$defs/interval" },
+        "outgoingNodeId": { "$ref": "#/$defs/safeId" },
+        "incomingNodeId": { "$ref": "#/$defs/safeId" },
+        "outgoingSource": { "$ref": "#/$defs/interval" },
+        "incomingSource": { "$ref": "#/$defs/interval" },
+        "curve": { "enum": ["equal-power", "linear"] },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "editorial": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "tracks"],
+          "properties": {
+            "kind": { "const": "sequence" },
+            "tracks": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100000,
+              "items": { "$ref": "#/$defs/editorialSequenceTrack" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": { "const": "picture-track" },
+            "trackId": { "$ref": "#/$defs/timelineEditStableId" },
+            "role": { "$ref": "#/$defs/timelineEditRole" },
+            "metadata": { "$ref": "#/$defs/timelineEditMetadata" },
+            "operationPlan": { "$ref": "#/$defs/pictureEditOperationPlan" },
+            "transitions": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": { "$ref": "#/$defs/editorialPictureTransition" }
+            },
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100000,
+              "items": { "$ref": "#/$defs/editorialPictureItem" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": { "const": "audio-track" },
+            "trackId": { "$ref": "#/$defs/timelineEditStableId" },
+            "role": { "$ref": "#/$defs/timelineEditRole" },
+            "metadata": { "$ref": "#/$defs/timelineEditMetadata" },
+            "operationPlan": { "$ref": "#/$defs/audioEditOperationPlan" },
+            "transitions": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": { "$ref": "#/$defs/editorialAudioTransition" }
+            },
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100000,
+              "items": { "$ref": "#/$defs/editorialAudioItem" }
+            }
+          },
+          "dependentRequired": { "transitions": ["operationPlan"] }
+        }
+      ]
+    },
+    "timelineAudioStableStringValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": { "$ref": "#/$defs/timelineEditStableId" }
+      }
+    },
+    "timelineAudioAuthorityStringValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?:[a-f0-9]{64}|[A-Za-z][A-Za-z0-9._-]{0,127})$"
+        }
+      }
+    },
+    "timelineAudioOriginKindValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": { "enum": ["direct-audio", "processed-audio"] }
+      }
+    },
+    "timelineAudioStatePolicyValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": { "const": "single-authorized-evaluation" }
+      }
+    },
+    "timelineAudioFadeAnchorPolicyValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": { "const": "origin-relative-at-presentation-zero" }
+      }
+    },
+    "timelineAudioEvaluationPolicyValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "string" },
+        "value": { "enum": ["selected-source-union-v1", "full-declared-handle-domain-v1"] }
+      }
+    },
+    "timelineAudioTimeValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "dimension", "magnitude", "unit"],
+      "properties": {
+        "kind": { "const": "quantity" },
+        "dimension": { "const": "time" },
+        "magnitude": { "$ref": "#/$defs/rational" },
+        "unit": { "const": "s" }
+      }
+    },
+    "timelineAudioRateValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "dimension", "magnitude", "unit"],
+      "properties": {
+        "kind": { "const": "quantity" },
+        "dimension": { "const": "scalar" },
+        "magnitude": { "$ref": "#/$defs/rational" },
+        "unit": { "const": "scalar" }
+      }
+    },
+    "timelineAudioSourceRangeValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "start", "end", "exclusive"],
+      "properties": {
+        "kind": { "const": "range" },
+        "start": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "end": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "exclusive": { "const": true }
+      }
+    },
+    "timelineAudioOriginRefValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "const": "node-ref" },
+        "id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "timelineAudioOriginInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originKind", "originAuthorityId", "sourceAuthorityId", "originDuration", "rate", "statePolicy"],
+      "properties": {
+        "originKind": { "$ref": "#/$defs/timelineAudioOriginKindValue" },
+        "originAuthorityId": { "$ref": "#/$defs/timelineAudioAuthorityStringValue" },
+        "sourceAuthorityId": { "$ref": "#/$defs/timelineAudioStableStringValue" },
+        "graphAuthorityId": { "$ref": "#/$defs/timelineAudioStableStringValue" },
+        "originDuration": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "rate": { "$ref": "#/$defs/timelineAudioRateValue" },
+        "statePolicy": { "$ref": "#/$defs/timelineAudioStatePolicyValue" },
+        "evaluationSource": { "$ref": "#/$defs/timelineAudioSourceRangeValue" },
+        "presentationZero": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "fadeAnchorPolicy": { "$ref": "#/$defs/timelineAudioFadeAnchorPolicyValue" },
+        "evaluationPolicy": { "$ref": "#/$defs/timelineAudioEvaluationPolicyValue" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "originKind": {
+                "properties": { "value": { "const": "processed-audio" } },
+                "required": ["value"]
+              }
+            },
+            "required": ["originKind"]
+          },
+          "then": { "required": ["graphAuthorityId"] },
+          "else": { "not": { "required": ["graphAuthorityId"] } }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "required": ["evaluationSource"] },
+              { "required": ["presentationZero"] },
+              { "required": ["fadeAnchorPolicy"] },
+              { "required": ["evaluationPolicy"] }
+            ]
+          },
+          "then": {
+            "required": ["evaluationSource", "presentationZero", "fadeAnchorPolicy", "evaluationPolicy"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "originKind": {
+                "properties": { "value": { "const": "processed-audio" } },
+                "required": ["value"]
+              }
+            },
+            "required": ["originKind"]
+          },
+          "then": {
+            "properties": {
+              "evaluationPolicy": {
+                "properties": { "value": { "const": "full-declared-handle-domain-v1" } }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "evaluationPolicy": {
+                "properties": { "value": { "const": "selected-source-union-v1" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "timelineAudioViewInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "originKind", "originAuthorityId", "sourceAuthorityId", "originDuration", "rate", "sliceOffset", "headHandle", "tailHandle", "source", "statePolicy"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/timelineAudioOriginRefValue" },
+        "originKind": { "$ref": "#/$defs/timelineAudioOriginKindValue" },
+        "originAuthorityId": { "$ref": "#/$defs/timelineAudioAuthorityStringValue" },
+        "sourceAuthorityId": { "$ref": "#/$defs/timelineAudioStableStringValue" },
+        "graphAuthorityId": { "$ref": "#/$defs/timelineAudioStableStringValue" },
+        "originDuration": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "rate": { "$ref": "#/$defs/timelineAudioRateValue" },
+        "sliceOffset": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "headHandle": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "tailHandle": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "source": { "$ref": "#/$defs/timelineAudioSourceRangeValue" },
+        "statePolicy": { "$ref": "#/$defs/timelineAudioStatePolicyValue" },
+        "link": { "$ref": "#/$defs/timelineAudioStableStringValue" },
+        "evaluationSource": { "$ref": "#/$defs/timelineAudioSourceRangeValue" },
+        "presentationZero": { "$ref": "#/$defs/timelineAudioTimeValue" },
+        "fadeAnchorPolicy": { "$ref": "#/$defs/timelineAudioFadeAnchorPolicyValue" },
+        "evaluationPolicy": { "$ref": "#/$defs/timelineAudioEvaluationPolicyValue" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "originKind": {
+                "properties": { "value": { "const": "processed-audio" } },
+                "required": ["value"]
+              }
+            },
+            "required": ["originKind"]
+          },
+          "then": { "required": ["graphAuthorityId"] },
+          "else": { "not": { "required": ["graphAuthorityId"] } }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "required": ["evaluationSource"] },
+              { "required": ["presentationZero"] },
+              { "required": ["fadeAnchorPolicy"] },
+              { "required": ["evaluationPolicy"] }
+            ]
+          },
+          "then": {
+            "required": ["evaluationSource", "presentationZero", "fadeAnchorPolicy", "evaluationPolicy"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "originKind": {
+                "properties": { "value": { "const": "processed-audio" } },
+                "required": ["value"]
+              }
+            },
+            "required": ["originKind"]
+          },
+          "then": {
+            "properties": {
+              "evaluationPolicy": {
+                "properties": { "value": { "const": "full-declared-handle-domain-v1" } }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "evaluationPolicy": {
+                "properties": { "value": { "const": "selected-source-union-v1" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "domain", "ownership", "interval", "inputs", "children", "properties", "effects", "contentHash", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "$ref": "#/$defs/nonEmptyString" },
+        "domain": { "$ref": "#/$defs/nodeDomain" },
+        "ownership": { "enum": ["root", "child", "reference", "detached"] },
+        "sceneId": { "$ref": "#/$defs/safeId" },
+        "interval": { "$ref": "#/$defs/interval" },
+        "editorial": { "$ref": "#/$defs/editorial" },
+        "inputs": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": { "$ref": "#/$defs/irValue" }
+        },
+        "children": {
+          "type": "array",
+          "maxItems": 100000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "properties": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": {
+            "oneOf": [
+              { "$ref": "#/$defs/irValue" },
+              { "$ref": "#/$defs/signalRef" }
+            ]
+          }
+        },
+        "effects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/effectKind" }
+        },
+        "contentHash": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["op", "inputs"],
+            "properties": {
+              "op": { "enum": ["cut.visual.path", "cut.visual.motion_path"] },
+              "inputs": {
+                "type": "object",
+                "required": ["geometry"],
+                "properties": {
+                  "geometry": {
+                    "type": "object",
+                    "required": ["kind"],
+                    "properties": { "kind": { "const": "call" } }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "inputs": {
+                "properties": {
+                  "geometry": { "$ref": "#/$defs/anchoredPathGeometryValueV1" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["op"],
+            "properties": { "op": { "const": "cut.visual.media_camera2d" } }
+          },
+          "then": {
+            "required": ["sceneId"],
+            "properties": {
+              "domain": { "const": "visual" },
+              "ownership": { "enum": ["root", "child"] },
+              "inputs": { "$ref": "#/$defs/mediaCamera2DInputs" },
+              "children": { "minItems": 1, "maxItems": 1 },
+              "properties": { "$ref": "#/$defs/mediaCamera2DProperties" }
+            },
+            "not": { "required": ["editorial"] }
+          }
+        },
+        {
+          "if": {
+            "required": ["op"],
+            "properties": { "op": { "const": "cut.visual.image_sequence" } }
+          },
+          "then": {
+            "required": ["sceneId"],
+            "properties": {
+              "domain": { "const": "visual" },
+              "inputs": {
+                "required": ["source"],
+                "properties": { "source": { "$ref": "#/$defs/imageSequenceAssetValue" } }
+              },
+              "children": { "maxItems": 0 }
+            },
+            "not": { "required": ["editorial"] }
+          }
+        },
+        {
+          "if": {
+            "required": ["op"],
+            "properties": { "op": { "const": "cut.edit.timeline_audio_origin" } }
+          },
+          "then": {
+            "required": ["sceneId"],
+            "properties": {
+              "domain": { "const": "audio" },
+              "ownership": { "const": "reference" },
+              "inputs": { "$ref": "#/$defs/timelineAudioOriginInputs" },
+              "children": { "minItems": 1, "maxItems": 1 },
+              "properties": { "maxProperties": 0 }
+            },
+            "not": { "required": ["editorial"] }
+          }
+        },
+        {
+          "if": {
+            "required": ["op"],
+            "properties": { "op": { "const": "cut.edit.timeline_audio_view" } }
+          },
+          "then": {
+            "required": ["sceneId"],
+            "properties": {
+              "domain": { "const": "audio" },
+              "ownership": { "const": "child" },
+              "inputs": { "$ref": "#/$defs/timelineAudioViewInputs" },
+              "children": { "maxItems": 0 },
+              "properties": { "maxProperties": 0 }
+            },
+            "not": { "required": ["editorial"] }
+          }
+        }
+      ]
+    },
+    "setEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "time", "value"],
+      "properties": {
+        "kind": { "const": "set" },
+        "time": { "$ref": "#/$defs/rational" },
+        "value": { "$ref": "#/$defs/signalPayloadValue" }
+      }
+    },
+    "animateEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "start", "end", "from", "to", "curve"],
+      "properties": {
+        "kind": { "const": "animate" },
+        "start": { "$ref": "#/$defs/rational" },
+        "end": { "$ref": "#/$defs/rational" },
+        "from": { "$ref": "#/$defs/signalPayloadValue" },
+        "to": { "$ref": "#/$defs/signalPayloadValue" },
+        "curve": { "$ref": "#/$defs/irValue" }
+      }
+    },
+    "constantSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "valueType", "value", "contentHash", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "kind": { "const": "constant" },
+        "valueType": { "$ref": "#/$defs/signalValueType" },
+        "value": { "$ref": "#/$defs/signalPayloadValue" },
+        "contentHash": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "stepPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time", "value"],
+      "properties": {
+        "time": { "$ref": "#/$defs/rational" },
+        "value": { "$ref": "#/$defs/signalPayloadValue" }
+      }
+    },
+    "stepSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "valueType", "points", "contentHash", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "kind": { "const": "step" },
+        "valueType": { "$ref": "#/$defs/signalValueType" },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/stepPoint" }
+        },
+        "contentHash": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "keyframePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time", "value", "curve"],
+      "properties": {
+        "time": { "$ref": "#/$defs/rational" },
+        "value": { "$ref": "#/$defs/signalPayloadValue" },
+        "curve": { "$ref": "#/$defs/irValue" }
+      }
+    },
+    "keyframesSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "valueType", "keyframes", "contentHash", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "kind": { "const": "keyframes" },
+        "valueType": { "$ref": "#/$defs/signalValueType" },
+        "keyframes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/keyframePoint" }
+        },
+        "contentHash": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "audioAmplitudeProducerMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "from", "to"],
+      "properties": {
+        "kind": { "const": "linear" },
+        "from": { "$ref": "#/$defs/signalPayloadValue" },
+        "to": { "$ref": "#/$defs/signalPayloadValue" }
+      }
+    },
+    "audioAmplitudeProducerScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compositionId", "sceneId"],
+      "properties": {
+        "compositionId": { "$ref": "#/$defs/safeId" },
+        "sceneId": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "audioAmplitudeProducerRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/rational" },
+        "end": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "audioAmplitudeProducer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version",
+        "source",
+        "scope",
+        "range",
+        "at",
+        "detector",
+        "window",
+        "hop",
+        "attack",
+        "release",
+        "floor",
+        "ceiling",
+        "mapping"
+      ],
+      "properties": {
+        "format": { "const": "cut-audio-amplitude-producer" },
+        "version": { "const": 1 },
+        "source": { "$ref": "#/$defs/resourceRefValue" },
+        "scope": { "$ref": "#/$defs/audioAmplitudeProducerScope" },
+        "range": { "$ref": "#/$defs/audioAmplitudeProducerRange" },
+        "at": { "$ref": "#/$defs/rational" },
+        "detector": { "enum": ["peak", "rms"] },
+        "window": { "$ref": "#/$defs/rational" },
+        "hop": { "$ref": "#/$defs/rational" },
+        "attack": { "$ref": "#/$defs/rational" },
+        "release": { "$ref": "#/$defs/rational" },
+        "floor": { "$ref": "#/$defs/rational" },
+        "ceiling": { "$ref": "#/$defs/rational" },
+        "mapping": { "$ref": "#/$defs/audioAmplitudeProducerMapping" }
+      }
+    },
+    "trackSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "valueType", "initial", "events", "contentHash", "provenance"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "initial": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "null" } }
+              }
+            }
+          },
+          "then": { "properties": { "events": { "minItems": 1 } } }
+        }
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "kind": { "const": "track" },
+        "valueType": { "$ref": "#/$defs/signalValueType" },
+        "initial": { "$ref": "#/$defs/irValue" },
+        "events": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/setEvent" },
+              { "$ref": "#/$defs/animateEvent" }
+            ]
+          }
+        },
+        "producer": { "$ref": "#/$defs/audioAmplitudeProducer" },
+        "contentHash": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "signal": {
+      "oneOf": [
+        { "$ref": "#/$defs/constantSignal" },
+        { "$ref": "#/$defs/stepSignal" },
+        { "$ref": "#/$defs/keyframesSignal" },
+        { "$ref": "#/$defs/trackSignal" }
+      ]
+    },
+    "sceneItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "domain"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "domain": { "$ref": "#/$defs/nodeDomain" }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "start", "duration", "rootVisualIds", "rootAudioIds", "rootAVIds", "items", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "start": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "rootVisualIds": { "$ref": "#/$defs/idArray" },
+        "rootAudioIds": { "$ref": "#/$defs/idArray" },
+        "rootAVIds": { "$ref": "#/$defs/idArray" },
+        "items": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/sceneItem" }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "compositionSceneItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "const": "scene" },
+        "id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "compositionNodeItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "domain"],
+      "properties": {
+        "kind": { "const": "node" },
+        "id": { "$ref": "#/$defs/safeId" },
+        "domain": { "$ref": "#/$defs/nodeDomain" }
+      }
+    },
+    "composition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "width", "height", "fps", "sampleRate", "duration", "sceneIds", "rootVisualIds", "rootAudioIds", "rootAVIds", "items", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "width": { "$ref": "#/$defs/positiveSafeInteger" },
+        "height": { "$ref": "#/$defs/positiveSafeInteger" },
+        "fps": { "$ref": "#/$defs/rational" },
+        "sampleRate": { "$ref": "#/$defs/positiveSafeInteger" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "sceneIds": { "$ref": "#/$defs/idArray" },
+        "rootVisualIds": { "$ref": "#/$defs/idArray" },
+        "rootAudioIds": { "$ref": "#/$defs/idArray" },
+        "rootAVIds": { "$ref": "#/$defs/idArray" },
+        "items": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/compositionSceneItem" },
+              { "$ref": "#/$defs/compositionNodeItem" }
+            ]
+          }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "idArray": {
+      "type": "array",
+      "maxItems": 100000,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/safeId" }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "effect", "op", "inputs", "state", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "effect": { "enum": ["analyze", "generate", "external"] },
+        "op": { "$ref": "#/$defs/nonEmptyString" },
+        "inputs": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": { "$ref": "#/$defs/irValue" }
+        },
+        "state": { "enum": ["unresolved", "locked"] },
+        "artifactHash": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "locked" } }, "required": ["state"] },
+          "then": { "required": ["artifactHash"] },
+          "else": { "not": { "required": ["artifactHash"] } }
+        }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "op", "timelineId", "parameters", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "op": { "$ref": "#/$defs/nonEmptyString" },
+        "timelineId": { "$ref": "#/$defs/safeId" },
+        "parameters": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": { "$ref": "#/$defs/safeRecordKey" },
+          "additionalProperties": { "$ref": "#/$defs/irValue" }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expression", "status", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "expression": { "$ref": "#/$defs/irValue" },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "enum": ["pass", "fail", "deferred"] },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+cut 0.4;
+
+project "Asset-light product card";
+
+import { Blur, Circle, Glow, Group, Rect, Shadow, Vignette } from "cut:visual";
+
+timeline main(duration: 2s, fps: 24, width: 640px, height: 360px, sampleRate: 48khz) {
+  scene card(duration: 2s) {
+    Vignette(amount: 58%, radius: 30%, softness: 70%, color: #020617) {
+      Group() {
+        Rect(width: 640px, height: 360px, x: 320px, y: 180px, fill: #0f172a);
+        Blur(radius: 24px) {
+          Circle(radius: 92px, x: 510px, y: 72px, fill: #0ea5e980);
+        }
+        Shadow(x: 0px, y: 12px, radius: 18px, color: #000000, opacity: 72%) {
+          Rect(width: 488px, height: 234px, x: 320px, y: 180px, radius: 28px, fill: #111827);
+        }
+        Glow(radius: 12px, color: #22d3ee, opacity: 48%) {
+          Rect(width: 7px, height: 112px, x: 112px, y: 171px, radius: 3px, fill: #22d3ee);
+        }
+      }
+    }
+  }
+}
+
+export social = render(main, width: 640px, height: 360px, codec: "h264");

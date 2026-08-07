@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:planar-track:1",
+  "title": "CUT locked planar tracking sidecar v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["coordinateSpace", "format", "height", "samples", "version", "width"],
+  "properties": {
+    "format": { "const": "cut-planar-track" },
+    "version": { "const": 1 },
+    "coordinateSpace": { "const": "composition-pixel-edges" },
+    "width": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "height": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "samples": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 16384,
+      "items": { "$ref": "#/$defs/sample" }
+    }
+  },
+  "$defs": {
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator", "numerator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65,
+          "pattern": "^-?(0|[1-9][0-9]*)$",
+          "not": { "const": "-0" }
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "$ref": "#/$defs/rational" },
+        "y": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "corners": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bottomLeft", "bottomRight", "topLeft", "topRight"],
+      "properties": {
+        "topLeft": { "$ref": "#/$defs/point" },
+        "topRight": { "$ref": "#/$defs/point" },
+        "bottomRight": { "$ref": "#/$defs/point" },
+        "bottomLeft": { "$ref": "#/$defs/point" }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "confidence", "corners", "status"],
+      "properties": {
+        "at": { "$ref": "#/$defs/rational" },
+        "confidence": { "$ref": "#/$defs/rational" },
+        "status": { "enum": ["visible", "occluded", "out-of-frame"] },
+        "corners": { "$ref": "#/$defs/corners" }
+      }
+    }
+  }
+}

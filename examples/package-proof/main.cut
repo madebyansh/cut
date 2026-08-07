@@ -1,0 +1,16 @@
+cut 0.4;
+
+project "Third-party package proof";
+
+import { ImpactCard } from "@cut-proof/impact-cards";
+
+import { Rect } from "cut:visual";
+
+timeline main(duration: 1s, fps: 24, width: 320px, height: 180px) {
+  scene card(duration: 1s) {
+    Rect(width: 320px, height: 180px, fill: #18222b);
+    ImpactCard(x: 160px, y: 90px, width: 280px, height: 140px, accent: #ef6f4d);
+  }
+}
+
+export preview = render(main, width: 320px, height: 180px);

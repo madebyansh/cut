@@ -1,0 +1,44 @@
+cut 0.4;
+
+project "Beacon Pulse";
+
+import { Rect, Circle, Text, Group } from "cut:visual";
+
+import { Tone, Noise, Bus, Gain, Limiter } from "@cut/audio";
+
+import { outCubic } from "@cut/motion";
+
+// Fixed-instance OFL fixture shipped beside this example. CUT never falls back
+// to a machine font, and the lock pins these exact bytes.
+asset face: FontAsset = font("fixtures/Geist-Regular.ttf");
+
+component Beacon(label: String, accent: Color) -> Visual {
+  Group() as beacon {
+    Rect(width: 920px, height: 180px, x: 640px, y: 360px, fill: #0b1220e8, radius: 20px);
+    Circle(radius: 18px, x: 190px, y: 360px, fill: accent) as dot;
+    Text(content: label, font: face, x: 240px, y: 378px, size: 52px, color: #f8fafc);
+    animate dot.scale from 0.5 to 1 over 12f ease outCubic;
+  }
+  animate beacon.opacity from 0% to 100% over 10f ease outCubic;
+}
+
+timeline main(duration: 3s, fps: 24, width: 1280px, height: 720px, sampleRate: 48khz) {
+  scene pulse(duration: 3s) {
+    Rect(width: 1280px, height: 720px, x: 640px, y: 360px, fill: #030712);
+    Beacon(label: "SIGNAL ACQUIRED", accent: #22d3ee);
+    Limiter(ceiling: -1dbtp) {
+      Bus(name: "pulse-design") {
+        Gain(amount: -16db) {
+          Tone(frequency: 220hz, duration: 500ms, amplitude: 25%, fadeOut: 350ms);
+        }
+        at 1s {
+          Gain(amount: -24db) {
+            Noise(duration: 700ms, color: "pink", amplitude: 12%, seed: 7, fadeIn: 100ms, fadeOut: 500ms);
+          }
+        }
+      }
+    }
+  }
+}
+
+export release = render(main, width: 1280px, height: 720px, codec: "h264");

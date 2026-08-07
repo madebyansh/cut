@@ -1,0 +1,26 @@
+{
+  "capabilities": [
+    "visual"
+  ],
+  "dependencies": {},
+  "entry": "index.cut",
+  "exports": {
+    "ImpactCard": {
+      "declaration": "ImpactCard",
+      "documentation": "A warm editorial card assembled from public CUT vector primitives.",
+      "kind": "component"
+    }
+  },
+  "format": "cut-package",
+  "integrity": {
+    "algorithm": "sha256",
+    "files": {
+      "index.cut": "75ca02a5e2ce608ff37f821f918fa73a92ee40e3fd4fadffcaff084f0d085e35",
+      "README.md": "76c0c773a2c4902dad3e508c0d66e943eb2feaf0f5f9ff543b282687949b7942"
+    }
+  },
+  "language": "0.4",
+  "manifestVersion": 1,
+  "name": "@cut-proof/impact-cards",
+  "version": "1.0.0"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "youtube-high-retention",
+  "version": 1,
+  "story": { "coldOpenMaxSeconds": 3, "showResultBeforeSeconds": 8, "openLoop": true },
+  "rhythm": { "maxTalkingHeadSeconds": 7, "minimumShotSeconds": 0.35, "patternInterruptEverySeconds": 18, "breathingRoomAfterPayoffSeconds": 1.2 },
+  "audio": { "integratedLoudnessLUFS": -16, "truePeakDB": -1.5, "dialogueFirst": true, "duckMusicDB": -12 },
+  "visual": { "hideJumpCutsWithCoverage": true, "safeFrame": "youtube", "captions": "phrase-emphasis" },
+  "integrity": { "preserveMeaning": true, "contiguousQuotes": true, "allowSyntheticSpeech": false }
+}

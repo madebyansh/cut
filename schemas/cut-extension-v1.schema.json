@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:extension-manifest:1",
+  "title": "CUT extension manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "manifestVersion",
+    "abi",
+    "name",
+    "version",
+    "kind",
+    "implementation",
+    "capabilities",
+    "determinism",
+    "budgets"
+  ],
+  "properties": {
+    "format": { "const": "cut-extension" },
+    "manifestVersion": { "const": 1 },
+    "abi": { "const": "cut-extension-wasm-byte-v1" },
+    "name": {
+      "type": "string",
+      "maxLength": 214,
+      "pattern": "^(?:@[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?/)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$",
+      "allOf": [
+        { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+        { "not": { "pattern": "^@cut/" } },
+        { "not": { "pattern": "^cut:" } }
+      ]
+    },
+    "version": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/semver" },
+    "kind": { "enum": ["analysis", "audio-processor", "byte-processor", "generator", "shader"] },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "entry", "sha256"],
+      "properties": {
+        "format": { "enum": ["wasm", "native"] },
+        "entry": {
+          "allOf": [
+            { "$ref": "urn:cut:schema:package-manifest:1#/$defs/fileLocator" },
+            {
+              "pattern": "^(?![A-Za-z]:)(?!.*\\u0000)(?!(?:\\.|\\.\\.|__proto__|constructor|prototype)(?:/|$))(?!.*\\/(?:\\.|\\.\\.|__proto__|constructor|prototype)(?:\\/|$)).+$"
+            }
+          ]
+        },
+        "sha256": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/digest" }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "filesystem:read-assets",
+          "filesystem:write-output",
+          "gpu:compute",
+          "native:host",
+          "network:https",
+          "secret:read"
+        ]
+      }
+    },
+    "determinism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier"],
+      "properties": {
+        "tier": { "enum": ["same-runtime-byte", "seeded", "nondeterministic"] }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeoutMs",
+        "memoryPages",
+        "maximumModuleBytes",
+        "maximumInputBytes",
+        "maximumOutputBytes",
+        "maximumConcurrency"
+      ],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "memoryPages": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "maximumModuleBytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "maximumInputBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "maximumOutputBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "maximumConcurrency": { "type": "integer", "minimum": 1, "maximum": 4 }
+      }
+    }
+  },
+  "x-cut-semanticValidation": {
+    "validator": "validateCutExtensionManifest",
+    "rules": [
+      {
+        "id": "CUT_EXTENSION_MEMORY_FIT",
+        "expression": "maximumInputBytes + maximumOutputBytes + 15 <= memoryPages * 65536",
+        "diagnostic": "CUT_EXTENSION_BUDGET",
+        "path": "$.budgets"
+      }
+    ]
+  }
+}

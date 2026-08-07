@@ -1,0 +1,27 @@
+{
+  "format": "cut-package-lock",
+  "integrity": "sha256-d4afc4b210d0199cbf3d0a419f76bd5f694974a11acf2a703955a9dc5cc7d077",
+  "language": "0.4",
+  "packages": [
+    {
+      "capabilities": [
+        "visual"
+      ],
+      "contentIntegrity": "sha256-71087e372e8b04361505efbcb9bddfac73e683bd1b9ac911744793901247e1a8",
+      "dependencies": [],
+      "entry": "index.cut",
+      "entryIntegrity": "75ca02a5e2ce608ff37f821f918fa73a92ee40e3fd4fadffcaff084f0d085e35",
+      "manifestIntegrity": "sha256-b017d3651e2ce10d7578c998c8fbe88ee4a80e19fcb920fecd864452e9bf3782",
+      "name": "@cut-proof/impact-cards",
+      "source": "file:../packages/impact-cards",
+      "version": "1.0.0"
+    }
+  ],
+  "project": {
+    "contentIntegrity": "sha256-94b20b28221f4a78fdf2c7ced245b18d65dbfdef9469b458b181525a50a3540b",
+    "manifestIntegrity": "sha256-55e631504fba40bf8afaa504c496edb6662584b0b4b765a4efc2dc7db3f1136b",
+    "name": "cut-package-proof",
+    "version": "0.1.0"
+  },
+  "version": 1
+}

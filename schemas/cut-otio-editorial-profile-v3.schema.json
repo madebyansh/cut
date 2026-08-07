@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:otio-editorial-profile-extension:3",
+  "title": "CUT OTIO Editorial Profile V3 origin-clock extension",
+  "description": "Closed CUT-only metadata extension for immutable audio origins and structural destination views. It binds, but does not replace, one exact V2 native-track profile. Runtime validation additionally enforces canonical rationals, profile references, origin-clock source mapping, role/metadata/link reconciliation, processor authority, transition losses, aggregate budgets, and the semantic hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "compositionId",
+    "baseProfileSemanticSha256",
+    "audioOrigins",
+    "losses",
+    "semanticSha256"
+  ],
+  "properties": {
+    "format": { "const": "cut-otio-editorial-profile-extension" },
+    "version": { "const": 3 },
+    "compositionId": { "$ref": "#/$defs/id" },
+    "baseProfileSemanticSha256": { "$ref": "#/$defs/sha256" },
+    "audioOrigins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50000,
+      "items": { "$ref": "#/$defs/audioOrigin" }
+    },
+    "losses": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/loss" }
+    },
+    "semanticSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9._:-]{0,127}$"
+    },
+    "authorityId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?:[a-f0-9]{64}|[A-Za-z_][A-Za-z0-9._:-]{0,127})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^-?(?:0|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "duration"],
+      "properties": {
+        "start": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "handles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head", "tail"],
+      "properties": {
+        "head": { "$ref": "#/$defs/rational" },
+        "tail": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "unlinked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": { "kind": { "const": "unlinked" } }
+    },
+    "linked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "groupId", "segmentId"],
+      "properties": {
+        "kind": { "const": "linked" },
+        "groupId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "link": {
+      "oneOf": [
+        { "$ref": "#/$defs/unlinked" },
+        { "$ref": "#/$defs/linked" }
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128,
+        "pattern": "^(?![Cc][Uu][Tt]\\.)(?:[A-Za-z][A-Za-z0-9_-]*\\.)+[A-Za-z][A-Za-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1024,
+        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+      }
+    },
+    "audioView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "itemId",
+        "segmentId",
+        "sliceOffset",
+        "source",
+        "destination",
+        "handles",
+        "link",
+        "lineageSha256"
+      ],
+      "properties": {
+        "itemId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" },
+        "parentSegmentId": { "$ref": "#/$defs/id" },
+        "sliceOffset": { "$ref": "#/$defs/rational" },
+        "source": { "$ref": "#/$defs/interval" },
+        "destination": { "$ref": "#/$defs/interval" },
+        "handles": { "$ref": "#/$defs/handles" },
+        "link": { "$ref": "#/$defs/link" },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "lineageSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "audioLineageSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planId",
+        "trackId",
+        "originId",
+        "segmentId",
+        "sliceOffset",
+        "source",
+        "destination",
+        "handles",
+        "lineageSha256"
+      ],
+      "properties": {
+        "planId": { "$ref": "#/$defs/id" },
+        "trackId": { "$ref": "#/$defs/id" },
+        "originId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" },
+        "parentSegmentId": { "$ref": "#/$defs/id" },
+        "sliceOffset": { "$ref": "#/$defs/rational" },
+        "source": { "$ref": "#/$defs/interval" },
+        "destination": { "$ref": "#/$defs/interval" },
+        "handles": { "$ref": "#/$defs/handles" },
+        "linkId": { "$ref": "#/$defs/id" },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "lineageSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "audioOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trackId",
+        "timelineEditPlanId",
+        "timelineEditOriginId",
+        "kind",
+        "originAuthorityId",
+        "sourceAuthorityId",
+        "sourceNodeId",
+        "processorNodeIds",
+        "statePolicy",
+        "source",
+        "originDuration",
+        "rate",
+        "fadeIn",
+        "fadeOut",
+        "lineageSegments",
+        "views"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "trackId": { "$ref": "#/$defs/id" },
+        "timelineEditPlanId": { "$ref": "#/$defs/id" },
+        "timelineEditOriginId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["direct-audio", "processed-audio"] },
+        "originAuthorityId": { "$ref": "#/$defs/authorityId" },
+        "sourceAuthorityId": { "$ref": "#/$defs/authorityId" },
+        "graphAuthorityId": { "$ref": "#/$defs/authorityId" },
+        "sourceNodeId": { "$ref": "#/$defs/id" },
+        "processorNodeIds": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "processorGraphSemanticSha256": { "$ref": "#/$defs/sha256" },
+        "statePolicy": { "const": "single-authorized-evaluation" },
+        "source": { "$ref": "#/$defs/interval" },
+        "originDuration": { "$ref": "#/$defs/rational" },
+        "rate": { "$ref": "#/$defs/rational" },
+        "fadeIn": { "$ref": "#/$defs/rational" },
+        "fadeOut": { "$ref": "#/$defs/rational" },
+        "lineageSegments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/audioLineageSegment" }
+        },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/audioView" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "processed-audio" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": [
+              "graphAuthorityId",
+              "processorGraphSemanticSha256"
+            ],
+            "properties": {
+              "processorNodeIds": { "minItems": 1 }
+            }
+          },
+          "else": {
+            "properties": {
+              "processorNodeIds": { "maxItems": 0 }
+            },
+            "not": {
+              "anyOf": [
+                { "required": ["graphAuthorityId"] },
+                { "required": ["processorGraphSemanticSha256"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "lossTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["cut-roundtrip", "generic-otio"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "adapter" },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            }
+          }
+        }
+      ]
+    },
+    "loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "category",
+        "disposition",
+        "target",
+        "subject",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "category": {
+          "enum": [
+            "effect",
+            "linkage",
+            "metadata",
+            "nesting",
+            "retime",
+            "timing",
+            "transaction",
+            "transition"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "approximated",
+            "dropped",
+            "metadata-required",
+            "unsupported"
+          ]
+        },
+        "target": { "$ref": "#/$defs/lossTarget" },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "composition",
+                "track",
+                "item",
+                "link-group",
+                "linked-cut",
+                "transition",
+                "nesting"
+              ]
+            },
+            "id": { "$ref": "#/$defs/id" }
+          }
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cut:schema:reference-study-review:1",
+  "title": "CUT reference-study review v1",
+  "description": "Closed, hash-bound human playback and listening record for a short professional CUT reference study. Validation never automates taste.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "decision", "artifact", "authoringBoundary", "pattern", "playbackReview", "hardFailures", "technicalEvidence", "iterationHistory"],
+  "properties": {
+    "format": { "const": "cut-reference-study-review" },
+    "version": { "const": 1 },
+    "decision": { "$ref": "#/definitions/decision" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "studyId", "iterationId", "title", "durationSeconds", "audioPresent", "source", "lock", "ir", "output", "renderManifest"],
+      "properties": {
+        "kind": { "const": "reference-study" },
+        "studyId": { "$ref": "#/definitions/identifier" },
+        "iterationId": { "$ref": "#/definitions/identifier" },
+        "title": { "$ref": "#/definitions/text" },
+        "durationSeconds": { "type": "number", "minimum": 1, "maximum": 120 },
+        "audioPresent": { "type": "boolean" },
+        "source": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.cut$" } } }] },
+        "lock": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.lock$" } } }] },
+        "ir": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.cutir\\.json$" } } }] },
+        "output": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.(?:mp4|mov|mkv|webm)$" } } }] },
+        "renderManifest": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.manifest\\.json$" } } }] }
+      }
+    },
+    "authoringBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicCutSource", "publicPackagesOnly", "publicCliOnly", "allProjectSpecificCreativeAndTemporalIntentInCut", "noAfterEffectsOrPremiere", "noBespokeHiddenCompositor", "noProjectNameBranch", "noManualFrameReplacement", "noCreativePostFixAfterRender", "ffmpegRole"],
+      "properties": {
+        "publicCutSource": { "type": "boolean" },
+        "publicPackagesOnly": { "type": "boolean" },
+        "publicCliOnly": { "type": "boolean" },
+        "allProjectSpecificCreativeAndTemporalIntentInCut": { "type": "boolean" },
+        "noAfterEffectsOrPremiere": { "type": "boolean" },
+        "noBespokeHiddenCompositor": { "type": "boolean" },
+        "noProjectNameBranch": { "type": "boolean" },
+        "noManualFrameReplacement": { "type": "boolean" },
+        "noCreativePostFixAfterRender": { "type": "boolean" },
+        "ffmpegRole": { "const": "codec-and-low-level-media-only" }
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grammar", "requirements"],
+      "properties": {
+        "grammar": { "$ref": "#/definitions/text" },
+        "requirements": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 24,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "description", "status", "evidence"],
+            "properties": {
+              "id": { "$ref": "#/definitions/identifier" },
+              "description": { "$ref": "#/definitions/text" },
+              "status": { "$ref": "#/definitions/decision" },
+              "evidence": { "type": "array", "minItems": 2, "maxItems": 24, "items": { "$ref": "#/definitions/timedEvidence" } }
+            }
+          }
+        }
+      }
+    },
+    "playbackReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewerId", "reviewerName", "reviewerType", "reviewedAt", "fullStudy", "fullSpeedPlayback", "audioReview", "display", "audioDevice", "notes"],
+      "properties": {
+        "reviewerId": { "$ref": "#/definitions/identifier" },
+        "reviewerName": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S" },
+        "reviewerType": { "const": "human" },
+        "reviewedAt": { "type": "string", "maxLength": 64, "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$" },
+        "fullStudy": { "type": "boolean" },
+        "fullSpeedPlayback": { "type": "boolean" },
+        "audioReview": { "enum": ["headphones-complete", "not-applicable-silent", "missing"] },
+        "display": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S" },
+        "audioDevice": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S" },
+        "notes": { "$ref": "#/definitions/hashedArtifact" }
+      }
+    },
+    "hardFailures": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "evidence", "startSeconds", "endSeconds"],
+        "properties": {
+          "code": { "enum": ["SLIDESHOW_GRAMMAR", "WEAK_SPATIAL_CONTINUITY", "UNMOTIVATED_MOTION", "PRIMITIVE_MOTION", "ILLEGIBLE_TYPOGRAPHY", "WEAK_SOUND", "TECHNICAL_GLITCH", "MISSING_PATTERN_PROOF", "RIGHTS_OR_PROVENANCE", "HIDDEN_POSTPROCESSING", "INCOMPLETE_REVIEW", "REFERENCE_COPYING"] },
+          "evidence": { "$ref": "#/definitions/text" },
+          "startSeconds": { "type": "number", "minimum": 0, "maximum": 120 },
+          "endSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 120 }
+        }
+      }
+    },
+    "technicalEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCheck", "sourceTest", "renderManifest", "deterministicReplay", "frameScan", "audioDelivery", "rightsProvenance", "canonicalSourceBoundary"],
+      "properties": {
+        "sourceCheck": { "$ref": "#/definitions/evidenceGate" },
+        "sourceTest": { "$ref": "#/definitions/evidenceGate" },
+        "renderManifest": { "$ref": "#/definitions/evidenceGate" },
+        "deterministicReplay": { "$ref": "#/definitions/evidenceGate" },
+        "frameScan": { "$ref": "#/definitions/evidenceGate" },
+        "audioDelivery": { "$ref": "#/definitions/evidenceGate" },
+        "rightsProvenance": { "$ref": "#/definitions/evidenceGate" },
+        "canonicalSourceBoundary": { "$ref": "#/definitions/evidenceGate" }
+      }
+    },
+    "iterationHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "priorFailedIterations"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "priorFailedIterations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "retained", "source", "lock", "output", "renderManifest", "review", "summary"],
+            "properties": {
+              "id": { "$ref": "#/definitions/identifier" },
+              "retained": { "type": "boolean" },
+              "source": { "$ref": "#/definitions/hashedArtifact" },
+              "lock": { "$ref": "#/definitions/hashedArtifact" },
+              "output": { "$ref": "#/definitions/hashedArtifact" },
+              "renderManifest": { "$ref": "#/definitions/hashedArtifact" },
+              "review": { "$ref": "#/definitions/hashedArtifact" },
+              "summary": { "$ref": "#/definitions/text" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "decision": { "enum": ["pass", "revise"] },
+    "text": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S" },
+    "identifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "path": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[?#%])(?:[^/]+/)*[^/]+$" },
+    "hashedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "$ref": "#/definitions/path" }, "sha256": { "$ref": "#/definitions/digest" } }
+    },
+    "timedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startSeconds", "endSeconds", "observation"],
+      "properties": {
+        "startSeconds": { "type": "number", "minimum": 0, "maximum": 120 },
+        "endSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 120 },
+        "observation": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" }
+      }
+    },
+    "evidenceGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "artifact"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "not-applicable"] },
+        "artifact": { "$ref": "#/definitions/hashedArtifact" }
+      }
+    }
+  }
+}

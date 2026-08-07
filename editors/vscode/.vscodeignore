@@ -1,0 +1,6 @@
+.vscodeignore
+scripts/**
+node_modules/**
+*.tgz
+*.vsix
+npm-debug.log*

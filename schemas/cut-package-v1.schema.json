@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:package-manifest:1",
+  "title": "CUT package manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "manifestVersion",
+    "name",
+    "version",
+    "language",
+    "entry",
+    "capabilities",
+    "dependencies",
+    "exports",
+    "integrity"
+  ],
+  "properties": {
+    "format": { "const": "cut-package" },
+    "manifestVersion": { "const": 1 },
+    "name": {
+      "type": "string",
+      "maxLength": 214,
+      "pattern": "^(?:@[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?/)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "version": { "$ref": "#/$defs/semver" },
+    "language": { "const": "0.4" },
+    "entry": { "$ref": "#/$defs/fileLocator" },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "analysis",
+          "audio",
+          "av",
+          "data",
+          "external",
+          "generation",
+          "media-read",
+          "visual"
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": { "$ref": "#/$defs/packageName" },
+      "additionalProperties": { "$ref": "#/$defs/dependency" }
+    },
+    "exports": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/componentExport" }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "files"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "files": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 256,
+          "propertyNames": { "$ref": "#/$defs/fileLocator" },
+          "additionalProperties": { "$ref": "#/$defs/digest" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "packageName": {
+      "type": "string",
+      "maxLength": 214,
+      "pattern": "^(?:@[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?/)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "semver": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "semverRange": {
+      "type": "string",
+      "maxLength": 129,
+      "pattern": "^[~^]?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "integrity": { "type": "string", "pattern": "^sha256-[a-f0-9]{64}$" },
+    "fileLocator": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*[?#%])(?:[^/]+/)*[^/]+$"
+    },
+    "fileSource": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^file:(?!/)(?!.*\\\\)(?!.*[?#%])(?:\\.\\./)*(?:[^/]+/)*[^/]+$"
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "version", "integrity"],
+      "properties": {
+        "source": { "$ref": "#/$defs/fileSource" },
+        "version": { "$ref": "#/$defs/semverRange" },
+        "integrity": { "$ref": "#/$defs/integrity" }
+      }
+    },
+    "componentExport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "declaration", "documentation"],
+      "properties": {
+        "kind": { "const": "component" },
+        "declaration": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 256 },
+        "documentation": { "type": "string", "maxLength": 16384 }
+      }
+    }
+  }
+}

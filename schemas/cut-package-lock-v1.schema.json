@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:package-lock:1",
+  "title": "CUT dependency lock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "language", "project", "packages", "integrity"],
+  "properties": {
+    "format": { "const": "cut-package-lock" },
+    "version": { "const": 1 },
+    "language": { "const": "0.4" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "manifestIntegrity", "contentIntegrity"],
+      "properties": {
+        "name": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/packageName" },
+        "version": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/semver" },
+        "manifestIntegrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/integrity" },
+        "contentIntegrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/integrity" }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/package" }
+    },
+    "integrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/integrity" }
+  },
+  "$defs": {
+    "lockedDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "integrity"],
+      "properties": {
+        "name": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/packageName" },
+        "version": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/semverRange" },
+        "integrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/integrity" }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "source",
+        "manifestIntegrity",
+        "contentIntegrity",
+        "entry",
+        "entryIntegrity",
+        "capabilities",
+        "dependencies"
+      ],
+      "properties": {
+        "name": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/packageName" },
+        "version": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/semver" },
+        "source": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/fileSource" },
+        "manifestIntegrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/integrity" },
+        "contentIntegrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/integrity" },
+        "entry": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/fileLocator" },
+        "entryIntegrity": { "$ref": "urn:cut:schema:package-manifest:1#/$defs/digest" },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["analysis", "audio", "av", "data", "external", "generation", "media-read", "visual"]
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/lockedDependency" }
+        }
+      }
+    }
+  }
+}

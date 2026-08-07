@@ -1,0 +1,9 @@
+{
+  "fontFile": "/System/Library/Fonts/SFNS.ttf",
+  "monoFontFile": "/System/Library/Fonts/SFNSMono.ttf",
+  "background": "#080a0a",
+  "foreground": "#f5f1e6",
+  "muted": "#b9c0bb",
+  "accent": "#ff5c35",
+  "signal": "#caff33"
+}

@@ -1,0 +1,140 @@
+{
+  "name": "cut-language-support",
+  "displayName": "CUT Language Support",
+  "description": "Syntax highlighting, deterministic formatting, and compiler diagnostics for CUT audiovisual source.",
+  "version": "0.4.0-alpha.1",
+  "publisher": "cut-language",
+  "license": "MIT",
+  "private": false,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "keywords": [
+    "cut",
+    "audiovisual",
+    "video",
+    "language",
+    "formatter"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "CUT support invokes the locally installed cut executable to format and check source."
+    },
+    "virtualWorkspaces": false
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:cut",
+    "onCommand:cut.checkDocument"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cut",
+        "aliases": [
+          "CUT",
+          "cut"
+        ],
+        "extensions": [
+          ".cut"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cut",
+        "scopeName": "source.cut",
+        "path": "./syntaxes/cut.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "cut",
+        "path": "./snippets/cut.code-snippets"
+      }
+    ],
+    "commands": [
+      {
+        "command": "cut.checkDocument",
+        "title": "CUT: Check Current Document",
+        "category": "CUT"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "cut.checkDocument",
+          "when": "editorLangId == cut",
+          "group": "navigation@20"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "cut.checkDocument",
+          "when": "editorLangId == cut"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CUT",
+      "properties": {
+        "cut.cli.path": {
+          "type": "string",
+          "default": "cut",
+          "scope": "machine-overridable",
+          "markdownDescription": "Executable used for `cut fmt` and `cut check`. Supply one executable path, not a shell command or arguments. Use an absolute path when VS Code's environment cannot find `cut`."
+        },
+        "cut.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Run cut check against the current buffer and publish source-located diagnostics."
+        },
+        "cut.diagnostics.delay": {
+          "type": "integer",
+          "default": 350,
+          "minimum": 100,
+          "maximum": 5000,
+          "scope": "resource",
+          "description": "Milliseconds to wait after an edit before checking the current buffer."
+        },
+        "cut.cli.timeout": {
+          "type": "integer",
+          "default": 15000,
+          "minimum": 1000,
+          "maximum": 120000,
+          "scope": "machine-overridable",
+          "description": "Maximum milliseconds allowed for one formatter or checker invocation."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[cut]": {
+        "editor.defaultFormatter": "cut-language.cut-language-support"
+      }
+    }
+  },
+  "files": [
+    "extension.js",
+    "lib",
+    "syntaxes",
+    "snippets",
+    "language-configuration.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node scripts/validate-extension.mjs",
+    "package:dry-run": "npm pack --dry-run --json --ignore-scripts"
+  }
+}

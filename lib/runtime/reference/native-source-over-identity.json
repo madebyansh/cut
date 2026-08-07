@@ -1,0 +1,20 @@
+{
+    "format": "cut-reference-native-source-over-identity",
+    "version": 1,
+    "algorithm": "cut-reference-private-straight-rgba-native-pixel-kernels-v2",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "nodeApi": "9",
+    "compiler": "Apple clang 17.0.0 (clang-1700.6.4.2)",
+    "source": {
+        "locator": "native/reference-retained-source-over.c",
+        "bytes": 17120,
+        "sha256": "94a5f61fc81a3ae05f75162f13d1607872a1fa514918547507b26c1f9284c265"
+    },
+    "binary": {
+        "sourceLocator": "native/reference-retained-source-over-darwin-arm64.node",
+        "runtimeName": "reference-retained-source-over-darwin-arm64.node",
+        "bytes": 51136,
+        "sha256": "b86dd7318a1fd5520d1c69ac3375f90c7e435e240b31ffdf45bd45144913c7d7"
+    }
+}

@@ -1,0 +1,466 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cutlang.dev/schemas/cut-reference-calibration-v1.schema.json",
+  "title": "CUT visual-journalism reference calibration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "status",
+    "creativePasses",
+    "scope",
+    "review",
+    "corpus",
+    "analysisCoverage",
+    "requiredDimensions",
+    "observations",
+    "derivedRequirements",
+    "gates"
+  ],
+  "properties": {
+    "format": { "const": "cut-reference-calibration" },
+    "version": { "const": 1 },
+    "status": { "enum": ["partial", "complete"] },
+    "creativePasses": { "const": 0 },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "protectedMediaInRepository", "copiedProtectedContent", "identityImitationAllowed", "notes"],
+      "properties": {
+        "purpose": { "const": "derive-general-production-requirements" },
+        "protectedMediaInRepository": { "const": false },
+        "copiedProtectedContent": { "const": false },
+        "identityImitationAllowed": { "const": false },
+        "notes": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fullSpeedPlayback", "headphoneListening"],
+      "properties": {
+        "fullSpeedPlayback": { "$ref": "#/definitions/attestation" },
+        "headphoneListening": { "$ref": "#/definitions/attestation" }
+      }
+    },
+    "corpus": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 16,
+      "items": { "$ref": "#/definitions/reference" }
+    },
+    "analysisCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordKind", "completeShotLog", "fullFilmShotCoverage", "frameAccurateShotBoundaries", "timecodedAudioEventCoverage", "firstMinuteBeatCoverage", "fullFilmStoryboardSampling", "knownLimits"],
+      "properties": {
+        "recordKind": { "enum": ["beat-proxy", "shot"] },
+        "completeShotLog": { "type": "boolean" },
+        "fullFilmShotCoverage": { "type": "boolean" },
+        "frameAccurateShotBoundaries": { "type": "boolean" },
+        "timecodedAudioEventCoverage": { "type": "boolean" },
+        "firstMinuteBeatCoverage": { "type": "boolean" },
+        "fullFilmStoryboardSampling": { "type": "boolean" },
+        "knownLimits": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      }
+    },
+    "requiredDimensions": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["duration", "camera", "layers", "typography", "map-data", "transition", "information-density", "audio-cadence"]
+      }
+    },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": { "$ref": "#/definitions/observation" }
+    },
+    "derivedRequirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/definitions/requirement" }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completeShotLogRequired", "frameAccurateShotBoundariesRequired", "timecodedAudioEventsRequired", "namedHumanFullSpeedRequired", "namedHumanHeadphonesRequired", "explicitUnknownsAllowedWhilePartial", "currentEligible"],
+      "properties": {
+        "completeShotLogRequired": { "const": true },
+        "frameAccurateShotBoundariesRequired": { "const": true },
+        "timecodedAudioEventsRequired": { "const": true },
+        "namedHumanFullSpeedRequired": { "const": true },
+        "namedHumanHeadphonesRequired": { "const": true },
+        "explicitUnknownsAllowedWhilePartial": { "const": true },
+        "currentEligible": { "type": "boolean" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "analysisCoverage": {
+            "properties": {
+              "completeShotLog": { "const": true },
+              "fullFilmShotCoverage": { "const": true },
+              "frameAccurateShotBoundaries": { "const": true },
+              "timecodedAudioEventCoverage": { "const": true },
+              "recordKind": { "const": "shot" },
+              "firstMinuteBeatCoverage": { "const": true },
+              "fullFilmStoryboardSampling": { "const": true }
+            }
+          },
+          "review": {
+            "properties": {
+              "fullSpeedPlayback": { "properties": { "performed": { "const": true } } },
+              "headphoneListening": { "properties": { "performed": { "const": true } } }
+            }
+          },
+          "observations": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/definitions/observation" },
+                {
+                  "required": ["boundary", "audioEvidence"],
+                  "properties": {
+                    "recordKind": { "const": "shot" },
+                    "shotClaim": { "const": true },
+                    "sourceBasis": {
+                      "allOf": [
+                        { "contains": { "const": "real-time-playback" } },
+                        { "contains": { "const": "headphone-listen" } }
+                      ]
+                    },
+                    "camera": { "properties": { "status": { "enum": ["observed", "inferred"] } } },
+                    "layers": {
+                      "properties": {
+                        "status": { "enum": ["observed", "inferred"] },
+                        "minimumPlanes": { "type": "integer", "minimum": 0 }
+                      }
+                    },
+                    "typography": {
+                      "properties": {
+                        "status": { "enum": ["observed", "inferred"] },
+                        "maxSimultaneousLabels": { "type": "integer", "minimum": 0 }
+                      }
+                    },
+                    "mapData": { "properties": { "status": { "enum": ["observed", "inferred"] } } },
+                    "transition": {
+                      "properties": {
+                        "status": { "enum": ["observed", "inferred"] },
+                        "durationMs": { "type": "number", "minimum": 0 }
+                      }
+                    },
+                    "informationDensity": {
+                      "properties": {
+                        "status": { "enum": ["observed", "inferred"] },
+                        "primaryFacts": { "type": "integer", "minimum": 0 },
+                        "subordinateLabels": { "type": "integer", "minimum": 0 },
+                        "evidenceObjects": { "type": "integer", "minimum": 0 },
+                        "semanticStateChanges": { "type": "integer", "minimum": 0 }
+                      }
+                    },
+                    "audio": {
+                      "properties": {
+                        "status": { "enum": ["observed", "inferred"] },
+                        "headphoneVerified": { "const": true }
+                      }
+                    },
+                    "boundary": {
+                      "properties": {
+                        "status": { "const": "observed" },
+                        "frameAccurate": { "const": true },
+                        "method": { "enum": ["manual-frame-step", "decoded-frame-index"] },
+                        "startFrame": { "type": "integer", "minimum": 0 },
+                        "endFrame": { "type": "integer", "minimum": 1 },
+                        "rateNumerator": { "type": "integer", "minimum": 1 },
+                        "rateDenominator": { "type": "integer", "minimum": 1 }
+                      }
+                    },
+                    "audioEvidence": {
+                      "properties": {
+                        "inventory": {
+                          "properties": {
+                            "narration": { "enum": ["present", "absent"] },
+                            "music": { "enum": ["present", "absent"] },
+                            "ambience": { "enum": ["present", "absent"] },
+                            "sfx": { "enum": ["present", "absent"] },
+                            "silence": { "enum": ["present", "absent"] }
+                          }
+                        },
+                        "events": { "minItems": 1 }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "gates": { "properties": { "currentEligible": { "const": true } } }
+        }
+      },
+      "else": {
+        "properties": {
+          "analysisCoverage": {
+            "properties": {
+              "recordKind": { "const": "beat-proxy" },
+              "completeShotLog": { "const": false },
+              "fullFilmShotCoverage": { "const": false },
+              "frameAccurateShotBoundaries": { "const": false },
+              "timecodedAudioEventCoverage": { "const": false },
+              "firstMinuteBeatCoverage": { "const": true }
+            }
+          },
+          "gates": { "properties": { "currentEligible": { "const": false } } }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nullableString": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+    "nullableNumber": { "type": ["number", "null"] },
+    "nullableInteger": { "type": ["integer", "null"], "minimum": 0 },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "reviewer", "device", "completedAt", "notes"],
+      "properties": {
+        "performed": { "type": "boolean" },
+        "reviewer": { "$ref": "#/definitions/nullableString" },
+        "device": { "$ref": "#/definitions/nullableString" },
+        "completedAt": { "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" },
+        "notes": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "performed": { "const": true } }, "required": ["performed"] },
+          "then": {
+            "properties": {
+              "reviewer": { "type": "string", "minLength": 1 },
+              "device": { "type": "string", "minLength": 1 },
+              "completedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" }
+            }
+          },
+          "else": {
+            "properties": {
+              "reviewer": { "type": "null" },
+              "device": { "type": "null" },
+              "completedAt": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "protectedInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256", "repositoryCommitted", "repositoryPath"],
+      "properties": {
+        "kind": { "enum": ["temporary-video-transcode", "temporary-automatic-captions"] },
+        "sha256": { "$ref": "#/definitions/hash" },
+        "repositoryCommitted": { "const": false },
+        "repositoryPath": { "type": "null" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analysisWidth", "analysisHeight", "fps", "sceneThreshold", "thresholdEvents", "medianIntervalMs", "captionNarrationWpm", "integratedLufs", "loudnessRangeLu", "decodedTruePeakDbtp"],
+      "properties": {
+        "analysisWidth": { "type": "integer", "minimum": 1 },
+        "analysisHeight": { "type": "integer", "minimum": 1 },
+        "fps": { "type": "number", "exclusiveMinimum": 0 },
+        "sceneThreshold": { "const": 0.18 },
+        "thresholdEvents": { "type": "integer", "minimum": 0 },
+        "medianIntervalMs": { "type": "number", "exclusiveMinimum": 0 },
+        "captionNarrationWpm": { "type": "number", "minimum": 0 },
+        "integratedLufs": { "type": "number" },
+        "loudnessRangeLu": { "type": "number", "minimum": 0 },
+        "decodedTruePeakDbtp": { "type": "number" }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "publisher", "role", "title", "publicUrl", "durationMs", "protectedInputs", "wholeFilmMetrics"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "publisher": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "role": { "enum": ["primary-neo", "adjacent-top-tier", "secondary"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "publicUrl": { "type": "string", "pattern": "^https://" },
+        "durationMs": { "type": "integer", "minimum": 1000 },
+        "protectedInputs": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "$ref": "#/definitions/protectedInput" } },
+        "wholeFilmMetrics": { "$ref": "#/definitions/metrics" }
+      }
+    },
+    "status": { "enum": ["observed", "inferred", "unknown"] },
+    "camera": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "origin", "destination", "path", "easing", "continuityAnchor", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "origin": { "type": "string" }, "destination": { "type": "string" },
+        "path": { "type": "string" }, "easing": { "type": "string" }, "continuityAnchor": { "type": "string" }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "layers": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "minimumPlanes", "planes", "occlusion", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "minimumPlanes": { "$ref": "#/definitions/nullableInteger" },
+        "planes": { "type": "array", "maxItems": 32, "items": { "type": "string" } }, "occlusion": { "type": "string" }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "typography": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "roles", "behavior", "maxSimultaneousLabels", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "roles": { "type": "array", "maxItems": 32, "items": { "type": "string" } },
+        "behavior": { "type": "string" }, "maxSimultaneousLabels": { "$ref": "#/definitions/nullableInteger" }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "mapData": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "function", "stateChange", "marks", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "function": { "type": "string" }, "stateChange": { "type": "string" },
+        "marks": { "type": "array", "maxItems": 64, "items": { "type": "string" } }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "transition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "into", "out", "continuityAnchor", "durationMs", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "into": { "type": "string" }, "out": { "type": "string" },
+        "continuityAnchor": { "type": "string" }, "durationMs": { "$ref": "#/definitions/nullableNumber" }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "informationDensity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "primaryFacts", "subordinateLabels", "evidenceObjects", "semanticStateChanges", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "primaryFacts": { "$ref": "#/definitions/nullableInteger" },
+        "subordinateLabels": { "$ref": "#/definitions/nullableInteger" }, "evidenceObjects": { "$ref": "#/definitions/nullableInteger" },
+        "semanticStateChanges": { "$ref": "#/definitions/nullableInteger" }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "audio": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "narrationWords", "narrationCadenceWpm", "music", "ambience", "sfx", "silence", "editSync", "headphoneVerified", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" }, "narrationWords": { "$ref": "#/definitions/nullableInteger" },
+        "narrationCadenceWpm": { "$ref": "#/definitions/nullableNumber" }, "music": { "type": "string" }, "ambience": { "type": "string" },
+        "sfx": { "type": "string" }, "silence": { "type": "string" }, "editSync": { "type": "string" },
+        "headphoneVerified": { "type": "boolean" }, "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "shotBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "frameAccurate", "method", "startFrame", "endFrame", "rateNumerator", "rateDenominator", "inEdge", "outEdge", "note"],
+      "properties": {
+        "status": { "$ref": "#/definitions/status" },
+        "frameAccurate": { "type": "boolean" },
+        "method": { "enum": ["unknown", "two-second-sample", "manual-frame-step", "decoded-frame-index"] },
+        "startFrame": { "$ref": "#/definitions/nullableInteger" },
+        "endFrame": { "$ref": "#/definitions/nullableInteger" },
+        "rateNumerator": { "$ref": "#/definitions/nullableInteger" },
+        "rateDenominator": { "$ref": "#/definitions/nullableInteger" },
+        "inEdge": { "enum": ["unknown", "program-start", "hard-cut", "transition-start", "source-continuation"] },
+        "outEdge": { "enum": ["unknown", "program-end", "hard-cut", "transition-end", "source-continuation"] },
+        "note": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "audioInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["narration", "music", "ambience", "sfx", "silence"],
+      "properties": {
+        "narration": { "enum": ["present", "absent", "unknown"] },
+        "music": { "enum": ["present", "absent", "unknown"] },
+        "ambience": { "enum": ["present", "absent", "unknown"] },
+        "sfx": { "enum": ["present", "absent", "unknown"] },
+        "silence": { "enum": ["present", "absent", "unknown"] }
+      }
+    },
+    "audioEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "startMs", "endMs", "function", "editRelation", "note"],
+      "properties": {
+        "kind": { "enum": ["narration", "music", "ambience", "sfx", "silence"] },
+        "startMs": { "type": "integer", "minimum": 0 },
+        "endMs": { "type": "integer", "minimum": 1 },
+        "function": { "enum": ["argument", "continuity", "punctuation", "transition", "rhythm", "texture", "breath", "source-evidence", "other"] },
+        "editRelation": { "enum": ["prelap", "postlap", "under", "at-cut", "bridge", "independent", "intentional-silence"] },
+        "note": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "audioEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inventory", "events", "note"],
+      "properties": {
+        "inventory": { "$ref": "#/definitions/audioInventory" },
+        "events": { "type": "array", "maxItems": 256, "items": { "$ref": "#/definitions/audioEvent" } },
+        "note": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "referenceId", "recordKind", "shotClaim", "startMs", "endMs", "durationMs", "sourceBasis", "camera", "layers", "typography", "mapData", "transition", "informationDensity", "audio"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "referenceId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "recordKind": { "enum": ["beat-proxy", "shot"] },
+        "shotClaim": { "type": "boolean" },
+        "startMs": { "type": "integer", "minimum": 0 },
+        "endMs": { "type": "integer", "minimum": 1 },
+        "durationMs": { "type": "integer", "minimum": 1 },
+        "sourceBasis": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["temporary-360p", "automatic-captions", "two-second-frame-sampling", "full-film-contact-sheet", "real-time-playback", "headphone-listen"] } },
+        "camera": { "$ref": "#/definitions/camera" },
+        "layers": { "$ref": "#/definitions/layers" },
+        "typography": { "$ref": "#/definitions/typography" },
+        "mapData": { "$ref": "#/definitions/mapData" },
+        "transition": { "$ref": "#/definitions/transition" },
+        "informationDensity": { "$ref": "#/definitions/informationDensity" },
+        "audio": { "$ref": "#/definitions/audio" },
+        "boundary": { "$ref": "#/definitions/shotBoundary" },
+        "audioEvidence": { "$ref": "#/definitions/audioEvidence" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "recordKind": { "const": "shot" } }, "required": ["recordKind"] },
+          "then": { "properties": { "shotClaim": { "const": true } } },
+          "else": { "properties": { "shotClaim": { "const": false } } }
+        }
+      ]
+    },
+    "requirement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "category", "measurableRule", "rationale", "referenceObservationIds"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "category": { "enum": ["camera", "layers", "typography", "map-data", "transition", "information-density", "audio-cadence", "editorial"] },
+        "measurableRule": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "referenceObservationIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" } }
+      }
+    }
+  }
+}

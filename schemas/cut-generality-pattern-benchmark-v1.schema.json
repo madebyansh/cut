@@ -1,0 +1,463 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cut:schema:generality-pattern-benchmark:1",
+  "title": "CUT generality pattern benchmark v1",
+  "description": "A closed, fail-capable record for CUT's generic professional edit-pattern gate. CLEAN means direct public-source and executable semantic, pixel, or sample evidence; it is not an aesthetic or release-readiness claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format",
+    "version",
+    "benchmarkId",
+    "evidenceBoundary",
+    "categoryOrder",
+    "mandatoryFoundationIds",
+    "thresholds",
+    "proofs",
+    "patterns",
+    "result",
+    "limitations"
+  ],
+  "properties": {
+    "$schema": { "const": "../../schemas/cut-generality-pattern-benchmark-v1.schema.json" },
+    "format": { "const": "cut-generality-pattern-benchmark" },
+    "version": { "const": 1 },
+    "benchmarkId": { "$ref": "#/definitions/identifier" },
+    "evidenceBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classificationRule", "cleanRule", "complexityRule", "releaseClaim"],
+      "properties": {
+        "classificationRule": { "$ref": "#/definitions/nonEmptyText" },
+        "cleanRule": { "$ref": "#/definitions/nonEmptyText" },
+        "complexityRule": { "$ref": "#/definitions/nonEmptyText" },
+        "releaseClaim": { "const": false }
+      }
+    },
+    "categoryOrder": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/category" }
+    },
+    "mandatoryFoundationIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/patternId" }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumPatterns", "maximumPatterns", "patternsPerCategory", "minimumCleanRatio", "maximumMandatoryUnexpressible"],
+      "properties": {
+        "minimumPatterns": { "const": 50 },
+        "maximumPatterns": { "const": 80 },
+        "patternsPerCategory": { "const": 10 },
+        "minimumCleanRatio": { "const": 0.9 },
+        "maximumMandatoryUnexpressible": { "const": 0 }
+      }
+    },
+    "proofs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 80,
+      "items": { "$ref": "#/definitions/proof" }
+    },
+    "patterns": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 80,
+      "items": { "$ref": "#/definitions/pattern" }
+    },
+    "result": { "$ref": "#/definitions/result" },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/definitions/nonEmptyText" }
+    }
+  },
+  "definitions": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "\\S"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "patternId": {
+      "type": "string",
+      "pattern": "^(?:DIA|PRO|MUS|EDU|NAR|DOC)-(?:0[1-9]|10)$"
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[?#%])(?:[^/]+/)*[^/]+$"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "dialogue-interview",
+        "product-social",
+        "music-montage",
+        "educational-data",
+        "narrative-title",
+        "documentary-journalism"
+      ]
+    },
+    "complexityMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "scope", "nonBlankLoc", "utf8Bytes"],
+      "properties": {
+        "metric": { "const": "public-source-nonblank-loc-and-utf8-bytes-v1" },
+        "scope": { "enum": ["whole-public-cut-file", "exact-public-source-snippets", "complete-materialized-public-program"] },
+        "nonBlankLoc": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "utf8Bytes": { "type": "integer", "minimum": 1, "maximum": 100000000 }
+      }
+    },
+    "proofSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "mode", "snippets", "featureTokens", "complexity"],
+      "properties": {
+        "kind": { "enum": ["public-cut-file", "inline-test-source"] },
+        "path": { "$ref": "#/definitions/locator" },
+        "mode": { "enum": ["whole-file", "exact-snippets", "materialized-program"] },
+        "snippets": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/nonEmptyText" }
+        },
+        "materializationLocators": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/nonEmptyText" }
+        },
+        "materializer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["function", "invocationLocator", "substitutions"],
+          "properties": {
+            "function": { "$ref": "#/definitions/identifier" },
+            "invocationLocator": { "$ref": "#/definitions/nonEmptyText" },
+            "substitutions": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["expression", "value"],
+                "properties": {
+                  "expression": { "$ref": "#/definitions/nonEmptyText" },
+                  "value": { "type": "string", "maxLength": 4096 }
+                }
+              }
+            }
+          }
+        },
+        "featureTokens": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "\\S" }
+        },
+        "complexity": { "$ref": "#/definitions/complexityMeasurement" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "whole-file" } }, "required": ["mode"] },
+          "then": { "properties": { "snippets": { "maxItems": 0 }, "kind": { "const": "public-cut-file" } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "exact-snippets" } }, "required": ["mode"] },
+          "then": { "properties": { "snippets": { "minItems": 1 }, "kind": { "const": "inline-test-source" } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "materialized-program" } }, "required": ["mode"] },
+          "then": { "required": ["materializer"], "properties": { "snippets": { "maxItems": 0 }, "kind": { "const": "inline-test-source" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "inline-test-source" } }, "required": ["kind"] },
+          "then": { "properties": { "mode": { "enum": ["exact-snippets", "materialized-program"] }, "path": { "pattern": "^tests/.+\\.test\\.(?:ts|mjs)$" } } },
+          "else": { "properties": { "path": { "pattern": "\\.cut$" } } }
+        }
+      ]
+    },
+    "executableEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "testLocator", "claim"],
+      "properties": {
+        "kind": { "enum": ["semantic", "pixel", "sample"] },
+        "path": { "allOf": [{ "$ref": "#/definitions/locator" }, { "pattern": "^tests/.+\\.test\\.(?:ts|mjs)$" }] },
+        "testLocator": { "type": "string", "minLength": 8, "maxLength": 512, "pattern": "\\S" },
+        "claim": { "$ref": "#/definitions/nonEmptyText" }
+      }
+    },
+    "snippetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snippetIndexes", "path", "testLocator", "invocationLocators", "materializationLocators"],
+      "properties": {
+        "snippetIndexes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0, "maximum": 15 }
+        },
+        "path": { "allOf": [{ "$ref": "#/definitions/locator" }, { "pattern": "^tests/.+\\.test\\.(?:ts|mjs)$" }] },
+        "testLocator": { "type": "string", "minLength": 8, "maxLength": 512, "pattern": "\\S" },
+        "invocationLocators": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/nonEmptyText" }
+        },
+        "materializationLocators": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/nonEmptyText" }
+        }
+      }
+    },
+    "sourceExecution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path", "testLocator", "frames"],
+          "properties": {
+            "kind": { "const": "public-cli-render" },
+            "path": { "const": "tests/generality-pattern-benchmark.test.mjs" },
+            "testLocator": { "type": "string", "minLength": 24, "maxLength": 512, "pattern": "exact public source renders" },
+            "frames": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+            },
+            "samples": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["start", "end"],
+              "properties": {
+                "start": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+                "end": { "type": "integer", "minimum": 1, "maximum": 1000000000 }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path", "compiledPath", "testLocator", "evidenceKind"],
+          "properties": {
+            "kind": { "const": "named-materialized-test" },
+            "path": { "allOf": [{ "$ref": "#/definitions/locator" }, { "pattern": "^tests/.+\\.test\\.ts$" }] },
+            "compiledPath": { "allOf": [{ "$ref": "#/definitions/locator" }, { "pattern": "^dist-cli/tests/.+\\.test\\.js$" }] },
+            "testLocator": { "type": "string", "minLength": 8, "maxLength": 512, "pattern": "\\S" },
+            "evidenceKind": { "enum": ["pixel", "sample"] }
+          }
+        }
+      ]
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "evidence"],
+      "properties": {
+        "id": { "$ref": "#/definitions/identifier" },
+        "source": { "$ref": "#/definitions/proofSource" },
+        "sourceExecution": { "$ref": "#/definitions/sourceExecution" },
+        "snippetBindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/definitions/snippetBinding" }
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/definitions/executableEvidence" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "properties": { "mode": { "enum": ["whole-file", "materialized-program"] } },
+                "required": ["mode"]
+              }
+            },
+            "required": ["source"]
+          },
+          "then": { "required": ["sourceExecution"] }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "properties": { "mode": { "const": "exact-snippets" } },
+                "required": ["mode"]
+              }
+            },
+            "required": ["source"]
+          },
+          "then": { "required": ["snippetBindings"] }
+        }
+      ]
+    },
+    "patternComplexity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "proofId"],
+      "properties": {
+        "metric": { "enum": ["proof-source-measurement-v1", "no-executable-public-source-v1"] },
+        "proofId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "name", "intent", "foundationDomains", "classification", "assessment", "missingSemantic", "proofId", "codeComplexity"],
+      "properties": {
+        "id": { "$ref": "#/definitions/patternId" },
+        "category": { "$ref": "#/definitions/category" },
+        "name": { "type": "string", "minLength": 3, "maxLength": 256, "pattern": "\\S" },
+        "intent": { "$ref": "#/definitions/nonEmptyText" },
+        "foundationDomains": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["editorial", "audio"] }
+        },
+        "classification": { "enum": ["CLEAN", "AWKWARD", "UNEXPRESSIBLE"] },
+        "assessment": { "$ref": "#/definitions/nonEmptyText" },
+        "missingSemantic": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+        "proofId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+        "codeComplexity": { "$ref": "#/definitions/patternComplexity" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "classification": { "const": "CLEAN" } }, "required": ["classification"] },
+          "then": {
+            "properties": {
+              "missingSemantic": { "type": "null" },
+              "proofId": { "type": "string" },
+              "codeComplexity": {
+                "properties": {
+                  "metric": { "const": "proof-source-measurement-v1" },
+                  "proofId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "classification": { "const": "AWKWARD" } }, "required": ["classification"] },
+          "then": {
+            "properties": {
+              "missingSemantic": { "type": "string", "minLength": 1 },
+              "proofId": { "type": "string" },
+              "codeComplexity": {
+                "properties": {
+                  "metric": { "const": "proof-source-measurement-v1" },
+                  "proofId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "classification": { "const": "UNEXPRESSIBLE" } }, "required": ["classification"] },
+          "then": {
+            "properties": {
+              "missingSemantic": { "type": "string", "minLength": 1 },
+              "proofId": { "type": "null" },
+              "codeComplexity": {
+                "properties": {
+                  "metric": { "const": "no-executable-public-source-v1" },
+                  "proofId": { "type": "null" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "categoryCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dialogue-interview", "product-social", "music-montage", "educational-data", "narrative-title", "documentary-journalism"],
+      "properties": {
+        "dialogue-interview": { "type": "integer", "minimum": 0, "maximum": 80 },
+        "product-social": { "type": "integer", "minimum": 0, "maximum": 80 },
+        "music-montage": { "type": "integer", "minimum": 0, "maximum": 80 },
+        "educational-data": { "type": "integer", "minimum": 0, "maximum": 80 },
+        "narrative-title": { "type": "integer", "minimum": 0, "maximum": 80 },
+        "documentary-journalism": { "type": "integer", "minimum": 0, "maximum": 80 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts", "categoryCounts", "cleanRatio", "mandatoryUnexpressibleIds", "checks", "gate"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "CLEAN", "AWKWARD", "UNEXPRESSIBLE"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0, "maximum": 80 },
+            "CLEAN": { "type": "integer", "minimum": 0, "maximum": 80 },
+            "AWKWARD": { "type": "integer", "minimum": 0, "maximum": 80 },
+            "UNEXPRESSIBLE": { "type": "integer", "minimum": 0, "maximum": 80 }
+          }
+        },
+        "categoryCounts": { "$ref": "#/definitions/categoryCounts" },
+        "cleanRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mandatoryUnexpressibleIds": {
+          "type": "array",
+          "maxItems": 80,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/patternId" }
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["patternCount", "categoryBalance", "cleanRatio", "mandatoryFoundations"],
+          "properties": {
+            "patternCount": { "type": "boolean" },
+            "categoryBalance": { "type": "boolean" },
+            "cleanRatio": { "type": "boolean" },
+            "mandatoryFoundations": { "type": "boolean" }
+          }
+        },
+        "gate": { "enum": ["PASS", "FAIL"] }
+      }
+    }
+  }
+}

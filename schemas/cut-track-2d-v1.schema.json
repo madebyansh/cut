@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:track-2d:1",
+  "title": "CUT locked 2D tracking sidecar v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["coordinateSpace", "format", "height", "samples", "version", "width"],
+  "properties": {
+    "format": { "const": "cut-track-2d" },
+    "version": { "const": 1 },
+    "coordinateSpace": { "const": "composition-pixels" },
+    "width": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "height": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "samples": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/sample" }
+    }
+  },
+  "$defs": {
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator", "numerator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65,
+          "pattern": "^-?(0|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "confidence", "status", "x", "y"],
+      "properties": {
+        "at": { "$ref": "#/$defs/rational" },
+        "x": { "$ref": "#/$defs/rational" },
+        "y": { "$ref": "#/$defs/rational" },
+        "scale": { "$ref": "#/$defs/rational" },
+        "rotation": { "$ref": "#/$defs/rational" },
+        "confidence": { "$ref": "#/$defs/rational" },
+        "status": { "enum": ["visible", "occluded", "out-of-frame"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "format": "cut-public-examples",
+  "version": 1,
+  "active": [
+    { "path": "examples/agent-guide-pulse.cut", "purpose": "Font-locked visual component and procedural-audio example" },
+    { "path": "examples/language-tour.cut", "purpose": "Locked media, reusable component, motion and audio tour" },
+    { "path": "examples/local-motion-path-camera.cut", "purpose": "Resource-free Camera2D, LocalSpace and MotionPath example" },
+    { "path": "examples/product-card-effects.cut", "purpose": "Resource-free visual-effects example" }
+  ],
+  "legacy": [],
+  "historical": []
+}

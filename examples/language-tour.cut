@@ -1,0 +1,49 @@
+cut 0.4;
+
+project "Language Tour";
+
+import { Video, Text, Group, Rect } from "cut:visual";
+
+import { AudioClip, Bus, Gain, Limiter } from "@cut/audio";
+
+import { outCubic } from "@cut/motion";
+
+asset harbor: VideoAsset = video("media/demo.mp4");
+
+asset ambience: AudioAsset = audio("media/demo.mp4");
+
+asset face: FontAsset = font("fixtures/Geist-Regular.ttf");
+
+const accent: Color = #ff5c35;
+
+component LowerThird(label: String, detail: String) -> Visual {
+  Group() {
+    Rect(width: 760px, height: 180px, fill: #071019) as panel;
+    Text(content: label, font: face, size: 58px, color: #ffffff) as heading;
+    Text(content: detail, font: face, size: 30px, color: accent) as subheading;
+    animate panel.opacity from 0% to 92% over 10f ease outCubic;
+    animate heading.y from 36px to 0px over 14f delay 3f ease outCubic;
+    animate subheading.opacity from 0% to 100% over 12f delay 8f ease outCubic;
+  }
+}
+
+timeline main(duration: 10s, fps: 24, width: 1920px, height: 1080px, sampleRate: 48khz) {
+  scene opening(duration: 4s) {
+    Video(source: harbor, range: 0s..<4s, fit: "cover") as background;
+    LowerThird(label: "A PROGRAM, NOT A PROMPT", detail: "Every frame follows typed code");
+    animate background.scale from 1 to 1.08 over 4s ease outCubic;
+  }
+  scene evidence(duration: 6s) {
+    Video(source: harbor, range: 2s..<8s, fit: "cover");
+    Text(content: "Picture, motion, and sound share one timeline", font: face, size: 68px, color: #ffffff);
+    Bus(name: "master") {
+      Limiter(ceiling: -1dbtp) {
+        Gain(amount: -9db) {
+          AudioClip(source: ambience, range: 2s..<8s);
+        }
+      }
+    }
+  }
+}
+
+export youtube = render(main, width: 1920px, height: 1080px, codec: "h264");

@@ -1,0 +1,39 @@
+cut 0.4;
+
+project "Local MotionPath Camera Proof";
+
+import { Camera2D, Circle, Group, LocalSpace, MotionPath, Path, Rect, cubicTo, vectorPath } from "cut:visual";
+
+import { inOutCubic, linear } from "@cut/motion";
+
+const orbit = vectorPath(start: { x: -64px, y: 20px }, segments: [cubicTo(control1: { x: -24px, y: -34px }, control2: { x: 28px, y: -34px }, to: { x: 64px, y: 18px })], closed: false);
+
+component Parcel() -> Visual {
+  Group() {
+    Rect(width: 18px, height: 10px, fill: #ff6b43, radius: 3px);
+    Rect(width: 5px, height: 14px, fill: #fff1cf, radius: 2px);
+    Circle(radius: 2px, x: 5px, fill: #173c4a);
+  }
+}
+
+timeline main(duration: 2s, fps: 12, width: 128px, height: 72px, sampleRate: 48khz) {
+  scene journey(duration: 2s) {
+    Camera2D(scale: 0.82, rotation: -2deg) as camera {
+      LocalSpace(width: 180px, height: 100px, origin: { x: 90px, y: 50px }) {
+        Rect(width: 180px, height: 100px, fill: #f3e9d2);
+        Circle(radius: 25px, x: -48px, y: -24px, fill: #4fc3b433);
+        Circle(radius: 31px, x: 54px, y: 30px, fill: #173c4a22);
+        Path(geometry: orbit, stroke: #173c4a, width: 2px, opacity: 28%);
+        MotionPath(geometry: orbit, progress: 0%, orientToPath: true) as parcel {
+          Parcel();
+        }
+        animate parcel.progress from 0% to 100% over 2s ease linear;
+        animate parcel.opacity from 55% to 100% over 700ms ease inOutCubic;
+      }
+    }
+    animate camera.scale from 0.82 to 1.05 over 2s ease inOutCubic;
+    animate camera.rotation from -2deg to 2deg over 2s ease inOutCubic;
+  }
+}
+
+export preview = render(main, width: 128px, height: 72px, codec: "h264", color: "rec709-limited");

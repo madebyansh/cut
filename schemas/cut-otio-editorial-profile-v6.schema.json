@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cutlang.dev/schemas/cut-otio-editorial-profile-v6.schema.json",
+  "title": "CUT OTIO Editorial Profile V6 picture-time-map extension",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "compositionId",
+    "baseProfileSemanticSha256",
+    "authorities",
+    "semanticSha256"
+  ],
+  "properties": {
+    "format": { "const": "cut-otio-editorial-picture-time-map-extension" },
+    "version": { "const": 6 },
+    "compositionId": { "$ref": "#/$defs/stableId" },
+    "baseProfileSemanticSha256": { "$ref": "#/$defs/sha256" },
+    "authorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/authority" }
+    },
+    "semanticSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "pattern": "^-?(?:0|[1-9][0-9]*)$",
+          "maxLength": 128
+        },
+        "denominator": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$",
+          "maxLength": 128
+        }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "duration"],
+      "properties": {
+        "start": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "retime": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "identity" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "direction", "rate"],
+          "properties": {
+            "kind": { "const": "constant" },
+            "direction": { "enum": ["forward", "reverse"] },
+            "rate": { "$ref": "#/$defs/rational" }
+          }
+        }
+      ]
+    },
+    "timeMap": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "direction", "rate", "frameSelection"],
+          "properties": {
+            "kind": { "const": "constant" },
+            "direction": { "enum": ["forward", "reverse"] },
+            "rate": { "$ref": "#/$defs/rational" },
+            "frameSelection": { "enum": ["nearest", "frame-blend"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "at"],
+          "properties": {
+            "kind": { "const": "freeze" },
+            "at": { "$ref": "#/$defs/rational" },
+            "frameSelection": { "const": "frame-blend" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "interpolation", "frameSelection", "points"],
+          "properties": {
+            "kind": { "const": "speed-ramp" },
+            "interpolation": { "const": "linear-rate" },
+            "frameSelection": { "enum": ["floor", "nearest", "frame-blend"] },
+            "points": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["at", "rate"],
+                "properties": {
+                  "at": { "$ref": "#/$defs/rational" },
+                  "rate": { "$ref": "#/$defs/rational" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorityId",
+        "itemId",
+        "trackId",
+        "execution",
+        "policy",
+        "resource",
+        "clock",
+        "source",
+        "destination",
+        "nativeRetime",
+        "timeMap",
+        "authoritySha256"
+      ],
+      "properties": {
+        "authorityId": {
+          "type": "string",
+          "pattern": "^otio_picture_time_map_[a-f0-9]{24}$"
+        },
+        "itemId": { "$ref": "#/$defs/stableId" },
+        "trackId": { "$ref": "#/$defs/stableId" },
+        "execution": { "const": "direct-picture-time-map-no-lineage" },
+        "policy": { "const": "cut-picture-time-map-v1" },
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "sha256"],
+          "properties": {
+            "id": { "$ref": "#/$defs/stableId" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "clock": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "streamIndex", "timeBase", "rate"],
+          "properties": {
+            "kind": { "const": "frame" },
+            "streamIndex": { "type": "integer", "minimum": 0 },
+            "timeBase": { "$ref": "#/$defs/rational" },
+            "rate": { "$ref": "#/$defs/rational" }
+          }
+        },
+        "source": { "$ref": "#/$defs/interval" },
+        "destination": { "$ref": "#/$defs/interval" },
+        "nativeRetime": { "$ref": "#/$defs/retime" },
+        "timeMap": { "$ref": "#/$defs/timeMap" },
+        "authoritySha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

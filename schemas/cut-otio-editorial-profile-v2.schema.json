@@ -1,0 +1,563 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:otio-editorial-profile:2",
+  "title": "CUT OTIO Editorial Profile v2",
+  "description": "Closed metadata profile for exact CUT multi-track editorial semantics embedded in valid OpenTimelineIO. Runtime validation additionally enforces reduced rationals, global identities, references, timing reconciliation, canonical hashes, J/L ordering, transition handles, retime duration laws, nesting ancestry, and aggregate budgets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "compositionId",
+    "duration",
+    "tracks",
+    "linkGroups",
+    "linkedCuts",
+    "transitions",
+    "losses",
+    "semanticSha256"
+  ],
+  "properties": {
+    "format": { "const": "cut-otio-editorial-profile" },
+    "version": { "const": 2 },
+    "compositionId": { "$ref": "#/$defs/id" },
+    "duration": { "$ref": "#/$defs/rational" },
+    "tracks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/track" }
+    },
+    "linkGroups": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": { "$ref": "#/$defs/linkGroup" }
+    },
+    "linkedCuts": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": { "$ref": "#/$defs/linkedCut" }
+    },
+    "transitions": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": { "$ref": "#/$defs/transition" }
+    },
+    "losses": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/loss" }
+    },
+    "semanticSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9._:-]{0,127}$"
+    },
+    "adapterId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "editorialRole": {
+      "enum": [
+        "primary",
+        "b-roll",
+        "overlay",
+        "graphics",
+        "captions",
+        "reference",
+        "dialogue",
+        "narration",
+        "music",
+        "ambience",
+        "sfx",
+        "sync",
+        "custom"
+      ]
+    },
+    "editorialMetadata": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128,
+        "pattern": "^(?![Cc][Uu][Tt]\\.)(?:[A-Za-z][A-Za-z0-9_-]*\\.)+[A-Za-z][A-Za-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1024,
+        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+      }
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^-?(?:0|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "duration"],
+      "properties": {
+        "start": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "unlinked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "unlinked" }
+      }
+    },
+    "linked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "groupId", "segmentId"],
+      "properties": {
+        "kind": { "const": "linked" },
+        "groupId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "link": {
+      "oneOf": [
+        { "$ref": "#/$defs/unlinked" },
+        { "$ref": "#/$defs/linked" }
+      ]
+    },
+    "identityRetime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "identity" }
+      }
+    },
+    "constantRetime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "direction", "rate"],
+      "properties": {
+        "kind": { "const": "constant" },
+        "direction": { "enum": ["forward", "reverse"] },
+        "rate": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "retime": {
+      "oneOf": [
+        { "$ref": "#/$defs/identityRetime" },
+        { "$ref": "#/$defs/constantRetime" }
+      ]
+    },
+    "nesting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "compositionId",
+        "sourceRange",
+        "semanticSha256",
+        "depth",
+        "ancestry"
+      ],
+      "properties": {
+        "instanceId": { "$ref": "#/$defs/id" },
+        "compositionId": { "$ref": "#/$defs/id" },
+        "sourceRange": { "$ref": "#/$defs/interval" },
+        "semanticSha256": { "$ref": "#/$defs/sha256" },
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "ancestry": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 17,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "clipItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "order",
+        "destination",
+        "source",
+        "link",
+        "retime",
+        "nesting"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "clip" },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99999
+        },
+        "destination": { "$ref": "#/$defs/interval" },
+        "source": { "$ref": "#/$defs/interval" },
+        "link": { "$ref": "#/$defs/link" },
+        "retime": { "$ref": "#/$defs/retime" },
+        "nesting": { "type": "null" },
+        "role": { "$ref": "#/$defs/editorialRole" },
+        "metadata": { "$ref": "#/$defs/editorialMetadata" }
+      }
+    },
+    "gapItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "order",
+        "destination",
+        "source",
+        "link",
+        "retime",
+        "nesting"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "gap" },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99999
+        },
+        "destination": { "$ref": "#/$defs/interval" },
+        "source": { "type": "null" },
+        "link": { "$ref": "#/$defs/unlinked" },
+        "retime": { "$ref": "#/$defs/identityRetime" },
+        "nesting": { "type": "null" }
+      }
+    },
+    "nestedItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "order",
+        "destination",
+        "source",
+        "link",
+        "retime",
+        "nesting"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "nested-sequence" },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99999
+        },
+        "destination": { "$ref": "#/$defs/interval" },
+        "source": { "$ref": "#/$defs/interval" },
+        "link": { "$ref": "#/$defs/unlinked" },
+        "retime": { "$ref": "#/$defs/identityRetime" },
+        "nesting": { "$ref": "#/$defs/nesting" }
+      }
+    },
+    "item": {
+      "oneOf": [
+        { "$ref": "#/$defs/clipItem" },
+        { "$ref": "#/$defs/gapItem" },
+        { "$ref": "#/$defs/nestedItem" }
+      ]
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "order", "items"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["Video", "Audio"] },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "role": { "$ref": "#/$defs/editorialRole" },
+        "metadata": { "$ref": "#/$defs/editorialMetadata" },
+        "items": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/item" }
+        }
+      }
+    },
+    "linkSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "pictureItemId", "audioItemId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "pictureItemId": { "$ref": "#/$defs/id" },
+        "audioItemId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "linkGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "segments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "linked-av" },
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/linkSegment" }
+        }
+      }
+    },
+    "linkedCutSide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outgoingItemId", "incomingItemId", "at"],
+      "properties": {
+        "outgoingItemId": { "$ref": "#/$defs/id" },
+        "incomingItemId": { "$ref": "#/$defs/id" },
+        "at": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "linkedCut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "groupId", "picture", "audio"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["j-cut", "l-cut"] },
+        "groupId": { "$ref": "#/$defs/id" },
+        "picture": { "$ref": "#/$defs/linkedCutSide" },
+        "audio": { "$ref": "#/$defs/linkedCutSide" }
+      }
+    },
+    "crossDissolveStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "cross-dissolve" }
+      }
+    },
+    "dipStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "color"],
+      "properties": {
+        "kind": { "const": "dip" },
+        "color": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      }
+    },
+    "wipeStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "direction", "softness"],
+      "properties": {
+        "kind": { "const": "wipe" },
+        "direction": { "enum": ["left", "right", "up", "down"] },
+        "softness": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "directionalStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "direction"],
+      "properties": {
+        "kind": { "enum": ["push", "slide"] },
+        "direction": { "enum": ["left", "right", "up", "down"] }
+      }
+    },
+    "pictureStyle": {
+      "oneOf": [
+        { "$ref": "#/$defs/crossDissolveStyle" },
+        { "$ref": "#/$defs/dipStyle" },
+        { "$ref": "#/$defs/wipeStyle" },
+        { "$ref": "#/$defs/directionalStyle" }
+      ]
+    },
+    "pictureTransitionMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "style"],
+      "properties": {
+        "kind": { "const": "picture" },
+        "style": { "$ref": "#/$defs/pictureStyle" }
+      }
+    },
+    "audioTransitionMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "curve"],
+      "properties": {
+        "kind": { "const": "audio" },
+        "curve": { "enum": ["equal-power", "linear"] }
+      }
+    },
+    "transitionMapping": {
+      "oneOf": [
+        { "$ref": "#/$defs/pictureTransitionMapping" },
+        { "$ref": "#/$defs/audioTransitionMapping" }
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trackId",
+        "outgoingItemId",
+        "incomingItemId",
+        "cut",
+        "duration",
+        "overlap",
+        "outgoingSource",
+        "incomingSource",
+        "mapping"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "trackId": { "$ref": "#/$defs/id" },
+        "outgoingItemId": { "$ref": "#/$defs/id" },
+        "incomingItemId": { "$ref": "#/$defs/id" },
+        "cut": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" },
+        "overlap": { "$ref": "#/$defs/interval" },
+        "outgoingSource": { "$ref": "#/$defs/interval" },
+        "incomingSource": { "$ref": "#/$defs/interval" },
+        "mapping": { "$ref": "#/$defs/transitionMapping" }
+      }
+    },
+    "cutRoundtripTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "cut-roundtrip" }
+      }
+    },
+    "genericOtioTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "generic-otio" }
+      }
+    },
+    "adapterTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "const": "adapter" },
+        "id": { "$ref": "#/$defs/adapterId" }
+      }
+    },
+    "lossTarget": {
+      "oneOf": [
+        { "$ref": "#/$defs/cutRoundtripTarget" },
+        { "$ref": "#/$defs/genericOtioTarget" },
+        { "$ref": "#/$defs/adapterTarget" }
+      ]
+    },
+    "lossSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "composition",
+            "track",
+            "item",
+            "link-group",
+            "linked-cut",
+            "transition",
+            "nesting"
+          ]
+        },
+        "id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "category",
+        "disposition",
+        "target",
+        "subject",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^CUT_OTIO_[A-Z0-9_]+$"
+        },
+        "category": {
+          "enum": [
+            "effect",
+            "linkage",
+            "metadata",
+            "nesting",
+            "retime",
+            "timing",
+            "transaction",
+            "transition"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "approximated",
+            "dropped",
+            "metadata-required",
+            "unsupported"
+          ]
+        },
+        "target": { "$ref": "#/$defs/lossTarget" },
+        "subject": { "$ref": "#/$defs/lossSubject" },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      }
+    }
+  }
+}

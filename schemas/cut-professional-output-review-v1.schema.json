@@ -1,0 +1,470 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cut:schema:professional-output-review:1",
+  "title": "CUT professional output review v1",
+  "description": "A closed human-authored evidence record for CUT's 3-5 minute professional hero-film gate. Schema validity does not automate taste or authenticate reviewers, rights, reference identity, or frame-defect attestations; cut review additionally performs fresh machine execution and enforces the professional delivery profile.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "decision",
+    "artifact",
+    "authoringBoundary",
+    "playbackReview",
+    "referenceCalibration",
+    "categories",
+    "hardFailures",
+    "technicalEvidence",
+    "iterationHistory"
+  ],
+  "properties": {
+    "format": { "const": "cut-professional-output-review" },
+    "version": { "const": 1 },
+    "decision": { "enum": ["pass", "revise"] },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "iterationId", "title", "durationSeconds", "source", "lock", "ir", "output", "renderManifest"],
+      "properties": {
+        "kind": { "const": "hero-film" },
+        "iterationId": { "$ref": "#/definitions/identifier" },
+        "title": { "$ref": "#/definitions/nonEmptyText" },
+        "durationSeconds": { "type": "number", "minimum": 180, "maximum": 300 },
+        "source": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.cut$" } } }] },
+        "lock": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.lock$" } } }] },
+        "ir": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.cutir\\.json$" } } }] },
+        "output": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.mp4$" } } }] },
+        "renderManifest": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.manifest\\.json$" } } }] }
+      }
+    },
+    "authoringBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicCutSource",
+        "publicPackagesOnly",
+        "publicCliOnly",
+        "allProjectSpecificCreativeAndTemporalIntentInCut",
+        "noAfterEffectsOrPremiere",
+        "noBespokeHiddenCompositor",
+        "noProjectNameBranch",
+        "noManualFrameReplacement",
+        "noCreativePostFixAfterRender",
+        "ffmpegRole"
+      ],
+      "properties": {
+        "publicCutSource": { "type": "boolean" },
+        "publicPackagesOnly": { "type": "boolean" },
+        "publicCliOnly": { "type": "boolean" },
+        "allProjectSpecificCreativeAndTemporalIntentInCut": {
+          "type": "boolean",
+          "description": "True only when CUT source/packages/CLI express every project-specific graphic, animation, composite, transition, camera move and edit decision; ordinary raw or cleared footage, imagery, fonts, narration, score, SFX and ambience may remain source assets."
+        },
+        "noAfterEffectsOrPremiere": { "type": "boolean" },
+        "noBespokeHiddenCompositor": { "type": "boolean" },
+        "noProjectNameBranch": { "type": "boolean" },
+        "noManualFrameReplacement": { "type": "boolean" },
+        "noCreativePostFixAfterRender": { "type": "boolean" },
+        "ffmpegRole": { "const": "codec-and-low-level-media-only" }
+      }
+    },
+    "playbackReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementer", "independent"],
+      "properties": {
+        "implementer": { "$ref": "#/definitions/implementerSession" },
+        "independent": { "$ref": "#/definitions/independentSession" }
+      }
+    },
+    "referenceCalibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["treatment", "referenceBoard", "sideBySideReview", "originalityAttestation", "references"],
+      "properties": {
+        "treatment": { "$ref": "#/definitions/hashedArtifact" },
+        "referenceBoard": { "$ref": "#/definitions/hashedArtifact" },
+        "sideBySideReview": { "$ref": "#/definitions/hashedArtifact" },
+        "originalityAttestation": { "const": "calibration-only-no-copy" },
+        "references": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 12,
+          "items": { "$ref": "#/definitions/reference" }
+        }
+      }
+    },
+    "categories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "narrative",
+        "editorial",
+        "cinematographyComposition",
+        "motion",
+        "typography",
+        "visualExplanation",
+        "sound",
+        "originalityCohesion",
+        "technicalDelivery"
+      ],
+      "properties": {
+        "narrative": { "$ref": "#/definitions/categoryReview" },
+        "editorial": { "$ref": "#/definitions/categoryReview" },
+        "cinematographyComposition": { "$ref": "#/definitions/categoryReview" },
+        "motion": { "$ref": "#/definitions/categoryReview" },
+        "typography": { "$ref": "#/definitions/categoryReview" },
+        "visualExplanation": { "$ref": "#/definitions/categoryReview" },
+        "sound": { "$ref": "#/definitions/categoryReview" },
+        "originalityCohesion": { "$ref": "#/definitions/categoryReview" },
+        "technicalDelivery": { "$ref": "#/definitions/categoryReview" }
+      }
+    },
+    "hardFailures": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/definitions/hardFailure" }
+    },
+    "technicalEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCheck", "sourceTest", "renderManifest", "deterministicReplay", "frameScan", "audioDelivery", "rightsProvenance", "canonicalSourceBoundary"],
+      "properties": {
+        "sourceCheck": { "$ref": "#/definitions/evidenceGate" },
+        "sourceTest": { "$ref": "#/definitions/evidenceGate" },
+        "renderManifest": { "$ref": "#/definitions/evidenceGate" },
+        "deterministicReplay": { "$ref": "#/definitions/evidenceGate" },
+        "frameScan": { "$ref": "#/definitions/evidenceGate" },
+        "audioDelivery": { "$ref": "#/definitions/evidenceGate" },
+        "rightsProvenance": { "$ref": "#/definitions/evidenceGate" },
+        "canonicalSourceBoundary": { "$ref": "#/definitions/evidenceGate" }
+      }
+    },
+    "iterationHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "finalIterationId", "priorFailedIterations"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "finalIterationId": { "$ref": "#/definitions/identifier" },
+        "priorFailedIterations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/definitions/failedIteration" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "\\S"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[?#%])(?:[^/]+/)*[^/]+$"
+    },
+    "hashedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/definitions/locator" },
+        "sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "reviewSessionFields": {
+      "reviewerId": { "$ref": "#/definitions/identifier" },
+      "reviewerName": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S" },
+      "reviewedAt": { "type": "string", "maxLength": 64, "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$" },
+      "fullFilm": { "type": "boolean" },
+      "fullSpeedPlayback": { "type": "boolean" },
+      "headphoneListening": { "type": "boolean" },
+      "referenceComparison": { "type": "boolean" },
+      "display": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S" },
+      "audioDevice": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S" },
+      "notes": { "$ref": "#/definitions/hashedArtifact" }
+    },
+    "implementerSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewerId", "reviewerName", "relationship", "reviewedAt", "fullFilm", "fullSpeedPlayback", "headphoneListening", "referenceComparison", "display", "audioDevice", "notes"],
+      "properties": {
+        "reviewerId": { "$ref": "#/definitions/reviewSessionFields/reviewerId" },
+        "reviewerName": { "$ref": "#/definitions/reviewSessionFields/reviewerName" },
+        "relationship": { "const": "implementer" },
+        "reviewedAt": { "$ref": "#/definitions/reviewSessionFields/reviewedAt" },
+        "fullFilm": { "$ref": "#/definitions/reviewSessionFields/fullFilm" },
+        "fullSpeedPlayback": { "$ref": "#/definitions/reviewSessionFields/fullSpeedPlayback" },
+        "headphoneListening": { "$ref": "#/definitions/reviewSessionFields/headphoneListening" },
+        "referenceComparison": { "$ref": "#/definitions/reviewSessionFields/referenceComparison" },
+        "display": { "$ref": "#/definitions/reviewSessionFields/display" },
+        "audioDevice": { "$ref": "#/definitions/reviewSessionFields/audioDevice" },
+        "notes": { "$ref": "#/definitions/reviewSessionFields/notes" }
+      }
+    },
+    "independentSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewerId", "reviewerName", "relationship", "reviewedAt", "fullFilm", "fullSpeedPlayback", "headphoneListening", "referenceComparison", "display", "audioDevice", "notes", "implementationInvolvement", "conflictOfInterest"],
+      "properties": {
+        "reviewerId": { "$ref": "#/definitions/reviewSessionFields/reviewerId" },
+        "reviewerName": { "$ref": "#/definitions/reviewSessionFields/reviewerName" },
+        "relationship": { "const": "independent" },
+        "reviewedAt": { "$ref": "#/definitions/reviewSessionFields/reviewedAt" },
+        "fullFilm": { "$ref": "#/definitions/reviewSessionFields/fullFilm" },
+        "fullSpeedPlayback": { "$ref": "#/definitions/reviewSessionFields/fullSpeedPlayback" },
+        "headphoneListening": { "$ref": "#/definitions/reviewSessionFields/headphoneListening" },
+        "referenceComparison": { "$ref": "#/definitions/reviewSessionFields/referenceComparison" },
+        "display": { "$ref": "#/definitions/reviewSessionFields/display" },
+        "audioDevice": { "$ref": "#/definitions/reviewSessionFields/audioDevice" },
+        "notes": { "$ref": "#/definitions/reviewSessionFields/notes" },
+        "implementationInvolvement": { "const": "none" },
+        "conflictOfInterest": { "type": "boolean" }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "creator", "title", "url", "durationSeconds", "role", "shotAnalysis"],
+      "properties": {
+        "id": { "$ref": "#/definitions/identifier" },
+        "creator": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S" },
+        "url": { "type": "string", "minLength": 9, "maxLength": 2048, "pattern": "^https://" },
+        "durationSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 86400 },
+        "role": { "enum": ["primary-neo", "adjacent-top-tier"] },
+        "shotAnalysis": { "$ref": "#/definitions/hashedArtifact" }
+      }
+    },
+    "timedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startSeconds", "endSeconds", "observation"],
+      "properties": {
+        "startSeconds": { "type": "number", "minimum": 0, "maximum": 86400 },
+        "endSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 86400 },
+        "observation": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" }
+      }
+    },
+    "categoryReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementer", "independent"],
+      "properties": {
+        "implementer": { "$ref": "#/definitions/categoryAssessment" },
+        "independent": { "$ref": "#/definitions/categoryAssessment" }
+      }
+    },
+    "categoryAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewerId", "status", "score", "summary", "evidence", "criteria", "comparisons"],
+      "properties": {
+        "reviewerId": { "$ref": "#/definitions/identifier" },
+        "status": { "enum": ["pass", "revise"] },
+        "score": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S" },
+        "evidence": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 24,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/timedEvidence" }
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 10,
+          "items": { "$ref": "#/definitions/criterionAssessment" }
+        },
+        "comparisons": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 12,
+          "items": { "$ref": "#/definitions/referenceComparison" }
+        }
+      }
+    },
+    "criterionId": {
+      "enum": [
+        "narrative.central-question",
+        "narrative.escalating-causal-argument",
+        "narrative.meaningful-reveal-payoff",
+        "narrative.no-feature-list-screenplay",
+        "narrative.no-generic-ai-prose",
+        "editorial.purposeful-shot-changes",
+        "editorial.visual-continuity",
+        "editorial.motivated-pacing",
+        "editorial.j-l-cuts",
+        "editorial.breath-and-emphasis",
+        "editorial.no-narrated-deck",
+        "cinematography.depth",
+        "cinematography.hierarchy",
+        "cinematography.controlled-focal-attention",
+        "cinematography.spatial-continuity",
+        "cinematography.intentional-camera-movement",
+        "cinematography.frame-polish",
+        "motion.continuous-meaningful-animation",
+        "motion.excellent-easing",
+        "motion.idea-carrying-transitions",
+        "motion.no-template-or-floating-card-motion",
+        "typography.publication-hierarchy",
+        "typography.shaping",
+        "typography.wrapping",
+        "typography.tracking",
+        "typography.integrated-annotation",
+        "visual-explanation.causality",
+        "visual-explanation.scale",
+        "visual-explanation.time",
+        "visual-explanation.place",
+        "visual-explanation.integrated-evidence-not-decoration",
+        "sound.human-quality-narration",
+        "sound.cleared-score",
+        "sound.designed-sfx-and-ambience",
+        "sound.musical-edit-points",
+        "sound.transitions",
+        "sound.intentional-silence",
+        "sound.ducking",
+        "sound.stems",
+        "sound.professional-loudness-and-true-peak",
+        "originality.authored-visual-system",
+        "originality.recurring-motifs",
+        "originality.deliberate-variation",
+        "originality.no-preset-collage",
+        "originality.no-creator-copy",
+        "technical.no-glitches",
+        "technical.no-clipped-text",
+        "technical.no-dead-frames",
+        "technical.no-broken-alpha",
+        "technical.no-illegible-labels",
+        "technical.no-abrupt-audio",
+        "technical.no-cache-lies",
+        "technical.deterministic-replay",
+        "technical.cleared-material",
+        "technical.no-creative-post-fix"
+      ]
+    },
+    "criterionAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "evidence"],
+      "properties": {
+        "id": { "$ref": "#/definitions/criterionId" },
+        "status": { "enum": ["pass", "revise"] },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/timedEvidence" }
+        }
+      }
+    },
+    "referenceComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["referenceId", "verdict", "summary", "heroEvidence", "referenceEvidence"],
+      "properties": {
+        "referenceId": { "$ref": "#/definitions/identifier" },
+        "verdict": { "enum": ["below-tier", "same-tier", "above-tier"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S" },
+        "heroEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/timedEvidence" }
+        },
+        "referenceEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/timedEvidence" }
+        }
+      }
+    },
+    "hardFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "category", "evidence", "startSeconds", "endSeconds"],
+      "properties": {
+        "code": {
+          "enum": ["SLIDESHOW_GRAMMAR", "GENERIC_NARRATION", "WEAK_SOUND", "INCOHERENT_PACING", "PRIMITIVE_MOTION", "ILLEGIBLE_TYPOGRAPHY", "TECHNICAL_GLITCH", "RIGHTS_OR_PROVENANCE", "HIDDEN_POSTPROCESSING", "INCOMPLETE_REVIEW", "REFERENCE_COPYING"]
+        },
+        "category": {
+          "enum": ["narrative", "editorial", "cinematographyComposition", "motion", "typography", "visualExplanation", "sound", "originalityCohesion", "technicalDelivery"]
+        },
+        "evidence": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+        "startSeconds": { "type": "number", "minimum": 0, "maximum": 86400 },
+        "endSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 86400 }
+      }
+    },
+    "evidenceGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "command", "reportFormat", "subject", "artifact"],
+      "properties": {
+        "status": { "enum": ["pass", "fail"] },
+        "command": { "enum": ["check", "test", "render", "render-replay", "frame-scan", "audio-delivery", "rights-audit", "canonical-source-audit"] },
+        "reportFormat": { "enum": ["cut-professional-source-check", "cut-professional-source-test", "cut-professional-render-binding", "cut-professional-deterministic-replay", "cut-professional-frame-scan", "cut-professional-audio-delivery", "cut-professional-rights-provenance", "cut-professional-canonical-source-boundary"] },
+        "subject": { "$ref": "#/definitions/technicalSubject" },
+        "artifact": { "$ref": "#/definitions/hashedArtifact" }
+      }
+    },
+    "technicalSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceSha256", "lockSha256", "irSha256", "outputSha256", "renderManifestSha256"],
+      "properties": {
+        "sourceSha256": { "$ref": "#/definitions/digest" },
+        "lockSha256": { "$ref": "#/definitions/digest" },
+        "irSha256": { "$ref": "#/definitions/digest" },
+        "outputSha256": { "$ref": "#/definitions/digest" },
+        "renderManifestSha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "failedIteration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "retained", "source", "lock", "ir", "output", "renderManifest", "review", "failedCategories", "summary"],
+      "properties": {
+        "id": { "$ref": "#/definitions/identifier" },
+        "retained": { "type": "boolean" },
+        "source": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.cut$" } } }] },
+        "lock": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.lock$" } } }] },
+        "ir": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.cutir\\.json$" } } }] },
+        "output": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.mp4$" } } }] },
+        "renderManifest": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.manifest\\.json$" } } }] },
+        "review": { "allOf": [{ "$ref": "#/definitions/hashedArtifact" }, { "properties": { "path": { "pattern": "\\.review\\.json$" } } }] },
+        "failedCategories": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["narrative", "editorial", "cinematographyComposition", "motion", "typography", "visualExplanation", "sound", "originalityCohesion", "technicalDelivery"]
+          }
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S" }
+      }
+    }
+  }
+}

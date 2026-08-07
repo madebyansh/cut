@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cutlang.dev/schemas/cut-otio-editorial-profile-v5.schema.json",
+  "title": "CUT OTIO Editorial Profile V5 direct-media availability extension",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "compositionId",
+    "baseProfileSemanticSha256",
+    "authorities",
+    "semanticSha256"
+  ],
+  "properties": {
+    "format": {
+      "const": "cut-otio-editorial-direct-media-extension"
+    },
+    "version": {
+      "const": 5
+    },
+    "compositionId": {
+      "$ref": "#/$defs/id"
+    },
+    "baseProfileSemanticSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "authorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/authority"
+      }
+    },
+    "semanticSha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9._:-]{0,127}$"
+    },
+    "authorityId": {
+      "type": "string",
+      "pattern": "^otio_direct_media_[a-f0-9]{24}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "integerString": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)$",
+      "maxLength": 128
+    },
+    "positiveIntegerString": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$",
+      "maxLength": 128
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/integerString"
+        },
+        "denominator": {
+          "$ref": "#/$defs/positiveIntegerString"
+        }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "duration"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/rational"
+        },
+        "duration": {
+          "$ref": "#/$defs/rational"
+        }
+      }
+    },
+    "handles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "tail"
+      ],
+      "properties": {
+        "head": {
+          "$ref": "#/$defs/rational"
+        },
+        "tail": {
+          "$ref": "#/$defs/rational"
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "video",
+            "audio"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "streamIndex",
+        "timeBase",
+        "rate"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "frame",
+            "sample"
+          ]
+        },
+        "streamIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeBase": {
+          "$ref": "#/$defs/rational"
+        },
+        "rate": {
+          "$ref": "#/$defs/rational"
+        }
+      }
+    },
+    "retime": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "identity"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "direction",
+            "rate"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "direction": {
+              "enum": [
+                "forward",
+                "reverse"
+              ]
+            },
+            "rate": {
+              "$ref": "#/$defs/rational"
+            }
+          }
+        }
+      ]
+    },
+    "link": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unlinked"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "groupId",
+            "segmentId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "linked"
+            },
+            "groupId": {
+              "$ref": "#/$defs/id"
+            },
+            "segmentId": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^(?![Cc][Uu][Tt]\\.)(?:[A-Za-z][A-Za-z0-9_-]*\\.)+[A-Za-z][A-Za-z0-9_-]*$",
+        "maxLength": 128
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1024
+      }
+    },
+    "idList": {
+      "type": "array",
+      "maxItems": 100000,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorityId",
+        "itemId",
+        "trackId",
+        "mediaKind",
+        "execution",
+        "resource",
+        "clock",
+        "source",
+        "availableSource",
+        "destination",
+        "declaredHandles",
+        "consumedHandles",
+        "retime",
+        "link",
+        "linkedCutIds",
+        "transitionIds",
+        "authoritySha256"
+      ],
+      "properties": {
+        "authorityId": {
+          "$ref": "#/$defs/authorityId"
+        },
+        "itemId": {
+          "$ref": "#/$defs/id"
+        },
+        "trackId": {
+          "$ref": "#/$defs/id"
+        },
+        "mediaKind": {
+          "enum": [
+            "picture",
+            "audio"
+          ]
+        },
+        "execution": {
+          "const": "direct-media-no-processor-graph"
+        },
+        "resource": {
+          "$ref": "#/$defs/resource"
+        },
+        "clock": {
+          "$ref": "#/$defs/clock"
+        },
+        "source": {
+          "$ref": "#/$defs/interval"
+        },
+        "availableSource": {
+          "$ref": "#/$defs/interval"
+        },
+        "destination": {
+          "$ref": "#/$defs/interval"
+        },
+        "declaredHandles": {
+          "$ref": "#/$defs/handles"
+        },
+        "consumedHandles": {
+          "$ref": "#/$defs/handles"
+        },
+        "retime": {
+          "$ref": "#/$defs/retime"
+        },
+        "link": {
+          "$ref": "#/$defs/link"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "linkedCutIds": {
+          "$ref": "#/$defs/idList"
+        },
+        "transitionIds": {
+          "$ref": "#/$defs/idList"
+        },
+        "authoritySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

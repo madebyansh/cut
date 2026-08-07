@@ -1,0 +1,53 @@
+{
+  "format": "cut-asset-catalog",
+  "version": 1,
+  "name": "CUT installed asset-search example",
+  "description": "Synthetic candidate metadata for exercising deterministic search; these rows do not supply or authorize media bytes.",
+  "entries": [
+    {
+      "id": "cargo-vessel-wake-wide",
+      "label": "Cargo vessel and wake, wide",
+      "kind": "video",
+      "description": "A hypothetical wide shot with a stable vessel subject and visible wake.",
+      "tags": [
+        "cargo",
+        "ship",
+        "vessel",
+        "wake",
+        "wide"
+      ],
+      "downloadUrl": "https://assets.example.invalid/cargo-vessel-wake-wide.mov",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "bytes": 12345678,
+      "provenance": {
+        "creator": "Example Archive",
+        "license": "Example metadata only - no media license granted",
+        "licenseUrl": "https://example.invalid/licenses/catalog-fixture",
+        "sourceUrl": "https://archive.example.invalid/items/cargo-vessel-wake-wide",
+        "attribution": "Synthetic catalog fixture - no media bytes are included or authorized"
+      }
+    },
+    {
+      "id": "harbour-water-ambience",
+      "label": "Harbour water ambience",
+      "kind": "audio",
+      "description": "A hypothetical stereo ambience candidate with water and distant terminal detail.",
+      "tags": [
+        "ambience",
+        "harbour",
+        "terminal",
+        "water"
+      ],
+      "downloadUrl": "https://assets.example.invalid/harbour-water-ambience.wav",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "bytes": 6543210,
+      "provenance": {
+        "creator": "Example Recordist",
+        "license": "Example metadata only - no media license granted",
+        "licenseUrl": "https://example.invalid/licenses/catalog-fixture",
+        "sourceUrl": "https://archive.example.invalid/items/harbour-water-ambience",
+        "attribution": "Synthetic catalog fixture - no media bytes are included or authorized"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 220" role="img" aria-labelledby="title">
+  <title id="title">CUT — video is source code</title>
+  <rect width="980" height="220" rx="28" fill="#0a0b0b"/>
+  <path d="M65 60h120v100H65z" fill="#eee9dc"/>
+  <path d="M65 76h120M65 144h120" stroke="#0a0b0b" stroke-width="13" stroke-dasharray="14 11"/>
+  <path d="m147 34-49 152" stroke="#ff5c35" stroke-width="19"/>
+  <text x="230" y="132" fill="#f4f0e6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="102" font-weight="700" letter-spacing="18">CUT</text>
+  <text x="570" y="123" fill="#96a09b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="25" letter-spacing="4">VIDEO IS SOURCE CODE</text>
+</svg>

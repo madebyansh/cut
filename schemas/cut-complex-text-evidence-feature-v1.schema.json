@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:complex-text-evidence-feature:1",
+  "title": "CUT complex-text evidence feature block v1",
+  "description": "Closed schema for the optional features object emitted by shaped frame, contact, preview and render evidence. This is deliberately not a whole-manifest schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "complexTextShaping"
+  ],
+  "properties": {
+    "complexTextShaping": {
+      "$ref": "#/$defs/complexTextShapingIdentity"
+    }
+  },
+  "$defs": {
+    "complexTextShapingIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version",
+        "harfbuzzjs",
+        "harfbuzz",
+        "bidiJs",
+        "policies",
+        "integrity"
+      ],
+      "properties": {
+        "format": {
+          "const": "cut-reference-complex-text-backend"
+        },
+        "version": {
+          "const": 1
+        },
+        "harfbuzzjs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "packageVersion",
+            "manifestSha256",
+            "entrySha256",
+            "glueSha256",
+            "wasmSha256"
+          ],
+          "properties": {
+            "packageVersion": {
+              "const": "1.4.0"
+            },
+            "manifestSha256": {
+              "const": "33cb095c48f71baba2639303ea929a504cd30b2f239e71e6766a350a966480ed"
+            },
+            "entrySha256": {
+              "const": "5d757236e5de85575525428d37e2cb81fb349b5bea82bbbe5a9bf2e13d32dbc2"
+            },
+            "glueSha256": {
+              "const": "d64d3aecca9424ee0d0ad2f98354f795e93b0dc512f14f6819e45b96ac521524"
+            },
+            "wasmSha256": {
+              "const": "64c8f422b7d31120ab010da3bba7cc248bf721dcd8be331a5b17971b7897f4b9"
+            }
+          }
+        },
+        "harfbuzz": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runtimeVersion",
+            "clusterLevel"
+          ],
+          "properties": {
+            "runtimeVersion": {
+              "const": "14.2.1"
+            },
+            "clusterLevel": {
+              "const": "MONOTONE_GRAPHEMES"
+            }
+          }
+        },
+        "bidiJs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "packageVersion",
+            "unicodeVersion",
+            "manifestSha256",
+            "implementationSha256"
+          ],
+          "properties": {
+            "packageVersion": {
+              "const": "1.0.3"
+            },
+            "unicodeVersion": {
+              "const": "13.0.0"
+            },
+            "manifestSha256": {
+              "const": "c2579f7705ab96dcc6192ab5a317d87760d2be7c67d72976d85edb4181bec5de"
+            },
+            "implementationSha256": {
+              "const": "5b58433ed951be70376bee55cb9a98cdce788e00cd2fa5f881cbcb1dcad03102"
+            }
+          }
+        },
+        "policies": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fallback",
+            "wrap",
+            "selector",
+            "normalization",
+            "hostFontFallback"
+          ],
+          "properties": {
+            "fallback": {
+              "const": "first-whole-token-capable-locked-face-v1"
+            },
+            "wrap": {
+              "const": "explicit-lf-or-ascii-space-whole-token-v1"
+            },
+            "selector": {
+              "const": "harfbuzz-cluster-atomic-logical-or-visual-v1"
+            },
+            "normalization": {
+              "const": "none"
+            },
+            "hostFontFallback": {
+              "const": false
+            }
+          }
+        },
+        "integrity": {
+          "const": "30d9dc223a4d1170626372925cef36946002c993319dd4efdca6912f269837fb"
+        }
+      }
+    }
+  }
+}

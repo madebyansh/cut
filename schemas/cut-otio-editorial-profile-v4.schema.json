@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:otio-editorial-nested-placement-extension:4",
+  "title": "CUT OTIO Editorial Profile V4 nested-placement extension",
+  "description": "Closed optional authority for TimelineEdit nested-placement lineage and native role/metadata. It binds one exact frozen V2 native profile without changing the V2 or V3 formats. Runtime validation additionally enforces canonical rationals, parent-first complete lineage, native nested timing/instance reconciliation, namespaced metadata, and the semantic hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "compositionId",
+    "baseProfileSemanticSha256",
+    "lineageSegments",
+    "placements",
+    "semanticSha256"
+  ],
+  "properties": {
+    "format": {
+      "const": "cut-otio-editorial-nested-placement-extension"
+    },
+    "version": { "const": 4 },
+    "compositionId": { "$ref": "#/$defs/id" },
+    "baseProfileSemanticSha256": { "$ref": "#/$defs/sha256" },
+    "lineageSegments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/lineageSegment" }
+    },
+    "placements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/placement" }
+    },
+    "semanticSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9._:-]{0,127}$"
+    },
+    "authorityId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?:[a-f0-9]{64}|[A-Za-z_][A-Za-z0-9._:-]{0,127})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^-?(?:0|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "duration"],
+      "properties": {
+        "start": { "$ref": "#/$defs/rational" },
+        "duration": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "primary",
+        "b-roll",
+        "overlay",
+        "graphics",
+        "captions",
+        "reference",
+        "custom"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128,
+        "pattern": "^(?![Cc][Uu][Tt]\\.)(?:[A-Za-z][A-Za-z0-9_-]*\\.)+[A-Za-z][A-Za-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1024,
+        "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+      }
+    },
+    "lineageSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planId",
+        "trackId",
+        "originId",
+        "segmentId",
+        "compositionId",
+        "sourceAuthorityId",
+        "placementPolicy",
+        "source",
+        "destination",
+        "lineageSha256"
+      ],
+      "properties": {
+        "planId": { "$ref": "#/$defs/id" },
+        "trackId": { "$ref": "#/$defs/id" },
+        "originId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" },
+        "parentSegmentId": { "$ref": "#/$defs/id" },
+        "compositionId": { "$ref": "#/$defs/id" },
+        "sourceAuthorityId": { "$ref": "#/$defs/authorityId" },
+        "placementPolicy": {
+          "enum": ["structural-only", "static-same-track-copy"]
+        },
+        "source": { "$ref": "#/$defs/interval" },
+        "destination": { "$ref": "#/$defs/interval" },
+        "role": { "$ref": "#/$defs/role" },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "lineageSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "itemId",
+        "trackId",
+        "segmentId",
+        "nestingInstanceId",
+        "source",
+        "destination",
+        "lineageSha256"
+      ],
+      "properties": {
+        "itemId": { "$ref": "#/$defs/id" },
+        "trackId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" },
+        "nestingInstanceId": { "$ref": "#/$defs/id" },
+        "source": { "$ref": "#/$defs/interval" },
+        "destination": { "$ref": "#/$defs/interval" },
+        "role": { "$ref": "#/$defs/role" },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "lineageSha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

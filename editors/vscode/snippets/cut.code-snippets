@@ -1,0 +1,132 @@
+{
+  "CUT project": {
+    "prefix": "cut-project",
+    "description": "Create a minimal typed CUT project with picture, sound, motion, and a render target.",
+    "body": [
+      "cut 0.4;",
+      "project \"${1:Project name}\";",
+      "",
+      "import { Circle, Rect } from \"cut:visual\";",
+      "import { Gain, Limiter, Tone } from \"@cut/audio\";",
+      "import { linear, outCubic } from \"@cut/motion\";",
+      "",
+      "timeline ${2:main}(duration: ${3:3s}, fps: ${4:24}, width: ${5:1920px}, height: ${6:1080px}, sampleRate: 48khz) {",
+      "  scene ${7:opening}(duration: ${3:3s}) {",
+      "    Rect(width: ${5:1920px}, height: ${6:1080px}, x: 960px, y: 540px, fill: #071019);",
+      "    Circle(radius: 180px, x: 960px, y: 540px, fill: #55d6be) as pulse;",
+      "    animate pulse.scale from 0.7 to 1.15 over ${3:3s} ease outCubic;",
+      "    animate pulse.opacity from 35% to 100% over ${3:3s} ease linear;",
+      "",
+      "    Limiter(ceiling: -1dbtp) {",
+      "      Gain(amount: -12db) {",
+      "        Tone(frequency: 220hz, duration: ${3:3s}, amplitude: 18%, fadeIn: 20ms, fadeOut: 120ms);",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+      "",
+      "export ${8:release} = render(${2:main}, width: ${5:1920px}, height: ${6:1080px}, codec: \"h264\");",
+      "$0"
+    ]
+  },
+  "CUT timeline": {
+    "prefix": "cut-timeline",
+    "description": "Create a typed timeline and contiguous scene.",
+    "body": [
+      "timeline ${1:main}(duration: ${2:5s}, fps: ${3:24}, width: ${4:1920px}, height: ${5:1080px}, sampleRate: 48khz) {",
+      "  scene ${6:opening}(duration: ${2:5s}) {",
+      "    $0",
+      "  }",
+      "}"
+    ]
+  },
+  "CUT scene": {
+    "prefix": "cut-scene",
+    "description": "Create a contiguous timeline scene.",
+    "body": [
+      "scene ${1:name}(duration: ${2:3s}) {",
+      "  $0",
+      "}"
+    ]
+  },
+  "CUT visual component": {
+    "prefix": "cut-component",
+    "description": "Create a reusable visual component.",
+    "body": [
+      "component ${1:Card}(${2:accent}: Color = ${3:#55d6be}) -> Visual {",
+      "  Rect(width: ${4:640px}, height: ${5:360px}, fill: ${2:accent});",
+      "  $0",
+      "}"
+    ]
+  },
+  "CUT video asset": {
+    "prefix": "cut-video-asset",
+    "description": "Declare a locked project-relative video asset.",
+    "body": [
+      "asset ${1:footage}: VideoAsset = video(\"${2:media/footage.mov}\");$0"
+    ]
+  },
+  "CUT audio asset": {
+    "prefix": "cut-audio-asset",
+    "description": "Declare a locked project-relative audio asset.",
+    "body": [
+      "asset ${1:sound}: AudioAsset = audio(\"${2:media/sound.wav}\");$0"
+    ]
+  },
+  "CUT image asset": {
+    "prefix": "cut-image-asset",
+    "description": "Declare a locked project-relative image asset.",
+    "body": [
+      "asset ${1:picture}: ImageAsset = image(\"${2:media/picture.png}\");$0"
+    ]
+  },
+  "CUT font asset": {
+    "prefix": "cut-font-asset",
+    "description": "Declare a locked project-relative font asset.",
+    "body": [
+      "asset ${1:typeface}: FontAsset = font(\"${2:fonts/typeface.ttf}\");$0"
+    ]
+  },
+  "CUT data asset": {
+    "prefix": "cut-data-asset",
+    "description": "Declare a locked project-relative data asset.",
+    "body": [
+      "asset ${1:dataset}: DataAsset = data(\"${2:data/dataset.json}\");$0"
+    ]
+  },
+  "CUT opacity animation": {
+    "prefix": "cut-animate-opacity",
+    "description": "Animate visual opacity with ratio values.",
+    "body": [
+      "animate ${1:node}.opacity from ${2:0%} to ${3:100%} over ${4:12f} ease ${5:linear};$0"
+    ]
+  },
+  "CUT position animation": {
+    "prefix": "cut-animate-position",
+    "description": "Animate a visual position axis with length values.",
+    "body": [
+      "animate ${1:node}.${2|x,y|} from ${3:0px} to ${4:100px} over ${5:12f} ease ${6:linear};$0"
+    ]
+  },
+  "CUT scale animation": {
+    "prefix": "cut-animate-scale",
+    "description": "Animate visual scale with scalar values.",
+    "body": [
+      "animate ${1:node}.scale from ${2:0.8} to ${3:1} over ${4:12f} ease ${5:linear};$0"
+    ]
+  },
+  "CUT rotation animation": {
+    "prefix": "cut-animate-rotation",
+    "description": "Animate visual rotation with angle values.",
+    "body": [
+      "animate ${1:node}.rotation from ${2:0deg} to ${3:90deg} over ${4:12f} ease ${5:linear};$0"
+    ]
+  },
+  "CUT assertion": {
+    "prefix": "cut-assert",
+    "description": "Add a first-class compile-time assertion.",
+    "body": [
+      "assert ${1:condition}, \"${2:Expected invariant}\";$0"
+    ]
+  }
+}

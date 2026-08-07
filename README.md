@@ -1,0 +1,154 @@
+# CUT
+
+CUT is a typed language and deterministic command-line runtime for audiovisual editing.
+Write concise `.cut` source, lock the exact media and fonts it uses, compile it to
+CutAVIR, and render reproducible frames, audio, previews, and final deliveries.
+
+> **Alpha:** CUT is usable for local experimentation, but its language and package
+> formats may still change. Rendering is currently supported on macOS arm64 with
+> Node.js 20 and FFmpeg 7. Performance on complex retained compositions remains a
+> known limitation.
+
+## Why CUT?
+
+- **Source instead of timelines:** edits, layouts, motion, audio routing, captions,
+  and outputs live in reviewable text.
+- **Typed semantics:** time, length, ratios, gain, loudness, and media assets are
+  checked before rendering.
+- **Locked inputs:** media, fonts, packages, and runtime identities are hash-bound
+  in `cut.lock`.
+- **Deterministic tooling:** format, check, lint, inspect, diff, frame, contact,
+  audition, preview, and render use the same compiled graph.
+- **Reusable building blocks:** local modules and CUT packages provide components
+  without executing arbitrary JavaScript.
+
+## Install
+
+Requirements:
+
+- macOS on Apple silicon
+- Node.js 20
+- FFmpeg 7 (`ffmpeg` and `ffprobe` on `PATH`)
+
+Download the release tarball and checksum from the GitHub release, verify it, then
+install it into a project:
+
+```sh
+shasum -a 256 cut-lang-0.4.0-alpha.1.tgz
+mkdir my-cut-project && cd my-cut-project
+npm init -y
+npm install --save-exact /path/to/cut-lang-0.4.0-alpha.1.tgz
+npx cut doctor
+npx cut init film --name "My first CUT film"
+```
+
+The npm package is called `cut-lang` because the unscoped name `cut` is already
+owned by another project. The language, CLI command, and repository are simply
+called **CUT**.
+
+## A small CUT program
+
+```cut
+cut 0.4;
+
+project "Signal";
+
+import { Rect, Circle, Text } from "cut:visual";
+import { Tone, Gain, Limiter } from "@cut/audio";
+
+asset face: FontAsset = font("assets/Geist-Regular.ttf");
+
+timeline main(duration: 3s, fps: 24, width: 1280px, height: 720px, sampleRate: 48khz) {
+  scene pulse(duration: 3s) {
+    Rect(width: 1280px, height: 720px, x: 640px, y: 360px, fill: #07111f);
+    Circle(radius: 20px, x: 150px, y: 360px, fill: #22d3ee) as signal;
+    Text(content: "SIGNAL ACQUIRED", font: face, x: 210px, y: 380px,
+      size: 52px, color: #f8fafc);
+
+    animate signal.x from 150px to 1080px over 2s;
+
+    Limiter(ceiling: -1dbtp) {
+      Gain(amount: -18db) {
+        Tone(frequency: 220hz, duration: 500ms, amplitude: 25%, fadeOut: 350ms);
+      }
+    }
+  }
+}
+
+export release = render(main, width: 1280px, height: 720px, codec: "h264");
+```
+
+Then run the normal authoring loop:
+
+```sh
+cut fmt main.cut --check
+cut check main.cut
+cut lint main.cut --deny-warnings
+cut lock main.cut --out cut.lock
+cut build main.cut --lock cut.lock --out .cut/graph.cutir.json
+cut frame main.cut --lock cut.lock --frame 24 --out review/frame-24.png
+cut preview main.cut --lock cut.lock --out review/preview.mp4
+cut render main.cut --lock cut.lock --out output/release.mp4
+```
+
+## What it can express
+
+CUT's public language includes:
+
+- multi-track picture and audio editing, linked and unlinked A/V, trims, splits,
+  ripple operations, retiming, nested sequences, and transitions;
+- images, video, image sequences, vector shapes, paths, masks, compositing,
+  cameras, tracking, responsive layouts, charts, maps, and complex text shaping;
+- captions and transcript-bound edits;
+- buses, stems, gain, filters, compression, limiting, sidechain routing, synthesis,
+  fades, delays, and time stretching;
+- local packages, locked assets, OTIO import/export, deterministic inspection,
+  and semantic graph diffs.
+
+See [Documentation](docs/README.md) and the [language specification](docs/SPEC.md)
+for the exact implemented boundary.
+
+## Repository layout
+
+```text
+cli/       command-line entrypoint
+lib/       language, compiler, runtime, package, and interchange source
+schemas/   public JSON schemas
+tests/     deterministic implementation and regression tests
+examples/  small redistributable CUT programs and fixtures
+editors/   VS Code extension source
+docs/      guides and reference documentation
+native/    retained compositor source and pinned macOS arm64 build
+```
+
+## Develop
+
+```sh
+npm ci --ignore-scripts
+npm run build
+npm test
+npm run verify
+```
+
+`npm run verify` checks the public tree, scripts, source, compiler, runtime, and
+tests. Generated media, local caches, private footage, and release evidence do
+not belong in this repository.
+
+## Security and media trust
+
+CUT processes media with the permissions of the local user. It is not a sandbox
+for hostile files. Keep untrusted media in an isolated account or container,
+never commit credentials, and review asset rights separately from byte locking.
+See [SECURITY.md](SECURITY.md) for reporting and trust boundaries.
+
+## Status
+
+This repository is `0.4.0-alpha.1`. The core compiler and renderer have broad
+automated coverage, but CUT is **not 1.0**: complex preview rendering can be slow,
+Windows and Linux media execution are not yet supported, and independent-user
+usability feedback is still being collected.
+
+## License
+
+CUT is available under the [MIT License](LICENSE). Bundled fixture fonts retain
+their own license in `examples/fixtures/Geist-LICENSE.txt`.

@@ -1,0 +1,10 @@
+cut 0.4;
+project "Impact Cards package";
+
+import { Circle, Rect } from "cut:visual";
+
+component ImpactCard(x: Length, y: Length, width: Length, height: Length, accent: Color) -> Visual {
+  Rect(width: width, height: height, fill: #f2eadb, radius: 24px, x: x, y: y);
+  Rect(width: 12px, height: height, fill: accent, x: x - width / 2 + 6px, y: y);
+  Circle(radius: 24px, fill: accent, x: x + width / 2 - 44px, y: y);
+}

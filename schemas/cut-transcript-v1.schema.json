@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:transcript:1",
+  "title": "CUT edit-safe transcript sidecar v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "media", "version", "words"],
+  "properties": {
+    "format": { "const": "cut-transcript" },
+    "version": { "const": 1 },
+    "media": { "$ref": "#/$defs/media" },
+    "words": {
+      "type": "array",
+      "maxItems": 250000,
+      "items": { "$ref": "#/$defs/word" }
+    }
+  },
+  "$defs": {
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator", "numerator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 129,
+          "pattern": "^(0|-[1-9][0-9]*|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "positiveRational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator", "numerator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "nonZeroRational": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denominator", "numerator"],
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 129,
+          "pattern": "^(-[1-9][0-9]*|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[1-9][0-9]*$"
+        }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audioSampleRate", "audioStreamIndex", "duration", "sha256"],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "audioStreamIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "audioSampleRate": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 768000
+        },
+        "duration": { "$ref": "#/$defs/positiveRational" },
+        "videoStreamIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "videoFrameRate": { "$ref": "#/$defs/positiveRational" },
+        "videoDuration": { "$ref": "#/$defs/positiveRational" },
+        "audioVideoPresentationDelta": { "$ref": "#/$defs/nonZeroRational" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["videoStreamIndex"] },
+          "then": { "required": ["videoFrameRate"] }
+        },
+        {
+          "if": { "required": ["videoFrameRate"] },
+          "then": { "required": ["videoStreamIndex"] }
+        },
+        {
+          "if": { "required": ["videoDuration"] },
+          "then": { "required": ["videoStreamIndex", "videoFrameRate"] }
+        },
+        {
+          "if": { "required": ["audioVideoPresentationDelta"] },
+          "then": {
+            "required": [
+              "videoStreamIndex",
+              "videoFrameRate",
+              "videoDuration"
+            ]
+          }
+        }
+      ]
+    },
+    "word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["end", "id", "join", "start", "text"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "start": { "$ref": "#/$defs/rational" },
+        "end": { "$ref": "#/$defs/rational" },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "join": {
+          "enum": ["none", "space"]
+        },
+        "speaker": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    }
+  }
+}
