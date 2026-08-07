@@ -47,7 +47,7 @@ Requirements:
 - FFmpeg 7 (`ffmpeg` and `ffprobe` on `PATH`)
 
 Download the package and checksum from the
-[latest GitHub release](https://github.com/ansh3002/cut/releases/latest), verify
+[latest GitHub release](https://github.com/madebyansh/cut/releases/latest), verify
 them, then install CUT into a project:
 
 ```sh

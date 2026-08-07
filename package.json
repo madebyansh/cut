@@ -6,11 +6,11 @@
   "private": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ansh3002/cut.git"
+    "url": "git+https://github.com/madebyansh/cut.git"
   },
-  "homepage": "https://github.com/ansh3002/cut#readme",
+  "homepage": "https://github.com/madebyansh/cut#readme",
   "bugs": {
-    "url": "https://github.com/ansh3002/cut/issues"
+    "url": "https://github.com/madebyansh/cut/issues"
   },
   "keywords": [
     "audiovisual",

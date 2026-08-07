@@ -6,7 +6,7 @@ workflow more expressive, deterministic, portable, secure, or measurably faster.
 ## Setup
 
 ```sh
-git clone https://github.com/ansh3002/cut.git
+git clone https://github.com/madebyansh/cut.git
 cd cut
 npm ci --ignore-scripts
 npm run verify
