@@ -1,8 +1,24 @@
-# CUT
+<p align="center">
+  <img src="assets/cut-wordmark.svg" alt="CUT — video is source code" width="760">
+</p>
 
-CUT is a typed language and deterministic command-line runtime for audiovisual editing.
-Write concise `.cut` source, lock the exact media and fonts it uses, compile it to
-CutAVIR, and render reproducible frames, audio, previews, and final deliveries.
+<h1 align="center">Video is source code.</h1>
+
+<p align="center">
+  A typed language and deterministic runtime for audiovisual editing.
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="docs/FIRST_USE.md">Quickstart</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/SPEC.md">Language specification</a> ·
+  <a href="docs/ALPHA_FEEDBACK.md">Give feedback</a>
+</p>
+
+CUT turns concise `.cut` source into reproducible frames, audio, previews, and
+final deliveries. Media, fonts, packages, and runtime identities are locked before
+the program is compiled to CutAVIR and rendered.
 
 > **Alpha:** CUT is usable for local experimentation, but its language and package
 > formats may still change. Rendering is currently supported on macOS arm64 with
@@ -30,17 +46,21 @@ Requirements:
 - Node.js 20
 - FFmpeg 7 (`ffmpeg` and `ffprobe` on `PATH`)
 
-Download the release tarball and checksum from the GitHub release, verify it, then
-install it into a project:
+Download the package and checksum from the
+[latest GitHub release](https://github.com/ansh3002/cut/releases/latest), verify
+them, then install CUT into a project:
 
 ```sh
-shasum -a 256 cut-lang-0.4.0-alpha.1.tgz
+shasum -a 256 -c CUT-0.4.0-alpha.1-SHA256SUMS.txt
 mkdir my-cut-project && cd my-cut-project
 npm init -y
 npm install --save-exact /path/to/cut-lang-0.4.0-alpha.1.tgz
 npx cut doctor
 npx cut init film --name "My first CUT film"
 ```
+
+Continue with the [five-minute quickstart](docs/FIRST_USE.md), or open the
+[documentation index](docs/README.md) for guides by task.
 
 The npm package is called `cut-lang` because the unscoped name `cut` is already
 owned by another project. The language, CLI command, and repository are simply
@@ -81,14 +101,14 @@ export release = render(main, width: 1280px, height: 720px, codec: "h264");
 Then run the normal authoring loop:
 
 ```sh
-cut fmt main.cut --check
-cut check main.cut
-cut lint main.cut --deny-warnings
-cut lock main.cut --out cut.lock
-cut build main.cut --lock cut.lock --out .cut/graph.cutir.json
-cut frame main.cut --lock cut.lock --frame 24 --out review/frame-24.png
-cut preview main.cut --lock cut.lock --out review/preview.mp4
-cut render main.cut --lock cut.lock --out output/release.mp4
+npx cut fmt main.cut --check
+npx cut check main.cut
+npx cut lint main.cut --deny-warnings
+npx cut lock main.cut --out cut.lock
+npx cut build main.cut --lock cut.lock --out .cut/graph.cutir.json
+npx cut frame main.cut --lock cut.lock --frame 24 --out review/frame-24.png
+npx cut preview main.cut --lock cut.lock --out review/preview.mp4
+npx cut render main.cut --lock cut.lock --out output/release.mp4
 ```
 
 ## What it can express
