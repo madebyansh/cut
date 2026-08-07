@@ -8,16 +8,17 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  macos-reference:
+    name: macos-reference
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20.20.2'
           cache: npm
-      - name: Install supported FFmpeg
+      - name: Install macOS FFmpeg baseline
         run: |
           brew install ffmpeg@7
           echo "$(brew --prefix ffmpeg@7)/bin" >> "$GITHUB_PATH"
@@ -25,3 +26,66 @@ jobs:
       - run: npm run cli:build
       - run: npm run verify
       - run: npm pack --dry-run
+
+  linux-experimental-package-smoke:
+    name: linux-experimental-package-smoke (node ${{ matrix.node-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.19.0', '24.15.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install Linux FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+      - run: npm ci --ignore-scripts
+      - run: npm run test:portable
+      - name: Smoke installed package through Linux fallback
+        if: matrix.node-version == '24.15.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pack_dir="$RUNNER_TEMP/cut-pack"
+          consumer="$RUNNER_TEMP/cut-consumer"
+          reports="$RUNNER_TEMP/cut-reports"
+          mkdir -p "$pack_dir" "$consumer" "$reports"
+          version="$(node -p 'require("./package.json").version')"
+          tarball="$pack_dir/cut-lang-$version.tgz"
+          npm pack --json --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          test -s "$tarball"
+          cd "$consumer"
+          npm init --yes > /dev/null
+          npm install --ignore-scripts --omit=dev --save-exact "$tarball"
+          cut="$consumer/node_modules/.bin/cut"
+          test -x "$cut"
+          "$cut" --version
+          "$cut" doctor --json > "$reports/doctor.json"
+          "$cut" init film --name "Linux package smoke"
+          cd film
+          "$cut" project .
+          "$cut" fmt main.cut --check --json > "$reports/fmt.json"
+          "$cut" check main.cut --json > "$reports/check.json"
+          "$cut" lint main.cut --deny-warnings --json > "$reports/lint.json"
+          "$cut" lock main.cut --out cut.lock --json > "$reports/lock.json"
+          test -s cut.lock
+          "$cut" build main.cut --lock cut.lock --out .cut/graph.cutir.json --json > "$reports/build.json"
+          test -s .cut/graph.cutir.json
+          "$cut" inspect main.cut --lock cut.lock --json > "$reports/inspect.json"
+          "$cut" test main.cut --lock cut.lock --json > "$reports/test.json"
+          mkdir -p review output
+          "$cut" frame main.cut --lock cut.lock --output preview --profile proxy --frame 0 --out review/frame-0.png --json > "$reports/frame.json"
+          test -s review/frame-0.png
+          "$cut" preview main.cut --lock cut.lock --output preview --range 0s:0.25s --width 320 --out review/range-preview.mp4 --json > "$reports/preview.json"
+          test -s review/range-preview.mp4
+          "$cut" render main.cut --lock cut.lock --output preview --out output/preview-render.mp4 --json > "$reports/render.json"
+          test -s output/preview-render.mp4
+          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name,duration -of json review/range-preview.mp4 > "$reports/preview-ffprobe.json"
+          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name,duration -of json output/preview-render.mp4 > "$reports/render-ffprobe.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-linux-package-smoke.mjs" "$consumer/film" "$reports"

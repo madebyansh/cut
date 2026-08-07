@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { collectCutDoctorReport, cutDoctorMediaInputPlatformCheck, cutDoctorNodeVersionCheck, runBoundedDoctorTool } from "../lib/system/doctor";
+import { collectCutDoctorReport, cutDoctorMediaInputPlatformCheck, cutDoctorNodeVersionCheck, cutDoctorReferenceCompositorAccelerationCheck, runBoundedDoctorTool } from "../lib/system/doctor";
+import { referenceNativeSourceOverIdentity } from "../lib/runtime/reference/native-source-over";
 import { cutProductVersion, cutVersionLine } from "../lib/version";
 
 const encoderInventory = " V..... libx264 H.264 / AVC\n A..... aac AAC\n";
@@ -50,7 +51,7 @@ test("version line reports product, language, IR, package ABI, and runtime ident
   assert.match(cutVersionLine(), /language 0\.4/);
   assert.match(cutVersionLine(), /CutAVIR 3/);
   assert.match(cutVersionLine(), /package ABI 1/);
-  assert.match(cutVersionLine(), /cut-reference\/0\.4\.0-alpha\.1/);
+  assert.match(cutVersionLine(), /cut-reference\/0\.4\.0-alpha\.2/);
 });
 
 test("CLI product identity matches the installable package version", async () => {
@@ -58,31 +59,103 @@ test("CLI product identity matches the installable package version", async () =>
   assert.equal(cutProductVersion, packageMetadata.version);
 });
 
-test("doctor exposes the explicit Windows media-input exclusion", () => {
-  assert.deepEqual(cutDoctorMediaInputPlatformCheck("win32"), {
-    code: "CUTD1003",
+test("doctor admits only official darwin/arm64 and installable experimental Linux hosts", () => {
+  assert.deepEqual(cutDoctorMediaInputPlatformCheck("darwin", "arm64"), {
+    code: "CUTD1002",
     name: "Media input platform",
-    status: "fail",
-    detail: "Windows media lock/probe/render is unsupported because this runtime cannot pass an already-open input descriptor to ffprobe safely.",
-    remedy: "Use the current macOS or Linux runtime; Windows support remains a pre-1.0 release gate.",
+    status: "pass",
+    detail: "darwin/arm64 is CUT's officially supported media host",
   });
-  assert.equal(cutDoctorMediaInputPlatformCheck("darwin").status, "pass");
-  assert.equal(cutDoctorMediaInputPlatformCheck("linux").status, "pass");
+  for (const architecture of ["x64", "arm64"]) {
+    assert.deepEqual(cutDoctorMediaInputPlatformCheck("linux", architecture), {
+      code: "CUTD1002",
+      name: "Media input platform",
+      status: "pass",
+      detail: `linux/${architecture} is an experimental CUT media host; parity with darwin/arm64 is not claimed`,
+    });
+  }
+  for (const [platform, architecture] of [
+    ["darwin", "x64"],
+    ["linux", "ia32"],
+    ["win32", "x64"],
+    ["freebsd", "x64"],
+    ["aix", "ppc64"],
+  ] as const) {
+    assert.deepEqual(cutDoctorMediaInputPlatformCheck(platform, architecture), {
+      code: "CUTD1003",
+      name: "Media input platform",
+      status: "fail",
+      detail: `${platform}/${architecture} is unsupported by CUT's closed Sharp/media host contract.`,
+      remedy: "Use darwin/arm64 for official support, or linux/x64 or linux/arm64 for experimental support.",
+    });
+  }
 });
 
-test("doctor admits only the scoped Node 20.x runtime", () => {
-  assert.deepEqual(cutDoctorNodeVersionCheck("20.20.2"), {
+test("doctor admits stable Node 20.19+ and Node 24 runtimes required by the packaged CommonJS CLI", () => {
+  assert.deepEqual(cutDoctorNodeVersionCheck("20.19.0"), {
     code: "CUTD1000",
     name: "Node.js",
     status: "pass",
-    detail: "Node.js 20.20.2",
+    detail: "Node.js 20.19.0",
   });
-  for (const version of ["19.9.0", "21.0.0", "25.5.0", "20", "v20.20.2", "20.x"]) {
+  assert.equal(cutDoctorNodeVersionCheck("20.20.2").status, "pass");
+  assert.equal(cutDoctorNodeVersionCheck("20.19.0+cut.1").status, "pass");
+  assert.deepEqual(cutDoctorNodeVersionCheck("24.15.0"), {
+    code: "CUTD1000",
+    name: "Node.js",
+    status: "pass",
+    detail: "Node.js 24.15.0",
+  });
+  assert.equal(cutDoctorNodeVersionCheck("24.0.0").status, "pass");
+  assert.equal(cutDoctorNodeVersionCheck("24.15.0+cut.1").status, "pass");
+  for (const version of [
+    "19.9.0",
+    "20.9.0",
+    "20.18.3",
+    "20.19.0-rc.1",
+    "21.0.0",
+    "22.22.0",
+    "23.11.1",
+    "24.15.0-rc.1",
+    "24.15.0-rc.1+cut.1",
+    "24.15.0+cut..1",
+    "25.5.0",
+    "20",
+    "v20.20.2",
+    "24.x",
+  ]) {
     const result = cutDoctorNodeVersionCheck(version);
     assert.equal(result.code, "CUTD1001");
     assert.equal(result.status, "fail");
-    assert.match(result.remedy ?? "", /Node\.js 20\.x/u);
+    assert.match(result.remedy ?? "", /Node\.js 20\.19 or Node\.js 24\.x/u);
   }
+});
+
+test("doctor reports native and JavaScript compositor acceleration as healthy modes", () => {
+  assert.deepEqual(cutDoctorReferenceCompositorAccelerationCheck({
+    mode: "native",
+    platform: "darwin",
+    architecture: "arm64",
+    algorithm: referenceNativeSourceOverIdentity.algorithm,
+    binarySha256: referenceNativeSourceOverIdentity.binary.sha256,
+  }), {
+    code: "CUTD1210",
+    name: "CUT compositor accelerator",
+    status: "pass",
+    detail: `native · ${referenceNativeSourceOverIdentity.algorithm}`,
+  });
+  assert.deepEqual(cutDoctorReferenceCompositorAccelerationCheck({
+    mode: "javascript",
+    platform: "linux",
+    architecture: "x64",
+    algorithm: referenceNativeSourceOverIdentity.algorithm,
+    implementation: "cut-reference-javascript-source-over-v1",
+  }), {
+    code: "CUTD1210",
+    name: "CUT compositor accelerator",
+    status: "pass",
+    detail: "JavaScript fallback · native accelerator unavailable for linux/x64",
+  });
 });
 
 test("doctor returns stable coded checks without machine-local paths", { timeout: 45_000 }, async () => {
@@ -102,6 +175,7 @@ test("doctor returns stable coded checks without machine-local paths", { timeout
   assert.equal(report.checks.find((check) => check.name === "Reference media pipeline")?.code, "CUTD1130");
   assert.equal(report.checks.find((check) => check.name === "CUT-owned limiter")?.code, "CUTD1140");
   assert.ok(report.checks.some((check) => check.name === "Reference compositor"));
+  assert.equal(report.checks.find((check) => check.name === "CUT compositor accelerator")?.code, "CUTD1210");
   assert.doesNotMatch(JSON.stringify(report), /\/Users\/|[A-Z]:\\\\Users\\\\/);
   assert.equal(report.status, report.checks.some((check) => check.status === "fail") ? "fail" : "pass");
 });

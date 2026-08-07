@@ -401,7 +401,7 @@ test("edit materialization is preserved; selected variant cache identity is loca
     await writeFixture(root, "source", 16);
     const interpreted = compile(linkedSource(true)); await applyCutLock(interpreted, await createCutLock(interpreted, root), root);
     const legacy = compile(linkedSource(false)); await applyCutLock(legacy, await createCutLock(legacy, root), root);
-    const toolchain = createReferenceAudioToolchainIdentity("ffmpeg version CUT-test\nconfiguration: deterministic", { platform: "darwin", architecture: "arm64", node: "v22.0.0", runtime: "cut-reference/0.4.0-alpha.1" });
+    const toolchain = createReferenceAudioToolchainIdentity("ffmpeg version CUT-test\nconfiguration: deterministic", { platform: "darwin", architecture: "arm64", node: "v22.0.0", runtime: "cut-reference/0.4.0-alpha.2" });
     const interpretedComposition = interpreted.compositions[0], legacyComposition = legacy.compositions[0];
     const interpretedAudioPlan = createReferenceAudioCachePlan(interpreted, interpretedComposition, referenceMasterAudioRootIds(interpreted, interpretedComposition), toolchain);
     const legacyAudioPlan = createReferenceAudioCachePlan(legacy, legacyComposition, referenceMasterAudioRootIds(legacy, legacyComposition), toolchain);
@@ -462,7 +462,7 @@ test("observed tokens never become subprocess syntax and selected execution auth
     const audioOnly = compile(audioOnlySource());
     await applyCutLock(audioOnly, await createCutLock(audioOnly, root), root);
     const serializedAudioSelection = structuredClone(selectReferenceMediaProfile(audioOnly, "master").ir);
-    const audioToolchain = createReferenceAudioToolchainIdentity("ffmpeg version CUT-test\nconfiguration: deterministic", { platform: "darwin", architecture: "arm64", node: "v22.0.0", runtime: "cut-reference/0.4.0-alpha.1" });
+    const audioToolchain = createReferenceAudioToolchainIdentity("ffmpeg version CUT-test\nconfiguration: deterministic", { platform: "darwin", architecture: "arm64", node: "v22.0.0", runtime: "cut-reference/0.4.0-alpha.2" });
     assert.throws(
       () => createReferenceAudioCachePlan(serializedAudioSelection, serializedAudioSelection.compositions[0], referenceMasterAudioRootIds(serializedAudioSelection, serializedAudioSelection.compositions[0]), audioToolchain),
       /CUT_PROXY_PROFILE_STATE/u,

@@ -54,7 +54,7 @@ export function lexCut(source: string): Token[] {
     if (/\d/.test(character) || character === "." && /\d/.test(source[offset + 1] ?? "")) {
       let value = "";
       while (/\d/.test(source[offset] ?? "")) value += advance();
-      if (source[offset] === ".") { value += advance(); while (/\d/.test(source[offset] ?? "")) value += advance(); }
+      if (source[offset] === "." && source[offset + 1] !== ".") { value += advance(); while (/\d/.test(source[offset] ?? "")) value += advance(); }
       let suffix = "";
       while (/[a-zA-Z%]/.test(source[offset] ?? "")) suffix += advance().toLowerCase();
       if (!units.has(suffix as Unit)) throw new CutLexerError(`Unknown numeric unit “${suffix}”.`, { start, end: here() });
@@ -71,7 +71,9 @@ export function lexCut(source: string): Token[] {
     if (["->", "..", "==", "!=", "<=", ">=", "&&", "||"].includes(two)) { advance(); advance(); emit("operator", two, start); continue; }
     if (["+", "-", "*", "/", "%", "=", "!", "<", ">"].includes(character)) { emit("operator", advance(), start); continue; }
     if (["{", "}", "(", ")", "[", "]", ":", ";", ",", "."].includes(character)) { emit("punctuation", advance(), start); continue; }
-    throw new CutLexerError(`Unexpected character “${character}”.`, { start, end: here() });
+    const unexpected = String.fromCodePoint(source.codePointAt(offset)!);
+    for (let index = 0; index < unexpected.length; index += 1) advance();
+    throw new CutLexerError(`Unexpected character “${unexpected}”.`, { start, end: here() });
   }
   const end = here(); tokens.push({ kind: "eof", value: "", span: { start: end, end } });
   return tokens;

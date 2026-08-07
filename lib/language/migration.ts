@@ -44,7 +44,8 @@ export const cutMigrationCompatibilityMatrix: readonly CutMigrationMatrixRow[] =
   Object.freeze({ artifact: "cut-av-ir", version: "3 canonical", language: "0.4", compatibility: "current", transformation: null, reason: "Strict CutAVIR v3 validation and canonical derived identities pass." }),
   Object.freeze({ artifact: "cut-av-ir", version: "3 archived identity", language: "0.4", compatibility: "migratable", transformation: "cut-av-ir-v3-canonicalize-derived-identity", reason: "Verified inferred signal types are derived uniquely from their attached closed kernel properties before signal/node/build identities change; the public semantic diff must remain empty." }),
   Object.freeze({ artifact: "cut-av-ir", version: "3 archived identity with removed kernel inputs", language: "0.4", compatibility: "unsafe", transformation: null, reason: "Explicit legacy mode keeps evidence structurally readable, but metadata-only kernel inputs such as Narration transcript have no semantics-preserving current migration and never gain execution authority." }),
-  Object.freeze({ artifact: "cut-lock", version: "2", language: "0.4", compatibility: "current", transformation: null, reason: "Closed cut.lock v2 contains the probes and implementation identities required by the current runtime." }),
+  Object.freeze({ artifact: "cut-lock", version: "3", language: "0.4", compatibility: "current", transformation: null, reason: "Closed cut.lock v3 contains the probes and selected compositor identity required by the current runtime." }),
+  Object.freeze({ artifact: "cut-lock", version: "2", language: "0.4", compatibility: "unsafe", transformation: null, reason: "Archived v2 did not require the selected compositor identity; regenerate from source and exact resources." }),
   Object.freeze({ artifact: "cut-lock", version: "1", language: "0.4", compatibility: "unsafe", transformation: null, reason: "Archived v1 lacks selected-stream probes and native backend identity; regenerate from source and exact resources." }),
   Object.freeze({ artifact: "cut-project", version: "1", language: "0.4", compatibility: "current", transformation: null, reason: "The closed project manifest v1 contract is current." }),
   Object.freeze({ artifact: "legacy-intent-source", version: "0.2/pre-formal", language: null, compatibility: "unsafe", transformation: null, reason: "The intent-planning DSL has no deterministic one-to-one mapping to typed CUT source." }),
@@ -403,13 +404,16 @@ function analyzeIr(input: Uint8Array, root: Record<string, unknown>, path: strin
 
 function analyzeLock(input: Uint8Array, root: Record<string, unknown>, path: string, protectedInput: boolean): CutMigrationAnalysis {
   if (root.version === 1 && root.language === "0.4") {
-    fail("CUT_MIGRATE_LOCK_V1_UNSAFE", path, "cut.lock v1 cannot be safely rewritten: it omits selected-stream probes and native backend identity. Preserve it as evidence, then regenerate v2 from the exact source and resources with the current `cut lock`." );
+    fail("CUT_MIGRATE_LOCK_V1_UNSAFE", path, "cut.lock v1 cannot be safely rewritten: it omits selected-stream probes and native backend identity. Preserve it as evidence, then regenerate v3 from the exact source and resources with the current `cut lock`." );
   }
-  if (root.version !== 2 || root.language !== "0.4") {
+  if (root.version === 2 && root.language === "0.4") {
+    fail("CUT_MIGRATE_LOCK_V2_UNSAFE", path, "cut.lock v2 cannot be safely rewritten: it did not require the selected compositor identity. Preserve it as evidence, then regenerate v3 from the exact source and resources with the current `cut lock`.");
+  }
+  if (root.version !== 3 || root.language !== "0.4") {
     fail("CUT_MIGRATE_LOCK_VERSION", path, `cut.lock ${String(root.version)} / language ${String(root.language)} has no supported automatic migration.`);
   }
   loadCutLock(input);
-  return { report: baseReport(input, { kind: "cut-lock", format: "cut-lock", version: "2", language: "0.4" }, protectedInput) };
+  return { report: baseReport(input, { kind: "cut-lock", format: "cut-lock", version: "3", language: "0.4" }, protectedInput) };
 }
 
 function analyzeProject(input: Uint8Array, root: Record<string, unknown>, path: string, protectedInput: boolean): CutMigrationAnalysis {

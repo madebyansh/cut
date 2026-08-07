@@ -280,7 +280,7 @@ function selectedAudioIdentity(ir: CutAVIR, signal: IRSignal, sourceId: string) 
   const activeVariant = metadata?.activeMediaVariant;
   const probe = metadata?.probe as LockedResourceProbe | undefined;
   if ((activeVariant !== "master" && activeVariant !== "proxy") || probe?.kind !== "media") {
-    fail(signal, "CUT_AUDIO_REACTIVE_PRODUCER_RESOURCE", "producer source must come from a selected verified master/proxy execution profile with cut.lock v2 media metadata.");
+    fail(signal, "CUT_AUDIO_REACTIVE_PRODUCER_RESOURCE", "producer source must come from a selected verified master/proxy execution profile with cut.lock v3 media metadata.");
   }
   const selection = probe.selected.audio;
   const streamIndex = selection?.streamIndex;

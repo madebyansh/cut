@@ -1092,7 +1092,7 @@ export function finalizeGraphHashes(ir: CutAVIR) {
 
 export type RenderCacheManifest = {
   format: "cut-render-cache";
-  version: 3;
+  version: 4;
   runtime: string;
   backendIntegrity: string;
   sceneToolchainIntegrity: string;
@@ -1183,7 +1183,7 @@ export function createIncrementalRenderPlan(ir: CutAVIR, compositionId: string, 
     return { id, key, status: previous?.scenes[id] === key ? "hit" as const : "miss" as const };
   });
   const manifestNodes = Object.fromEntries(plannedNodes.map((item) => [item.cacheId, item.key]));
-  const manifest: RenderCacheManifest = { format: "cut-render-cache", version: 3, runtime, backendIntegrity, sceneToolchainIntegrity, target, nodes: manifestNodes, scenes: Object.fromEntries(scenes.map((item) => [item.id, item.key])) };
+  const manifest: RenderCacheManifest = { format: "cut-render-cache", version: 4, runtime, backendIntegrity, sceneToolchainIntegrity, target, nodes: manifestNodes, scenes: Object.fromEntries(scenes.map((item) => [item.id, item.key])) };
   const nodes = plannedNodes.map((item) => ({ id: item.id, key: item.key, status: item.status }));
   const hits = [...nodes, ...scenes].filter((item) => item.status === "hit").length; return { manifest, nodes, scenes, hits, misses: nodes.length + scenes.length - hits };
 }

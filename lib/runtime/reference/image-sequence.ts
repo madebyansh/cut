@@ -209,7 +209,7 @@ function lockedResource(ir: CutAVIR, node: IRNode, resourceId: string): CutImage
     throw new CutImageSequenceError(
       "CUT_IMAGE_SEQUENCE_RESOURCE",
       `$.resources.${resourceId}`,
-      "must carry validated cut.lock v2 bytes, SHA-256, and probe metadata before sequence preparation.",
+      "must carry validated cut.lock v3 bytes, SHA-256, and probe metadata before sequence preparation.",
       node,
     );
   }

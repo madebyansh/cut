@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0-alpha.2
+
+- Align the bundled editor support with the CUT 0.4.0-alpha.2 compiler and runtime identities.
+
 ## 0.4.0-alpha.1
 
 - Associate `.cut` files with a CUT language mode and lexical grammar.

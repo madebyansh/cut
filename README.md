@@ -21,9 +21,10 @@ final deliveries. Media, fonts, packages, and runtime identities are locked befo
 the program is compiled to CutAVIR and rendered.
 
 > **Alpha:** CUT is usable for local experimentation, but its language and package
-> formats may still change. Rendering is currently supported on macOS arm64 with
-> Node.js 20 and FFmpeg 7. Performance on complex retained compositions remains a
-> known limitation.
+> formats may still change. macOS arm64 is the officially supported target, with
+> maintained Node.js 24 (or Node.js 20.19+ compatibility) and FFmpeg 7 as its
+> release baseline. Linux source and package execution is experimental. Performance
+> on complex retained compositions remains a known limitation.
 
 ## Why CUT?
 
@@ -42,19 +43,26 @@ the program is compiled to CutAVIR and rendered.
 
 Requirements:
 
-- macOS on Apple silicon
-- Node.js 20
-- FFmpeg 7 (`ffmpeg` and `ffprobe` on `PATH`)
+- macOS on Apple silicon (official) or Linux (experimental)
+- stable Node.js 24.x (maintained), or Node.js 20.19 or newer within Node.js 20
+- `ffmpeg` and `ffprobe` on `PATH`, with the capabilities accepted by `cut doctor`
+
+FFmpeg 7 is the macOS release baseline. Linux distributions may package another
+FFmpeg version; `cut doctor` is the installability gate because CUT depends on
+specific codecs, filters, and probe behavior rather than a version string alone.
+Windows descriptor-bound media execution is not supported.
 
 Download the package and checksum from the
 [latest GitHub release](https://github.com/madebyansh/cut/releases/latest), verify
 them, then install CUT into a project:
 
+On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.2-SHA256SUMS.txt`.
+On Linux, use `sha256sum -c CUT-0.4.0-alpha.2-SHA256SUMS.txt`. Then install:
+
 ```sh
-shasum -a 256 -c CUT-0.4.0-alpha.1-SHA256SUMS.txt
 mkdir my-cut-project && cd my-cut-project
 npm init -y
-npm install --save-exact /path/to/cut-lang-0.4.0-alpha.1.tgz
+npm install --save-exact /path/to/cut-lang-0.4.0-alpha.2.tgz
 npx cut doctor
 npx cut init film --name "My first CUT film"
 ```
@@ -138,7 +146,7 @@ tests/     deterministic implementation and regression tests
 examples/  small redistributable CUT programs and fixtures
 editors/   VS Code extension source
 docs/      guides and reference documentation
-native/    retained compositor source and pinned macOS arm64 build
+native/    optional retained compositor source and pinned macOS arm64 build
 ```
 
 ## Develop
@@ -146,13 +154,14 @@ native/    retained compositor source and pinned macOS arm64 build
 ```sh
 npm ci --ignore-scripts
 npm run build
-npm test
-npm run verify
+npm run test:portable
 ```
 
-`npm run verify` checks the public tree, scripts, source, compiler, runtime, and
-tests. Generated media, local caches, private footage, and release evidence do
-not belong in this repository.
+`npm run test:portable` is the source-level macOS/Linux portability suite. On
+macOS arm64 with FFmpeg 7, `npm run verify` checks the complete public tree,
+scripts, compiler, reference runtime, and deterministic media tests. Generated
+media, local caches, private footage, and release evidence do not belong in this
+repository.
 
 ## Security and media trust
 
@@ -163,10 +172,11 @@ See [SECURITY.md](SECURITY.md) for reporting and trust boundaries.
 
 ## Status
 
-This repository is `0.4.0-alpha.1`. The core compiler and renderer have broad
+This repository is `0.4.0-alpha.2`. The core compiler and renderer have broad
 automated coverage, but CUT is **not 1.0**: complex preview rendering can be slow,
-Windows and Linux media execution are not yet supported, and independent-user
-usability feedback is still being collected.
+Linux source and package execution is experimental, Windows descriptor-bound
+media execution is unsupported, and independent-user usability feedback is still
+being collected.
 
 ## License
 

@@ -29,7 +29,10 @@ import {
   type ReferenceAudioCacheSelectionEvidence,
 } from "./audio-cache";
 import { scanReferenceStereoF32LeFile } from "./audio-peak";
-import { bindReferenceFfmpegExecutableToolchain } from "./audio-limiter-compatibility";
+import {
+  bindReferencePictureMediaToolchain,
+  type ReferencePictureMediaToolchainIdentity,
+} from "./picture-media-toolchain";
 import type { ReferenceColorProfile } from "./color-management";
 import { prepareReferenceAacDelivery, type PreparedReferenceAacDelivery } from "./delivery";
 import { deriveReferenceMasteringTarget, referenceMasteringPeakSource } from "./mastering";
@@ -868,7 +871,8 @@ async function fileSha256(path: string) {
 
 export type ReferencePreviewManifest = ReturnType<typeof commonManifest> & {
   format: "cut-reference-range-preview";
-  version: 3;
+  version: 4;
+  pictureToolchain: ReferencePictureMediaToolchainIdentity;
   /** Present only when the rendered graph executes shaped FlowText. */
   features?: NonNullable<CutAVIR["features"]>;
   artifact: { file: string; sha256: string; bytes: number; container: "mp4"; videoCodec: "h264"; audioCodec: "aac" };
@@ -952,7 +956,7 @@ export async function renderReferencePreviewArtifact(ir: CutAVIR, projectRoot: s
     staging = await mkdtemp(resolve(parent, ".cut-range-preview-"));
     const selectedAudio = resolve(staging, "selected.f32le"), normalizedAudio = resolve(staging, "normalized.wav");
     const cacheRoot = await ensureProjectWriteDirectory(projectRoot, ".cut/cache/reference");
-    const sceneToolchain = await bindReferenceFfmpegExecutableToolchain();
+    const sceneToolchain = await bindReferencePictureMediaToolchain();
     const picture = await renderReferencePreviewPictureArtifact({
       ir: session.ir,
       composition: session.composition,
@@ -1044,7 +1048,8 @@ export async function renderReferencePreviewArtifact(ir: CutAVIR, projectRoot: s
     const artifactSha256 = await fileSha256(delivery.artifact), artifactBytes = (await stat(delivery.artifact)).size;
     const manifest: ReferencePreviewManifest = {
       format: "cut-reference-range-preview",
-      version: 3,
+      version: 4,
+      pictureToolchain: sceneToolchain.toolchain,
       ...commonManifest(session, digest),
       ...(session.ir.features ? { features: session.ir.features } : {}),
       artifact: { file: basename(output), sha256: artifactSha256, bytes: artifactBytes, container: "mp4", videoCodec: "h264", audioCodec: "aac" },

@@ -17,7 +17,13 @@ Implemented areas include:
 
 Current alpha limitations:
 
-- supported media execution is macOS arm64, Node.js 20, and FFmpeg 7;
+- macOS arm64 is the officially supported media target, with maintained Node.js
+  24.x (or Node.js 20.19+ compatibility) and FFmpeg 7 as its release baseline;
+- Linux source and package execution is experimental and uses the JavaScript
+  fallback when the optional native retained compositor is unavailable;
+- FFmpeg compatibility is capability-gated by `cut doctor`; passing it is an
+  installability check, not proof of full render parity;
+- Windows descriptor-bound media execution is unsupported;
 - complex retained compositions may render substantially slower than real time;
 - local FFmpeg/Sharp processing is not a hostile-media sandbox;
 - packages are local/file based; there is no registry or remote package execution;

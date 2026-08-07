@@ -1,22 +1,25 @@
 # CUT alpha feedback
 
-`cut-lang@0.4.0-alpha.1` is a controlled early-access build, not CUT 1.0.
+`cut-lang@0.4.0-alpha.2` is a controlled early-access build, not CUT 1.0.
 It is useful for evaluating typed authoring, deterministic compilation, locked
 assets, picture/audio execution, interchange, packages, and compact workflows.
 
-## Supported feedback profile
+## Feedback profile
 
-- macOS on Apple silicon;
-- Node.js 20.x only;
+- macOS on Apple silicon is the officially supported target;
+- Linux source and package execution is experimental;
+- stable Node.js 24.x is maintained, with Node.js 20.19 or newer retained as a
+  compatibility lane within the Node.js 20 release line;
 - the FFmpeg and ffprobe identities accepted by `cut doctor` and `cut lock`;
 - installation from the exact SHA-256-bound tarball supplied with its verifier
   report; and
 - trusted local projects and media.
 
-Linux and Windows execution, package signing, hostile multi-tenant rendering,
-and arbitrary third-party extensions are not release claims. Do not expose the
-alpha as a public render service or run untrusted projects outside an isolated
-OS account/container.
+Windows descriptor-bound media execution, package signing, hostile multi-tenant
+rendering, and arbitrary third-party extensions are not release claims. Linux
+results are portability feedback, not a parity or performance claim. Do not
+expose the alpha as a public render service or run untrusted projects outside an
+isolated OS account/container.
 
 ## What to try
 

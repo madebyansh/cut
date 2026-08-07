@@ -443,7 +443,7 @@ function prepareFont(value: unknown): PreparedFont {
   if (source.kind === "locked-bytes") {
     const resource = closed(source.resource, "$.font.resource", ["id", "kind", "state", "lockVersion", "sha256", "bytes", "locator"]);
     const resourceId = identifier(resource.id, "$.font.resource.id");
-    if (resource.kind !== "font" || resource.state !== "locked" || resource.lockVersion !== 2) fail("CUT_SERIES_CHART_RESOURCE_STATE", "$.font.resource", "requires a locked FontAsset with cut.lock v2 state");
+    if (resource.kind !== "font" || resource.state !== "locked" || resource.lockVersion !== 2) fail("CUT_SERIES_CHART_RESOURCE_STATE", "$.font.resource", "requires a locked FontAsset with cut.lock v3 state");
     const sha256 = digest(resource.sha256, "$.font.resource.sha256");
     const byteLength = integer(resource.bytes, "$.font.resource.bytes", 1, cutSeriesChartLimits.maxFontBytes, "CUT_SERIES_CHART_LIMIT");
     const locator = exactString(resource.locator, "$.font.resource.locator");

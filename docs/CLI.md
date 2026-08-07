@@ -264,7 +264,8 @@ reused for unrelated evidence roles. The sole digest-alias exception is the
 contract-required byte-identical hero/replay MP4 pair; even those must be
 distinct files and inodes. The command hashes actual bytes before and after
 semantic use and binds the declared hero output to its lock-bound
-`cut-reference-render` v10 manifest's exact `cut.lock` digest, filename,
+`cut-reference-render` v11 manifest's exact `cut.lock` digest, combined
+FFmpeg/ffprobe picture-toolchain identity, filename,
 duration and output digest. A malformed, dishonest or stale
 record exits 1 with `CUT_REVIEW_*`; a valid `decision: "revise"` record exits 2;
 only a complete passing record exits 0. Passing validates that this evidence
@@ -485,7 +486,8 @@ cut render program.cut --lock cut.lock --out output/release.mp4 \
 `preview` requires `--lock`; `render` requires both `--lock` and `--out`.
 `--output` selects a source-declared render target. `--stems` writes deterministic
 pre-master named bus artifacts and a lock-bound v5 stem manifest. The adjacent
-v10 render manifest binds the exact canonical stem-manifest SHA-256 and count.
+v11 render manifest binds the exact combined FFmpeg/ffprobe picture-toolchain
+identity and canonical stem-manifest SHA-256 and count.
 JSON formats are
 `cut-preview-report` and `cut-render-report`. The adjacent media manifest records
 the canonical locked build ID, profile-specific execution build ID, exact
@@ -615,7 +617,7 @@ source can execute a feature.
 7. For JSON failures, repair the stable code and source location; do not parse
    colorized human text.
 8. Before carrying an older artifact forward, run `cut migrate <artifact>
-   --check --json`. A lock-v1 refusal means regenerate from exact source and
+   --check --json`. A lock-v1/v2 refusal means regenerate from exact source and
    resources; never add guessed probe fields by hand.
 
 The interface remains alpha until the compatibility policy and full platform

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { stableJsonStringify } from "../../core/stable";
 import type { CutAVIR } from "../../language/ir";
 import { multiplyRational, rationalToNumber } from "../../language/rational";
 import { createIncrementalRenderPlan, type RenderCacheManifest } from "../graph";
@@ -10,15 +11,12 @@ import {
   abortEncoderAndWait,
   finishEncoder,
   runFfmpeg,
-  runFfprobeCapture,
   spawnRawEncoder,
   writeFrame,
-  type ReferenceMediaNativeProcessExecution,
 } from "./ffmpeg";
 import { ReferenceVisualRenderer } from "./visual";
 import { normalizeReferenceAudio, type ReferenceLoudnessReport } from "./audio";
 import { renderReferenceAudioArtifact, type ReferenceAudioCacheEvidence } from "./audio-cache";
-import { bindReferenceFfmpegExecutableToolchain } from "./audio-limiter-compatibility";
 import {
   prepareReferenceAacDelivery,
   type PreparedReferenceAacDelivery,
@@ -49,6 +47,13 @@ import {
 import type { ReferenceMediaProfile, ReferenceMediaProfileEvidence } from "./media-profile";
 import { referenceSceneEncodingContract } from "./scene-encoding";
 import { prepareReferenceVerifiedInputSession, type ReferenceVerifiedInputSession } from "./verified-input-session";
+import {
+  bindReferencePictureMediaToolchain,
+  runReferencePictureFfprobeCapture,
+  type BoundReferencePictureMediaToolchain,
+  type ReferencePictureArtifactProbe,
+  type ReferencePictureMediaToolchainIdentity,
+} from "./picture-media-toolchain";
 
 const runtime = cutReferenceRuntimeIdentity;
 
@@ -65,6 +70,7 @@ export type ReferenceSceneArtifactExpectation = Readonly<{
   runtime: string;
   backendIntegrity: string;
   toolchainIntegrity: string;
+  pictureToolchain: ReferencePictureMediaToolchainIdentity;
   color: ReferenceColorProfile | "legacy";
 }>;
 
@@ -106,13 +112,13 @@ function sameRational(left: { numerator: bigint; denominator: bigint }, right: {
 export async function assertReferenceSceneArtifactContract(
   path: string,
   expected: ReferenceSceneArtifactExpectation,
-  nativeProcessExecution?: ReferenceMediaNativeProcessExecution,
+  probe: ReferencePictureArtifactProbe,
 ) {
-  const result = await runFfprobeCapture([
+  const result = await runReferencePictureFfprobeCapture(probe, [
     "-v", "error", "-count_frames",
     "-show_entries", "stream=codec_type,codec_name,pix_fmt,width,height,has_b_frames,avg_frame_rate,time_base,start_pts,duration_ts,nb_read_frames,color_range,color_space,color_transfer,color_primaries",
     "-of", "json", path,
-  ], 60_000, { stdoutBytes: 32_000, stderrBytes: 32_000, totalBytes: 64_000 }, nativeProcessExecution);
+  ], 60_000, { stdoutBytes: 32_000, stderrBytes: 32_000, totalBytes: 64_000 });
   let stream: Record<string, unknown> | undefined, streamCount = 0;
   try {
     const parsed = plainRecord(JSON.parse(result.stdout)), streams = parsed && Array.isArray(parsed.streams) ? parsed.streams : [];
@@ -156,16 +162,16 @@ export async function assertReferenceSceneArtifactContract(
   }
 }
 
-async function cacheArtifact(directory: string, expected: ReferenceSceneArtifactExpectation) {
+async function cacheArtifact(directory: string, expected: ReferenceSceneArtifactExpectation, probe: ReferencePictureArtifactProbe) {
   const manifestPath = resolve(directory, "manifest.json"), artifact = resolve(directory, "video.mp4");
   try {
     const [manifestMetadata, artifactMetadata] = await Promise.all([lstat(manifestPath), lstat(artifact)]);
     if (!manifestMetadata.isFile() || !artifactMetadata.isFile()) return undefined;
     const manifest = plainRecord(JSON.parse(await readFile(manifestPath, "utf8")));
     if (!manifest
-      || !exactKeys(manifest, ["format", "version", "key", "sha256", "frames", "runtime", "backendIntegrity", "toolchainIntegrity"])
+      || !exactKeys(manifest, ["format", "version", "key", "sha256", "frames", "runtime", "backendIntegrity", "toolchainIntegrity", "pictureToolchain"])
       || manifest.format !== "cut-scene-cache"
-      || manifest.version !== 3
+      || manifest.version !== 4
       || manifest.key !== expected.key
       || typeof manifest.sha256 !== "string"
       || !/^[a-f0-9]{64}$/u.test(manifest.sha256)
@@ -173,26 +179,27 @@ async function cacheArtifact(directory: string, expected: ReferenceSceneArtifact
       || manifest.runtime !== expected.runtime
       || manifest.backendIntegrity !== expected.backendIntegrity
       || manifest.toolchainIntegrity !== expected.toolchainIntegrity
+      || stableJsonStringify(manifest.pictureToolchain) !== stableJsonStringify(expected.pictureToolchain)
       || await sha256(artifact) !== manifest.sha256) return undefined;
-    await assertReferenceSceneArtifactContract(artifact, expected);
+    await assertReferenceSceneArtifactContract(artifact, expected, probe);
     return artifact;
   }
   catch { return undefined; }
 }
 
-async function renderScene(ir: CutAVIR, compositionId: string, sceneId: string, projectRoot: string, cacheRoot: string, key: string, backend: CutReferenceBackendIdentity, toolchain: Awaited<ReturnType<typeof bindReferenceFfmpegExecutableToolchain>>, color: ReferenceColorProfile | "legacy", verifiedResourcePath: ReferenceVerifiedInputSession["pathFor"]) {
+async function renderScene(ir: CutAVIR, compositionId: string, sceneId: string, projectRoot: string, cacheRoot: string, key: string, backend: CutReferenceBackendIdentity, toolchain: BoundReferencePictureMediaToolchain, color: ReferenceColorProfile | "legacy", verifiedResourcePath: ReferenceVerifiedInputSession["pathFor"]) {
   const composition = ir.compositions.find((item) => item.id === compositionId)!; const scene = ir.scenes[sceneId]; const frameRate = `${composition.fps.numerator}/${composition.fps.denominator}`; const framesExact = multiplyRational(scene.duration, composition.fps);
   if (framesExact.denominator !== "1") throw new Error(`Scene “${scene.name}” duration does not land on a frame boundary.`);
   const frameCount = Number(framesExact.numerator);
-  const expected = { key, frames: frameCount, width: composition.width, height: composition.height, fps: composition.fps, runtime, backendIntegrity: backend.integrity, toolchainIntegrity: toolchain.toolchain.integrity, color } as const;
-  const target = await ensureProjectWriteDirectory(projectRoot, `.cut/cache/reference/scene/${key}`), hit = await cacheArtifact(target, expected); if (hit) return { path: hit, hit: true };
+  const expected = { key, frames: frameCount, width: composition.width, height: composition.height, fps: composition.fps, runtime, backendIntegrity: backend.integrity, toolchainIntegrity: toolchain.toolchain.integrity, pictureToolchain: toolchain.toolchain, color } as const;
+  const target = await ensureProjectWriteDirectory(projectRoot, `.cut/cache/reference/scene/${key}`), hit = await cacheArtifact(target, expected, toolchain.ffprobe); if (hit) return { path: hit, hit: true };
   const visual = new ReferenceVisualRenderer(ir, composition, projectRoot, cacheRoot, verifiedResourcePath);
   let staging: string | undefined, temp: string | undefined;
   let encoder: ReturnType<typeof spawnRawEncoder> | undefined, encoderFinished = false;
   try {
     await visual.prepare();
     staging = await mkdtemp(resolve(target, ".cut-render-")); temp = resolve(staging, "video.mp4");
-    encoder = spawnRawEncoder(composition.width, composition.height, frameRate, temp, color, toolchain.executablePath);
+    encoder = spawnRawEncoder(composition.width, composition.height, frameRate, temp, color, toolchain.ffmpegExecutablePath);
     for (let frame = 0; frame < frameCount; frame += 1) {
       const surface = await visual.sceneFrame(scene, frame);
       // The encoder performs RGB -> YUV legal-range mapping. CPU conversion
@@ -206,8 +213,8 @@ async function renderScene(ir: CutAVIR, compositionId: string, sceneId: string, 
     await finishEncoder(encoder);
     encoderFinished = true;
     await toolchain.verify();
-    await assertReferenceSceneArtifactContract(temp, expected);
-    const artifact = resolve(target, "video.mp4"); await publishStagedFile(temp, artifact); const digest = await sha256(artifact); await atomicWriteFile(resolve(target, "manifest.json"), JSON.stringify({ format: "cut-scene-cache", version: 3, key, sha256: digest, frames: frameCount, runtime, backendIntegrity: backend.integrity, toolchainIntegrity: toolchain.toolchain.integrity }, null, 2)); return { path: artifact, hit: false };
+    await assertReferenceSceneArtifactContract(temp, expected, toolchain.ffprobe);
+    const artifact = resolve(target, "video.mp4"); await publishStagedFile(temp, artifact); const digest = await sha256(artifact); await atomicWriteFile(resolve(target, "manifest.json"), JSON.stringify({ format: "cut-scene-cache", version: 4, key, sha256: digest, frames: frameCount, runtime, backendIntegrity: backend.integrity, toolchainIntegrity: toolchain.toolchain.integrity, pictureToolchain: toolchain.toolchain }, null, 2)); return { path: artifact, hit: false };
   } finally {
     if (encoder && !encoderFinished) await abortEncoderAndWait(encoder);
     await visual.closeAndWait();
@@ -240,9 +247,10 @@ function portableRenderLocator(parent: string, destination: string) {
 
 export type ReferenceRenderManifest = {
   format: "cut-reference-render";
-  version: 10;
+  version: 11;
   runtime: string;
   backend: CutReferenceBackendIdentity;
+  pictureToolchain: ReferencePictureMediaToolchainIdentity;
   /** Present only when the rendered graph executes shaped FlowText. */
   features?: NonNullable<CutAVIR["features"]>;
   /** SHA-256 of the exact verified cut.lock bytes applied by the caller. */
@@ -326,8 +334,8 @@ function validateReferenceRenderOptions(value: unknown): ReferenceRenderOptions 
   return options as ReferenceRenderOptions;
 }
 
-async function deliveredColorTags(path: string, color: ReferenceColorProfile | "legacy") {
-  const result = await runFfprobeCapture(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_range,color_space,color_transfer,color_primaries", "-of", "json", path]);
+async function deliveredColorTags(path: string, color: ReferenceColorProfile | "legacy", probe: ReferencePictureArtifactProbe) {
+  const result = await runReferencePictureFfprobeCapture(probe, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_range,color_space,color_transfer,color_primaries", "-of", "json", path]);
   let stream: Record<string, unknown>;
   try {
     const parsed = JSON.parse(result.stdout) as { streams?: unknown[] };
@@ -392,7 +400,7 @@ export async function renderReferenceIr(ir: CutAVIR, projectRoot: string, output
   // libraries remain outside this boundary and are not claimed here.
   const backend = await collectReferenceBackendIdentity();
   if (options.__lockedReferenceBackend) assertCutLockReferenceBackendIdentity(options.__lockedReferenceBackend, backend);
-  const sceneToolchain = await bindReferenceFfmpegExecutableToolchain();
+  const sceneToolchain = await bindReferencePictureMediaToolchain();
   ir = verifiedInputs.ir;
   const session = validateReferenceSession(ir, outputName); const { composition, outputContract } = session;
   if (options.stemsDirectory && resolve(options.stemsDirectory) === resolve(outputPath)) throw new Error("Stem directory and rendered video path must be different.");
@@ -426,7 +434,7 @@ export async function renderReferenceIr(ir: CutAVIR, projectRoot: string, output
       toolchain: audioArtifact.cache.identity.toolchain,
     });
     const stagedOutput = preparedDelivery.artifact, delivery = preparedDelivery.report;
-    const loudness: ReferenceLoudnessReport = { ...normalized, output: delivery.finalFfmpegMeasurement }; const colorTags = await deliveredColorTags(stagedOutput, outputContract.color);
+    const loudness: ReferenceLoudnessReport = { ...normalized, output: delivery.finalFfmpegMeasurement }; const colorTags = await deliveredColorTags(stagedOutput, outputContract.color, sceneToolchain.ffprobe);
     // Color probing is the final backend consumer of the accepted candidate.
     // Revalidate afterwards, then bind the manifest to the delivery hash; no
     // media subprocess receives the final publication inode again.
@@ -440,7 +448,7 @@ export async function renderReferenceIr(ir: CutAVIR, projectRoot: string, output
     // serialization ceiling (0 dBFS by default).
     stemBuild = stemPlan && options.stemsDirectory ? await prepareReferenceAudioStems(ir, composition, projectRoot, options.stemsDirectory, { lockSha256: options.lockSha256, __verifiedResourcePath: verifiedInputs.pathFor }) : undefined;
     await options.__testPreparationFault?.("after-stems");
-    const manifest: ReferenceRenderManifest = { format: "cut-reference-render", version: 10, runtime, backend, ...(ir.features ? { features: ir.features } : {}), lock: { sha256: options.lockSha256 }, buildId: canonicalBuildId, executionBuildId: ir.buildId, output: basename(output), sha256: stagedOutputSha256, duration: rationalToNumber(composition.duration), canvas: { width: composition.width, height: composition.height, fps: `${composition.fps.numerator}/${composition.fps.denominator}` }, color: { working: "srgb-straight", delivery: outputContract.color === "legacy" ? "legacy-untagged" : referenceColorProfileMetadata(outputContract.color).profile, ffprobe: colorTags }, audio: { ...audioBuild, sampleRate: composition.sampleRate, channels: 2, limiter: audioArtifact.cache.limiter, samplePeak: audioArtifact.cache.peak, loudness, delivery }, ...(stemBuild ? { stems: { directory: portableRenderLocator(outputParent, stemBuild.directory), manifest: portableRenderLocator(outputParent, stemBuild.manifestPath), manifestSha256: stemBuild.manifestSha256, count: stemBuild.manifest.stems.length } } : {}), media: verifiedInputs.media, cache: { hits: sceneStatuses.filter((item) => item.status === "hit").length, misses: sceneStatuses.filter((item) => item.status === "miss").length, scenes: sceneStatuses, audio: audioArtifact.cache } };
+    const manifest: ReferenceRenderManifest = { format: "cut-reference-render", version: 11, runtime, backend, pictureToolchain: sceneToolchain.toolchain, ...(ir.features ? { features: ir.features } : {}), lock: { sha256: options.lockSha256 }, buildId: canonicalBuildId, executionBuildId: ir.buildId, output: basename(output), sha256: stagedOutputSha256, duration: rationalToNumber(composition.duration), canvas: { width: composition.width, height: composition.height, fps: `${composition.fps.numerator}/${composition.fps.denominator}` }, color: { working: "srgb-straight", delivery: outputContract.color === "legacy" ? "legacy-untagged" : referenceColorProfileMetadata(outputContract.color).profile, ffprobe: colorTags }, audio: { ...audioBuild, sampleRate: composition.sampleRate, channels: 2, limiter: audioArtifact.cache.limiter, samplePeak: audioArtifact.cache.peak, loudness, delivery }, ...(stemBuild ? { stems: { directory: portableRenderLocator(outputParent, stemBuild.directory), manifest: portableRenderLocator(outputParent, stemBuild.manifestPath), manifestSha256: stemBuild.manifestSha256, count: stemBuild.manifest.stems.length } } : {}), media: verifiedInputs.media, cache: { hits: sceneStatuses.filter((item) => item.status === "hit").length, misses: sceneStatuses.filter((item) => item.status === "miss").length, scenes: sceneStatuses, audio: audioArtifact.cache } };
     const stagedRenderManifest = resolve(outputParent, `.cut-render-publication-${publicationId}-manifest.json`);
     await writeFile(stagedRenderManifest, JSON.stringify(manifest, null, 2), { flag: "wx", mode: 0o600 }); outputStages.push(stagedRenderManifest);
     cacheStaging = await mkdtemp(resolve(cacheRoot, ".cut-composition-publication-"));

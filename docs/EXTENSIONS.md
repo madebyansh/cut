@@ -1,6 +1,6 @@
 # CUT extension boundary
 
-Status: bounded public ABI slice in CUT `0.4.0-alpha.1`. This is not a claim
+Status: bounded public ABI slice in CUT `0.4.0-alpha.2`. This is not a claim
 that arbitrary native plugins or untrusted media are safe.
 
 Source packages remain ordinary `.cut` component expansion under

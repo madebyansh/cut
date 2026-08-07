@@ -631,7 +631,7 @@ function lockedVariant(resource: IRResource, variant: "master" | "proxy"): Varia
   }
   const metadata = resource.metadata;
   if (!record(metadata) || metadata.lockVersion !== 2 || !Number.isSafeInteger(metadata.bytes) || Number(metadata.bytes) < 0 || !record(metadata.probe)) {
-    failure("CUT_INPUT_SESSION_LOCK_STATE", `Resource ${JSON.stringify(resource.id)} has no valid embedded cut.lock v2 metadata.`, { resourceId: resource.id, variant, locator: resource.locator, reason: "metadata" });
+    failure("CUT_INPUT_SESSION_LOCK_STATE", `Resource ${JSON.stringify(resource.id)} has no valid embedded cut.lock v3 metadata.`, { resourceId: resource.id, variant, locator: resource.locator, reason: "metadata" });
   }
   if (variant === "master") {
     return Object.freeze({

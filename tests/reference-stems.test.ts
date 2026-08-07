@@ -531,7 +531,7 @@ test("canonical cut render publishes named stems and preflights bad routing befo
     const lockSha256 = createHash("sha256").update(await readFile(resolve(root, "cut.lock"))).digest("hex");
     assert.equal(manifest.format, "cut-reference-stems"); assert.equal(manifest.version, 5); assert.deepEqual(manifest.stems.map((stem) => stem.file), ["dialogue.wav"]);
     assert.deepEqual(manifest.lock, { sha256: lockSha256 });
-    assert.equal(renderManifest.version, 10); assert.deepEqual(renderManifest.lock, manifest.lock);
+    assert.equal(renderManifest.version, 11); assert.deepEqual(renderManifest.lock, manifest.lock);
     assert.deepEqual(renderManifest.stems, { directory: "stems", manifest: "stems/cut-stems.json", manifestSha256: createHash("sha256").update(stemBytes).digest("hex"), count: 1 });
     await access(resolve(root, "out.mp4")); await access(resolve(root, "stems", "dialogue.wav"));
 

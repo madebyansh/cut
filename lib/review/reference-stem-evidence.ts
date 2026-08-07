@@ -175,7 +175,7 @@ async function verifyPcm24Wave(pathname: string, diagnosticPath: string, expecte
 }
 
 /**
- * Follow one render-manifest v10 stem marker through the canonical v5
+ * Follow one render-manifest v11 stem marker through the canonical v5
  * manifest to every declared WAVE leaf. This validator is intentionally
  * independent of the producer so review cannot inherit producer assumptions.
  */

@@ -139,7 +139,7 @@ export type LockedResourceVariant = {
 
 export type CutLockfile = {
   format: "cut-lock";
-  version: 2;
+  version: 3;
   language: "0.4";
   toolchain: {
     compiler: string;
@@ -279,7 +279,7 @@ function record(value: unknown, path: string) { if (!isRecord(value)) fail("CUT_
 function closed(value: unknown, path: string, required: readonly string[], optional: readonly string[] = []) {
   const object = record(value, path), allowed = new Set([...required, ...optional]);
   for (const field of required) if (!Object.hasOwn(object, field)) fail("CUT_LOCK_MISSING_FIELD", path, `is missing required field “${field}”.`);
-  for (const field of Object.keys(object)) if (!allowed.has(field)) fail("CUT_LOCK_UNKNOWN_FIELD", `${path}.${field}`, "is not part of cut.lock v2.");
+  for (const field of Object.keys(object)) if (!allowed.has(field)) fail("CUT_LOCK_UNKNOWN_FIELD", `${path}.${field}`, "is not part of cut.lock v3.");
   return object;
 }
 function child(path: string, key: string) { return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`; }
@@ -365,8 +365,9 @@ function validateReferenceDependencies(value: unknown, path: string, context: Va
 }
 
 function validateReferenceBackend(value: unknown, path: string, context: ValidationContext): CutReferenceBackendIdentity {
-  const object = closed(value, path, ["dependencies", "format", "integrity", "native", "runtime", "version"]);
-  if (object.format !== "cut-reference-backend" || object.version !== 1) fail("CUT_LOCK_VERSION", path, "requires cut-reference-backend v1.");
+  const versioned = record(value, path);
+  if (versioned.format !== "cut-reference-backend" || versioned.version !== 2) fail("CUT_LOCK_VERSION", path, "requires cut-reference-backend v2.");
+  const object = closed(versioned, path, ["compositor", "dependencies", "format", "integrity", "native", "runtime", "version"]);
   const dependencies = validateReferenceDependencies(object.dependencies, `${path}.dependencies`, context);
   const native = closed(object.native, `${path}.native`, ["architecture", "libvips", "nodeAbi", "platform", "sharp"]);
   const canonicalNative = {
@@ -378,8 +379,33 @@ function validateReferenceBackend(value: unknown, path: string, context: Validat
   };
   const installedSharp = dependencies.packages.find((entry) => entry.name === "sharp")?.version;
   if (canonicalNative.sharp !== installedSharp) fail("CUT_LOCK_IDENTITY", `${path}.native.sharp`, "must match the installed Sharp package version.");
+  const compositorValue = record(object.compositor, `${path}.compositor`), mode = exactEnum(compositorValue.mode, `${path}.compositor.mode`, ["native", "javascript"]);
+  const compositor = mode === "native"
+    ? (() => {
+      const nativeCompositor = closed(compositorValue, `${path}.compositor`, ["algorithm", "architecture", "binarySha256", "mode", "platform"]);
+      return {
+        mode: "native" as const,
+        platform: runtimeToken(nativeCompositor.platform, `${path}.compositor.platform`, context) as NodeJS.Platform,
+        architecture: runtimeToken(nativeCompositor.architecture, `${path}.compositor.architecture`, context),
+        algorithm: runtimeToken(nativeCompositor.algorithm, `${path}.compositor.algorithm`, context),
+        binarySha256: digest(nativeCompositor.binarySha256, `${path}.compositor.binarySha256`, context),
+      };
+    })()
+    : (() => {
+      const javascriptCompositor = closed(compositorValue, `${path}.compositor`, ["algorithm", "architecture", "implementation", "mode", "platform"]);
+      return {
+        mode: "javascript" as const,
+        platform: runtimeToken(javascriptCompositor.platform, `${path}.compositor.platform`, context) as NodeJS.Platform,
+        architecture: runtimeToken(javascriptCompositor.architecture, `${path}.compositor.architecture`, context),
+        algorithm: runtimeToken(javascriptCompositor.algorithm, `${path}.compositor.algorithm`, context),
+        implementation: runtimeToken(javascriptCompositor.implementation, `${path}.compositor.implementation`, context),
+      };
+    })();
+  if (compositor.platform !== canonicalNative.platform || compositor.architecture !== canonicalNative.architecture) {
+    fail("CUT_LOCK_IDENTITY", `${path}.compositor`, "host must match the reference backend native runtime host.");
+  }
   const runtime = text(object.runtime, `${path}.runtime`, context, 256), integrity = digest(object.integrity, `${path}.integrity`, context);
-  const content = { format: "cut-reference-backend" as const, version: 1 as const, runtime, dependencies, native: canonicalNative };
+  const content = { format: "cut-reference-backend" as const, version: 2 as const, runtime, dependencies, native: canonicalNative, compositor };
   if (integrity !== hash(content)) fail("CUT_LOCK_IDENTITY", `${path}.integrity`, "does not match the canonical reference backend identity.");
   return { ...content, integrity };
 }
@@ -1307,7 +1333,7 @@ class LockJsonScanner {
   }
 }
 
-/** Parse bounded UTF-8 JSON, reject decoded duplicate keys, and validate v2. */
+/** Parse bounded UTF-8 JSON, reject decoded duplicate keys, and validate v3. */
 export function loadCutLock(input: string | Uint8Array, options: { limits?: Partial<CutLockValidationLimits> } = {}) {
   if (!isRecord(options) || Object.keys(options).some((key) => key !== "limits")) fail("CUT_LOCK_UNKNOWN_FIELD", "$.options", "contains an unsupported option.");
   const resolvedLimits = limits(options.limits ?? {});
@@ -1336,10 +1362,13 @@ export function validateCutLock(value: unknown, options: { limits?: Partial<CutL
   const context: ValidationContext = { limits: limits(options.limits ?? {}), totalStringBytes: 0 };
   const preliminary = record(value, "$");
   if (preliminary.format === "cut-lock" && preliminary.version === 1) {
-    fail("CUT_LOCK_VERSION", "$.version", "cut.lock v1 is an archived 0.3 byte lock and cannot be applied as v2. Regenerate it with the current `cut lock`; automatic migration is unsafe because v1 contains no media probe or native implementation identity.");
+    fail("CUT_LOCK_VERSION", "$.version", "cut.lock v1 is an archived byte lock and cannot be applied as v3. Regenerate it with the current `cut lock`; automatic migration is unsafe because v1 contains no media probe or native implementation identity.");
+  }
+  if (preliminary.format === "cut-lock" && preliminary.version === 2) {
+    fail("CUT_LOCK_VERSION", "$.version", "cut.lock v2 cannot be applied as v3. Regenerate it with the current `cut lock`; automatic migration is unsafe because v2 did not require the selected compositor identity.");
   }
   const lock = closed(preliminary, "$", ["determinism", "format", "jobs", "language", "packages", "resources", "sourceHash", "toolchain", "version"], ["features", "sourceModules"]);
-  if (lock.format !== "cut-lock" || lock.version !== 2 || lock.language !== "0.4") fail("CUT_LOCK_VERSION", "$", "requires cut.lock v2 for CUT language 0.4.");
+  if (lock.format !== "cut-lock" || lock.version !== 3 || lock.language !== "0.4") fail("CUT_LOCK_VERSION", "$", "requires cut.lock v3 for CUT language 0.4; regenerate with the current `cut lock`.");
   digest(lock.sourceHash, "$.sourceHash", context);
   if (lock.sourceModules !== undefined) {
     if (!Array.isArray(lock.sourceModules) || lock.sourceModules.length > context.limits.maxPackages) fail("CUT_LOCK_LIMIT", "$.sourceModules", `must contain at most ${context.limits.maxPackages} source modules.`);
@@ -1361,7 +1390,7 @@ export function validateCutLock(value: unknown, options: { limits?: Partial<CutL
   text(toolchain.compiler, "$.toolchain.compiler", context, 256); if (toolchain.ir !== 3) fail("CUT_LOCK_VERSION", "$.toolchain.ir", "must be CutAVIR 3."); safeInteger(toolchain.packageAbi, "$.toolchain.packageAbi", 1); const referenceRuntime = text(toolchain.referenceRuntime, "$.toolchain.referenceRuntime", context, 256); const referenceBackend = validateReferenceBackend(toolchain.referenceBackend, "$.toolchain.referenceBackend", context);
   if (referenceBackend.runtime !== referenceRuntime) fail("CUT_LOCK_IDENTITY", "$.toolchain.referenceBackend.runtime", "must match toolchain.referenceRuntime.");
   const determinism = closed(lock.determinism, "$.determinism", ["bitstream", "decodedMedia", "semantic"]);
-  if (determinism.semantic !== "locked" || determinism.decodedMedia !== "unverified" || determinism.bitstream !== "unverified") fail("CUT_LOCK_DETERMINISM", "$.determinism", "v2 locks semantic inputs only; decoded-media and bitstream determinism must remain unverified.");
+  if (determinism.semantic !== "locked" || determinism.decodedMedia !== "unverified" || determinism.bitstream !== "unverified") fail("CUT_LOCK_DETERMINISM", "$.determinism", "v3 locks semantic inputs only; decoded-media and bitstream determinism must remain unverified.");
 
   if (!Array.isArray(lock.packages) || lock.packages.length > context.limits.maxPackages) fail("CUT_LOCK_LIMIT", "$.packages", `must contain at most ${context.limits.maxPackages} packages.`);
   const packageSpecifiers = new Set<string>();
@@ -2626,7 +2655,7 @@ export async function createCutLock(ir: CutAVIR, projectRoot: string): Promise<C
   await verifySourceModuleBytes(ir.sourceModules, projectRoot);
   return validateCutLock(canonicalClone({
     format: "cut-lock",
-    version: 2,
+    version: 3,
     language: "0.4",
     toolchain: { compiler: ir.compiler, ir: 3, packageAbi: cutPackageAbi, referenceRuntime: cutReferenceRuntimeIdentity, referenceBackend },
     sourceHash: ir.sourceHash,
@@ -2893,7 +2922,7 @@ function validateEmbeddedLockedResources(ir: CutAVIR) {
     if (resource.id !== resourceKey) fail("CUT_LOCK_STATE", child("$.resources", resourceKey), `embedded resource key does not match its canonical id ${JSON.stringify(resource.id)}.`);
     const path = child("$.resources", resource.id), metadata = resource.metadata;
     if (resource.state !== "locked" || !resource.sha256 || !isRecord(metadata) || metadata.lockVersion !== 2) {
-      fail("CUT_LOCK_STATE", path, `Resource “${resource.id}” has no validated cut.lock v2 metadata.`);
+      fail("CUT_LOCK_STATE", path, `Resource “${resource.id}” has no validated cut.lock v3 metadata.`);
     }
     const allowed = new Set(["lockVersion", "bytes", "probe", "proxy"]);
     const unknown = Object.keys(metadata).find((key) => !allowed.has(key));

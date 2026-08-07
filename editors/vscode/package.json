@@ -2,7 +2,7 @@
   "name": "cut-language-support",
   "displayName": "CUT Language Support",
   "description": "Syntax highlighting, deterministic formatting, and compiler diagnostics for CUT audiovisual source.",
-  "version": "0.4.0-alpha.1",
+  "version": "0.4.0-alpha.2",
   "publisher": "cut-language",
   "license": "MIT",
   "private": false,

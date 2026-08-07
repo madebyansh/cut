@@ -75,8 +75,11 @@ function declarationReferences(declaration: Declaration) {
   if (declaration.kind === "asset" || declaration.kind === "const" || declaration.kind === "export") {
     expressionReferences(declaration.value, new Set(), result);
   } else if (declaration.kind === "function") {
-    const shadowed = new Set(declaration.parameters.map((parameter) => parameter.name));
-    for (const parameter of declaration.parameters) if (parameter.defaultValue) expressionReferences(parameter.defaultValue, shadowed, result);
+    const shadowed = new Set<string>();
+    for (const parameter of declaration.parameters) {
+      if (parameter.defaultValue) expressionReferences(parameter.defaultValue, shadowed, result);
+      shadowed.add(parameter.name);
+    }
     expressionReferences(declaration.value, shadowed, result);
   } else if (declaration.kind === "component") {
     const shadowed = new Set<string>();

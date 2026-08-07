@@ -1,6 +1,6 @@
 # CUT 0.4 alpha language and IR specification
 
-Status: implementation specification for the CUT 0.4 language in `cut-lang` 0.4.0-alpha.1. This document describes the formal language path implemented by the repository. It is not yet a frozen compatibility standard.
+Status: implementation specification for the CUT 0.4 language in `cut-lang` 0.4.0-alpha.2. This document describes the formal language path implemented by the repository. It is not yet a frozen compatibility standard.
 
 CUT is a programming language for audiovisual graphs. The canonical authoring artifact is UTF-8 `.cut` source. The compiler parses and type-checks that source, lowers it to CutAVIR v3, and binds it to content-locked resources and package implementations. A runtime executes the graph. JSON production plans and the earlier line-oriented editorial DSL are legacy compatibility formats, not CUT 0.4 source.
 
@@ -274,7 +274,7 @@ Inside a component declared `-> Visual`, `self` is an implicit writable `Visual`
 
 Except for the structurally closed `-> DiagramNode` case above, the compiler expands each invocation into a `cut.kernel.fragment` node whose children are the component body followed by any explicit invocation children. Writes through `self` attach ordinary signals to that fragment; they add no operation or special runtime primitive. IR provenance records both the definition and invocation spans. Components are ordinary language abstractions; the runtime does not receive film-specific component names or code.
 
-The `0.4.0-alpha.1` reference runtime executes one closed retained-component
+The `0.4.0-alpha.2` reference runtime executes one closed retained-component
 shape: a pure `-> Visual` invocation used directly as a scene visual root may
 lower to one `cut.kernel.fragment` whose only child is one
 `LocalSpace`. The fragment and `LocalSpace` must have exactly equal intervals;
@@ -1758,9 +1758,10 @@ a real audiovisual edit changes ordinary executable identities.
 
 ### 9.1 `cut.lock`
 
-A v2 lockfile records:
+A v3 lockfile records:
 
-- format/language, compiler, CutAVIR, package ABI and reference-runtime identity;
+- format/language, compiler, CutAVIR, package ABI and reference-runtime identity,
+  including the dependency/native host and selected compositor implementation;
 - exact entry source hash and, when used, the sorted project-relative user-module specifier/byte-count/SHA-256 list;
 - package specifier, version, and combined integrity;
 - each resource ID, kind, master locator, SHA-256, and byte length, plus an
@@ -1823,20 +1824,21 @@ not a new filesystem resource kind: its strict manifest and every ordered image
 member remain independently locked resources, while the compiler-authenticated
 derived source binds their order, dimensions, cadence, and cache identity. See
 [CAPTIONS.md](CAPTIONS.md), [TRANSCRIPT_EDITING.md](TRANSCRIPT_EDITING.md),
-[LUTS.md](LUTS.md), and [IMAGE_SEQUENCE.md](IMAGE_SEQUENCE.md). A v1 lock is
-preserved for archived 0.3 evidence but is refused by the active compiler with
-instructions to regenerate; it cannot be safely auto-migrated because it has
-no probe/native identity.
+[LUTS.md](LUTS.md), and [IMAGE_SEQUENCE.md](IMAGE_SEQUENCE.md). V1 and v2 locks
+are preserved only as archived evidence and are refused by the active compiler
+with instructions to regenerate. They cannot be safely auto-migrated because
+v1 lacks required probe/native identity and v2 did not require the selected
+compositor identity.
 
 ### 9.2 Three determinism tiers
 
 CUT does not use one ambiguous determinism claim:
 
-1. **Semantic determinism** means identical locked source, packages, resource bytes and validated metadata produce the same CutAVIR graph/build ID. Lock v2 implements this contract for its supported resource kinds.
+1. **Semantic determinism** means identical locked source, packages, resource bytes and validated metadata produce the same CutAVIR graph/build ID. Lock v3 implements this contract for its supported resource kinds.
 2. **Decoded-media determinism** means identical locked decoder/runtime inputs produce identical frame/sample buffers. The reference runtime records this as `unverified`.
 3. **Bitstream determinism** means the final encoded bytes are identical. The reference runtime records this as `unverified`.
 
-Lock v2 pins the metadata-producing `ffprobe` or Sharp/libvips identity and CUT's reference-runtime identity. It does not pin the operating system, CPU behavior, FFmpeg decoder/encoder binary, codec implementation or every transitive native dependency. Those omissions are why decoded-media and bitstream determinism remain explicitly `unverified`; a render manifest hash is an observation, not a cross-machine bitstream guarantee.
+Lock v3 pins the metadata-producing `ffprobe` or Sharp/libvips identity, the selected compositor, and CUT's reference-runtime identity. It does not pin CPU behavior, the FFmpeg decoder/encoder binary, codec implementation or every transitive native dependency. Those omissions are why decoded-media and bitstream determinism remain explicitly `unverified`; a render manifest hash is an observation, not a cross-machine bitstream guarantee.
 
 ### 9.3 CLI lifecycle
 
@@ -2338,12 +2340,13 @@ evidence remains accepted by the frame schema without gaining a persistent-
 cache claim. These receipts are engineering evidence only; they do not watch a
 film, listen to its mix or establish a creative pass.
 
-Scenes are rendered to cache entries keyed by transitive graph content, target, reference-runtime version, the closed `cut-reference-scene-encoding` v2 contract, and a freshly observed FFmpeg executable identity. Each H.264 scene segment disables reordered B-frames before CUT joins independently encoded segments by concat-demuxer stream copy; otherwise a short segment's negative decode timestamps can be rebased so the joined file declares less time than its presentation span. The versioned codec/B-frame/join contract is in picture-cache identity, preventing reuse of an older incompatible segment, and a one-frame plus three-frame fixture verifies exact final duration through the real delivery boundary. The runtime resolves and no-follow hashes the FFmpeg executable plus its bounded banner, puts that integrity in `cut-render-cache` v3 and `cut-scene-cache` v3, and spawns that exact absolute executable for a miss. A new encode verifies it unchanged after encoder close and before publishing that scene artifact. The scene manifest itself is closed to format/version/key/hash/frame/runtime/backend/toolchain fields; every new artifact or hit additionally derives from the current target and ffprobe-reconciles the exact decoded-frame count, zero start, duration clock, FPS, dimensions, H.264/pixel format, zero B-frames and managed color tags. A hostile hash-consistent one-frame substitution under a four-frame manifest is therefore a miss and rebuild, not a laundered hit. Warm hits rely on the fresh start-of-render toolchain observation and media probe; an all-hit render has no post-hit picture-toolchain recheck. This boundary also omits ffprobe and dynamically linked libav/x264 bytes, and `cut.lock` v2 does not pin the encoder executable, so it is not complete cross-machine or same-user concurrent-mutation toolchain capture.
+Scenes are rendered to cache entries keyed by transitive graph content, target, reference-runtime version, the closed `cut-reference-scene-encoding` v2 contract, and a freshly observed combined FFmpeg/ffprobe picture-toolchain identity. Each H.264 scene segment disables reordered B-frames before CUT joins independently encoded segments by concat-demuxer stream copy; otherwise a short segment's negative decode timestamps can be rebased so the joined file declares less time than its presentation span. The versioned codec/B-frame/join contract is in picture-cache identity, preventing reuse of an older incompatible segment, and a one-frame plus three-frame fixture verifies exact final duration through the real delivery boundary. The runtime resolves and no-follow hashes both executables plus their bounded banners, puts the combined integrity in `cut-render-cache` v3 and the full identity in `cut-scene-cache` v4, and spawns the exact absolute FFmpeg executable for a miss. A new encode verifies FFmpeg unchanged after encoder close and before publishing that scene artifact. The scene manifest is closed to format/version/key/hash/frame/runtime/backend and combined-toolchain fields; every new artifact or hit runs the exact bound ffprobe with before/after executable verification and reconciles decoded-frame count, zero start, duration clock, FPS, dimensions, H.264/pixel format, zero B-frames and managed color tags. A hostile hash-consistent one-frame substitution under a four-frame manifest is therefore a miss and rebuild, not a laundered hit. Warm hits rely on the fresh start-of-render combined identity and bound probe; an all-hit render has no later FFmpeg executable recheck. This boundary still omits dynamically linked libav/x264 bytes, and `cut.lock` v3 does not pin either media executable, so it is not complete cross-machine or same-user concurrent-mutation toolchain capture.
 
 The exact pre-master stereo float mix has a separate content-addressed `f32le` artifact boundary keyed by recursively projected reachable audio execution, exact signals, locked resource bytes/probes, relevant package integrity, composition duration/sample rate, runtime, Node/platform and the complete bounded FFmpeg identity digest. A reachable Limiter also keys the CUT processor/static-compatibility identities and exact resolved compatibility executable bytes/banner. Compiler-assigned IDs and source locations are excluded, so unrelated picture insertion/renumbering does not invalidate audio. Every audio hit verifies file length and SHA-256, reconciles exactly `frames × 2 × 4` bytes, rejects non-finite samples, freshly enforces the reachable `Meter.samplePeak` ceiling, and validates closed path-free recursive limiter evidence against the current graph/toolchain. That Meter ceiling is intentionally outside the cache key so a stricter assertion rescans rather than re-renders identical samples. Scene picture streams are concatenated, the cached-or-rendered float boundary is explicitly demuxed for normalization, and the final MP4 is written with H.264 picture already encoded per scene, AAC audio, and fast-start metadata. Stems are independently checked and quantized after raw-float rendering; normalization and final delivery remain downstream uncached stages. See [the audio cache contract](AUDIO_CACHE.md).
 
-The adjacent render-manifest v10 records the SHA-256 of the exact verified
-`cut.lock` bytes, the exact requested stem-manifest SHA-256 and count, runtime,
+The adjacent render-manifest v11 records the SHA-256 of the exact verified
+`cut.lock` bytes, the full path-free combined FFmpeg/ffprobe picture-toolchain
+identity, the exact requested stem-manifest SHA-256 and count, runtime,
 locked build ID, output path/SHA-256, exact duration,
 canvas/FPS, audio graph summary, exact pre-master sample-peak and
 limiter-execution evidence, loudness measurements, mastering-reconciliation
@@ -2363,7 +2366,7 @@ but cannot satisfy the current professional-output or reference-study gate.
 Final reference delivery uses an ordered staged-file rollback group. CUT encodes
 and verifies AAC/color/loudness at a same-parent staged MP4,
 fully prepares requested validated stem WAVs and lock-bound stem-manifest v5,
-hashes its exact canonical staged bytes into render-manifest v10, and stages the
+hashes its exact canonical staged bytes into render-manifest v11, and stages the
 incremental composition and adjacent render manifests before changing a
 public leaf. The WAVs, safely prior-manifest-owned stale-WAV removals, stem
 manifest, MP4 and composition manifest publish before the render manifest; the

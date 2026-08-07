@@ -64,7 +64,24 @@ identity directly; there is no parallel handwritten implementation-file list.
 - operating-system platform and architecture;
 - Node's native-module ABI;
 - Sharp's loaded runtime version; and
-- the loaded libvips version.
+- the loaded libvips version;
+- the selected compositor mode and algorithm; and
+- either the authenticated native compositor binary SHA-256 or the stable
+  built-in JavaScript compositor implementation token.
+
+The embedded backend identity is v2, and the top-level lock format is v3. A
+top-level v1 or v2 lock cannot prove the complete current backend contract and
+is rejected; regenerate it with the current CUT installation.
+Compiler/package imports still do not select or load the compositor. Collection
+happens only on lock/render paths. On `darwin/arm64`, selection authenticates and
+loads the required native binary and fails closed if it is missing or corrupt.
+On Linux, selection uses the built-in JavaScript compositor and never loads the
+Darwin `.node` artifact.
+
+`cut doctor` treats `darwin/arm64` as the only officially supported host.
+`linux/x64` and `linux/arm64` pass the installability check as experimental
+hosts; that pass does not claim macOS parity. Other operating-system and
+architecture pairs fail with a stable supported-host remedy.
 
 Lock validation recomputes both nested integrity hashes. Commands that do not
 execute media collect the current backend during full lock application and
@@ -338,34 +355,37 @@ The writer emits a `cut-render-cache` v3 composition manifest with `format`,
 `nodes` and `scenes`. Its current reader treats that file only as an untrusted
 hit-plan hint and does not yet strict-validate the outer record. A hinted hit
 still has to pass the independently closed scene-artifact boundary. Each
-`cut-scene-cache` v3 manifest accepts exactly `format`, `version`, `key`,
-`sha256`, `frames`, `runtime`, `backendIntegrity` and `toolchainIntegrity`.
+`cut-scene-cache` v4 manifest accepts exactly `format`, `version`, `key`,
+`sha256`, `frames`, `runtime`, `backendIntegrity`, `toolchainIntegrity` and the
+full combined `pictureToolchain` identity.
 FPS, dimensions, pixel/color metadata and the remaining timing contract are
 derived from the current locked composition/target rather than duplicated in
 that manifest. Every new scene or cache hit reconciles those expectations with
 the artifact SHA-256 and ffprobe's decoded frame count, start/duration clock,
 FPS, dimensions, codec/pixel format, B-frame count and managed color tags. A
-backend or FFmpeg identity observed at the start of a later render therefore
-cannot authorize the old scene key.
+A backend, FFmpeg or ffprobe identity observed at the start of a later render
+therefore cannot authorize the old scene key.
 
-This picture identity is not yet part of `cut.lock`. It also hashes the FFmpeg
-executable, not the separately dynamically linked libav and x264 library bytes,
-and the ffprobe used to authorize artifacts remains outside this scene identity.
-Warm hits do not spawn the scene encoder or perform the post-encode executable
-recheck; an all-hit render has no later picture-toolchain recheck before the
-output transaction. The composition-manifest reader is also not a closed
-runtime schema yet. Consequently this materially hardens warm-cache correctness
-but does not claim resistance to a same-user mid-render tool replacement and
-does not satisfy the complete toolchain-lock requirement for CUT 1.0.
+This picture identity is not yet part of `cut.lock`. It binds path-free bounded
+banners and executable hashes for both FFmpeg and ffprobe, but not the separately
+dynamically linked libav and x264 library bytes. Artifact probes execute the
+already-bound absolute ffprobe and verify it before and after each probe. Warm
+hits do not spawn the scene encoder, and an all-hit render still has no later
+FFmpeg executable recheck before the output transaction. The composition-
+manifest reader is also not a closed runtime schema yet. Consequently this
+materially hardens warm-cache correctness but does not claim complete resistance
+to same-user mid-render tool replacement or satisfy CUT 1.0's complete
+toolchain-lock requirement.
 
-Every public full render additionally emits `cut-reference-render` v10 with
+Every public full render additionally emits `cut-reference-render` v11 with
 `lock.sha256` equal to the exact verified `cut.lock` byte digest applied by the
-CLI. This is publication evidence rather than a picture/audio cache input:
+CLI and the exact combined FFmpeg/ffprobe picture-toolchain identity. This is
+publication evidence rather than a picture/audio cache input:
 semantically equivalent lock byte streams may reuse the same media cache, but
 the adjacent manifest always names the current digest. When stems are requested,
-lock-bound stem-manifest v5 names every WAVE digest and v10 additionally binds
+lock-bound stem-manifest v5 names every WAVE digest and v11 additionally binds
 the SHA-256 of those exact canonical manifest bytes. Formal review also
-reconciles v5 runtime/build/duration/sample identity to v10 and verifies each
+reconciles v5 runtime/build/duration/sample identity to v11 and verifies each
 declared WAVE leaf rather than treating the manifest hash as sufficient.
 Missing, malformed or
 unknown render/stem options fail before any project or media work. Current

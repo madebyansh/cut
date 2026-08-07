@@ -4,17 +4,17 @@ import { auditReleaseSbom, ReleaseSbomAuditError } from "./release-sbom.mjs";
 
 const packageJson = Object.freeze({
   name: "cut-lang",
-  version: "0.4.0-alpha.1",
+  version: "0.4.0-alpha.2",
   dependencies: { alpha: "1.0.0" },
 });
 const alphaIntegrity = `sha512-${Buffer.from("a".repeat(64)).toString("base64")}`;
 const optionalIntegrity = `sha512-${Buffer.from("b".repeat(64)).toString("base64")}`;
 const shrinkwrap = Object.freeze({
   name: "cut-lang",
-  version: "0.4.0-alpha.1",
+  version: "0.4.0-alpha.2",
   lockfileVersion: 3,
   packages: {
-    "": { name: "cut-lang", version: "0.4.0-alpha.1", dependencies: { alpha: "1.0.0" } },
+    "": { name: "cut-lang", version: "0.4.0-alpha.2", dependencies: { alpha: "1.0.0" } },
     "node_modules/alpha": {
       version: "1.0.0",
       integrity: alphaIntegrity,
@@ -65,11 +65,11 @@ function fixture() {
     metadata: {
       timestamp: "2026-01-01T00:00:00.000Z",
       component: {
-        "bom-ref": "cut-lang@0.4.0-alpha.1",
+        "bom-ref": "cut-lang@0.4.0-alpha.2",
         type: "library",
         name: "cut-lang",
-        version: "0.4.0-alpha.1",
-        purl: "pkg:npm/cut-lang@0.4.0-alpha.1",
+        version: "0.4.0-alpha.2",
+        purl: "pkg:npm/cut-lang@0.4.0-alpha.2",
       },
     },
     components: [development, optional, alpha],
@@ -77,7 +77,7 @@ function fixture() {
       { ref: "dev-only@3.0.0", dependsOn: [] },
       { ref: "optional-native@2.0.0", dependsOn: [] },
       { ref: "alpha@1.0.0", dependsOn: ["optional-native@2.0.0"] },
-      { ref: "cut-lang@0.4.0-alpha.1", dependsOn: ["dev-only@3.0.0", "alpha@1.0.0"] },
+      { ref: "cut-lang@0.4.0-alpha.2", dependsOn: ["dev-only@3.0.0", "alpha@1.0.0"] },
     ],
   };
 }
@@ -202,7 +202,7 @@ test("release SBOM rejects missing, extra, and drifted production components wit
 test("release SBOM rejects every missing or extra production graph edge", () => {
   {
     const value = fixture();
-    value.dependencies.find((entry) => entry.ref === "cut-lang@0.4.0-alpha.1").dependsOn = [];
+    value.dependencies.find((entry) => entry.ref === "cut-lang@0.4.0-alpha.2").dependsOn = [];
     expectCode(() => auditReleaseSbom(value, packageJson, shrinkwrap), "CUT_RELEASE_SBOM_GRAPH_MISMATCH");
   }
   {

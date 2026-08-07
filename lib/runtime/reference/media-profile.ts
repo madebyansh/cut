@@ -71,7 +71,7 @@ export class ReferenceMediaProfileRequestError extends Error {
 function mediaMetadata(resource: IRResource): ProxyResourceMetadata {
   const metadata = resource.metadata as Partial<ProxyResourceMetadata> | undefined;
   if (resource.state !== "locked" || !resource.sha256 || metadata?.lockVersion !== 2 || !metadata.probe || typeof metadata.bytes !== "number") {
-    throw new ReferenceMediaProfileError("CUT_PROXY_LOCK_STATE", resource, `media resource ${JSON.stringify(resource.id)} is not backed by validated cut.lock v2 metadata`);
+    throw new ReferenceMediaProfileError("CUT_PROXY_LOCK_STATE", resource, `media resource ${JSON.stringify(resource.id)} is not backed by validated cut.lock v3 metadata`);
   }
   return metadata as ProxyResourceMetadata;
 }

@@ -124,7 +124,7 @@ function fixture(options: {
     timebase: { defaultFps: composition.fps, audioSampleRate: 48_000 },
     modules: [{
       specifier: "@cut/geo",
-      version: "0.4.0-alpha.1",
+      version: "0.4.0-alpha.2",
       integrity: "geo-integrity",
     }],
     resources: {},

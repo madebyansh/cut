@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { cutCompilerIdentity, cutIrVersion, cutLanguageVersion, cutPackageAbi, cutProductVersion, cutReferenceRuntimeIdentity } from "../version";
 import { processReferenceAudioLimiter, referenceAudioLimiterIdentity } from "../runtime/reference/audio-limiter";
+import { referenceNativeSourceOverBackend, type ReferenceNativeSourceOverBackend } from "../runtime/reference/native-source-over";
 
 export type CutDoctorCheck = {
   code: string;
@@ -36,6 +37,8 @@ type CutDoctorOptions = Readonly<{
   temporaryRoot?: string;
   /** @internal deterministic platform-capability test seam. */
   platform?: NodeJS.Platform;
+  /** @internal deterministic architecture-capability test seam. */
+  architecture?: string;
 }>;
 
 const maximumCapabilityArtifactBytes = 1024 * 1024;
@@ -117,18 +120,40 @@ function failedCheck(code: string, name: string, detail: string, remedy: string)
 
 /** @internal Pure supported-Node contract used by doctor and tests. */
 export function cutDoctorNodeVersionCheck(version: string): CutDoctorCheck {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$/.exec(version);
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
   const major = match ? Number(match[1]) : Number.NaN;
-  return major === 20
+  const minor = match ? Number(match[2]) : Number.NaN;
+  return (major === 20 && minor >= 19) || major === 24
     ? { code: "CUTD1000", name: "Node.js", status: "pass", detail: `Node.js ${version}` }
-    : failedCheck("CUTD1001", "Node.js", `Node.js ${version} is unsupported`, "Install a Node.js 20.x release. CUT's scoped release does not admit later Node majors without a new compatibility proof.");
+    : failedCheck("CUTD1001", "Node.js", `Node.js ${version} is unsupported`, "Install Node.js 20.19 or Node.js 24.x; later stable Node.js 20 releases are also supported. CUT's scoped release admits only those tested stable major lines.");
 }
 
 /** @internal Pure platform-capability contract used by doctor and tests. */
-export function cutDoctorMediaInputPlatformCheck(operatingSystem: NodeJS.Platform): CutDoctorCheck {
-  return operatingSystem === "win32"
-    ? failedCheck("CUTD1003", "Media input platform", "Windows media lock/probe/render is unsupported because this runtime cannot pass an already-open input descriptor to ffprobe safely.", "Use the current macOS or Linux runtime; Windows support remains a pre-1.0 release gate.")
-    : { code: "CUTD1002", name: "Media input platform", status: "pass", detail: `${operatingSystem} supports descriptor-bound native media probing` };
+export function cutDoctorMediaInputPlatformCheck(operatingSystem: NodeJS.Platform, architecture: string): CutDoctorCheck {
+  if (operatingSystem === "darwin" && architecture === "arm64") {
+    return { code: "CUTD1002", name: "Media input platform", status: "pass", detail: "darwin/arm64 is CUT's officially supported media host" };
+  }
+  if (operatingSystem === "linux" && (architecture === "x64" || architecture === "arm64")) {
+    return { code: "CUTD1002", name: "Media input platform", status: "pass", detail: `linux/${architecture} is an experimental CUT media host; parity with darwin/arm64 is not claimed` };
+  }
+  return failedCheck(
+    "CUTD1003",
+    "Media input platform",
+    `${operatingSystem}/${architecture} is unsupported by CUT's closed Sharp/media host contract.`,
+    "Use darwin/arm64 for official support, or linux/x64 or linux/arm64 for experimental support.",
+  );
+}
+
+/** @internal Pure compositor-acceleration contract used by doctor and tests. */
+export function cutDoctorReferenceCompositorAccelerationCheck(backend: ReferenceNativeSourceOverBackend): CutDoctorCheck {
+  return {
+    code: "CUTD1210",
+    name: "CUT compositor accelerator",
+    status: "pass",
+    detail: backend.mode === "native"
+      ? `native · ${backend.algorithm}`
+      : `JavaScript fallback · native accelerator unavailable for ${backend.platform}/${backend.architecture}`,
+  };
 }
 
 function referenceLimiterCheck(): CutDoctorCheck {
@@ -291,7 +316,8 @@ export async function collectCutDoctorReport(options: CutDoctorOptions = {}): Pr
   const checks: CutDoctorCheck[] = [];
   const run = options.runTool ?? runBoundedDoctorTool;
   const operatingSystem = options.platform ?? process.platform;
-  checks.push(cutDoctorMediaInputPlatformCheck(operatingSystem));
+  const architecture = options.architecture ?? process.arch;
+  checks.push(cutDoctorMediaInputPlatformCheck(operatingSystem, architecture));
   checks.push(cutDoctorNodeVersionCheck(process.versions.node));
 
   const [ffmpeg, ffprobe, encoders] = await Promise.all([
@@ -325,6 +351,11 @@ export async function collectCutDoctorReport(options: CutDoctorOptions = {}): Pr
   } catch {
     checks.push(failedCheck("CUTD1201", "Reference compositor", "Sharp/libvips could not load for this operating system and architecture.", "Reinstall cut-lang for this operating system and architecture."));
   }
+  try {
+    checks.push(cutDoctorReferenceCompositorAccelerationCheck(referenceNativeSourceOverBackend()));
+  } catch {
+    checks.push(failedCheck("CUTD1211", "CUT compositor accelerator", "The authenticated native accelerator could not load on this supported host.", "Reinstall the exact cut-lang package and rerun cut doctor."));
+  }
 
   return {
     format: "cut-doctor-report",
@@ -338,7 +369,7 @@ export async function collectCutDoctorReport(options: CutDoctorOptions = {}): Pr
       packageAbi: cutPackageAbi,
       runtime: cutReferenceRuntimeIdentity,
     },
-    platform: { os: operatingSystem, architecture: process.arch, node: process.versions.node },
+    platform: { os: operatingSystem, architecture, node: process.versions.node },
     checks,
   };
 }

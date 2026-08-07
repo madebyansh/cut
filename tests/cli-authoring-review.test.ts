@@ -136,6 +136,7 @@ test("public review CLI carries the validated lock backend to the post-snapshot 
     lock.toolchain.referenceBackend = createReferenceBackendIdentity(
       lock.toolchain.referenceBackend.dependencies,
       { ...lock.toolchain.referenceBackend.native, architecture: `${lock.toolchain.referenceBackend.native.architecture}-other` },
+      { ...lock.toolchain.referenceBackend.compositor, architecture: `${lock.toolchain.referenceBackend.compositor.architecture}-other` },
     );
     await writeFile(resolve(root, "foreign.lock"), JSON.stringify(lock));
 

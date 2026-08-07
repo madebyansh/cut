@@ -27,12 +27,20 @@ function candidateFiles() {
   return result.stdout.toString("utf8").split("\0").filter(Boolean).sort();
 }
 
-const files = candidateFiles();
+const candidates = candidateFiles();
+const files = [];
 const violations = [];
 let bytes = 0;
-for (const path of files) {
+for (const path of candidates) {
   const parts = path.split("/");
-  const state = await lstat(path);
+  let state;
+  try {
+    state = await lstat(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") continue;
+    throw error;
+  }
+  files.push(path);
   if (state.isSymbolicLink()) violations.push({ code: "CUTSEC1001", path, reason: "public candidate contains a symbolic link" });
   if (!state.isFile()) continue;
   bytes += state.size;

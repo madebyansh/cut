@@ -735,7 +735,7 @@ function validateLockedInput(value: unknown, path: string, limits: CutTableQuery
   const id = identifier(rawResource.id, childPath(resourcePath, "id"), "CUT_TABLE_RESOURCE_TYPE");
   if (rawResource.kind !== "data") fail("CUT_TABLE_RESOURCE_STATE", childPath(resourcePath, "kind"), "must be a DataAsset resource");
   if (rawResource.state !== "locked") fail("CUT_TABLE_RESOURCE_STATE", childPath(resourcePath, "state"), "must be locked before table bytes can be read");
-  if (rawResource.lockVersion !== 2) fail("CUT_TABLE_RESOURCE_STATE", childPath(resourcePath, "lockVersion"), "requires validated cut.lock v2 state");
+  if (rawResource.lockVersion !== 2) fail("CUT_TABLE_RESOURCE_STATE", childPath(resourcePath, "lockVersion"), "requires validated cut.lock v3 state");
   const sha256 = digest(rawResource.sha256, childPath(resourcePath, "sha256"), "CUT_TABLE_RESOURCE_STATE");
   const declaredBytes = safeInteger(rawResource.bytes, childPath(resourcePath, "bytes"), 1, limits.maxInputBytes, "CUT_TABLE_RESOURCE_LIMIT");
   const suppliedBytes = input.bytes;
@@ -793,7 +793,7 @@ function loadValidatedTable(input: ReturnType<typeof validateLockedInput>, path:
 }
 
 /**
- * Load one strict cut-table v1 only after the caller supplies cut.lock v2 state
+ * Load one strict cut-table v1 only after the caller supplies cut.lock v3 state
  * and exact bytes. This is the resource/runtime boundary; it is intentionally
  * not a compiler helper.
  */

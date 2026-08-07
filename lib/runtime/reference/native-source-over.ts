@@ -17,6 +17,31 @@ type NativeSourceOverIdentity = Readonly<{
 
 export const referenceNativeSourceOverIdentity = Object.freeze(identityJson as NativeSourceOverIdentity);
 
+export const referenceJavascriptSourceOverImplementation =
+  "cut-reference-javascript-source-over-v1" as const;
+
+export type ReferenceNativeSourceOverBackend =
+  | Readonly<{
+    mode: "native";
+    platform: NodeJS.Platform;
+    architecture: string;
+    algorithm: string;
+    binarySha256: string;
+  }>
+  | Readonly<{
+    mode: "javascript";
+    platform: NodeJS.Platform;
+    architecture: string;
+    algorithm: string;
+    implementation: typeof referenceJavascriptSourceOverImplementation;
+  }>;
+
+type ReferenceNativeSourceOverBackendCommon = Readonly<{
+  platform: NodeJS.Platform;
+  architecture: string;
+  algorithm: string;
+}>;
+
 export type ReferenceNativeSourceOverTables = Readonly<{
   srgbToLinear: Float64Array;
   thresholds: Float64Array;
@@ -100,6 +125,25 @@ function runtimeModule() {
     rasterRetainedMediaViewport: candidate.rasterRetainedMediaViewport,
   });
   return loaded;
+}
+
+export function referenceNativeSourceOverBackend(): ReferenceNativeSourceOverBackend {
+  const common: ReferenceNativeSourceOverBackendCommon = {
+    platform: process.platform,
+    architecture: process.arch,
+    algorithm: referenceNativeSourceOverIdentity.algorithm,
+  };
+  return runtimeModule()
+    ? Object.freeze({
+      mode: "native",
+      ...common,
+      binarySha256: referenceNativeSourceOverIdentity.binary.sha256,
+    })
+    : Object.freeze({
+      mode: "javascript",
+      ...common,
+      implementation: referenceJavascriptSourceOverImplementation,
+    });
 }
 
 export type ReferenceNativeRetainedMediaRasterResult = Readonly<{

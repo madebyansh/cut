@@ -125,7 +125,8 @@ only bytes `[startSample * 8, endSampleExclusive * 8)` into private preview
 staging, hashes that exact slice, and never exposes the cache file itself as a
 delivery input.
 
-The range-preview manifest is `cut-reference-range-preview` version `3`.
+The range-preview manifest is `cut-reference-range-preview` version `4` and
+binds the exact combined FFmpeg/ffprobe picture-toolchain identity.
 `execution.audioSource.mode` is either `full-program-cache-slice`, with the
 complete current cache-hit evidence and exact half-open slice bytes/hash, or
 `selected-execution`, with the failed probe reason plus the independently

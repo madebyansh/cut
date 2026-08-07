@@ -287,7 +287,7 @@ export preview = render(main, width: 128px, height: 72px, codec: "h264");
         publication: first.execution.cache.publication,
       },
       {
-        version: 3,
+        version: 4,
         status: "miss",
         reason: "CUT_PREVIEW_PICTURE_CACHE_COLD",
         verification: "sha256+bytes+h264-decoded-contract",

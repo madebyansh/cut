@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0-alpha.2
+
+- Added experimental Linux x64/arm64 packaging through the JavaScript compositor fallback.
+- Added maintained Node 24 support while retaining the tested Node 20.19 compatibility floor.
+- Bound compositor and native-media implementation identity into locks and encoded caches.
+- Added a clean installed-package Ubuntu media smoke without claiming cross-platform pixel or bitstream parity.
+- Fixed exact-decimal admission, range lexing, Unicode diagnostics, parser recovery, and function-default dependency handling.
+- Bumped the top-level lock format because backend identity v2 is intentionally incompatible with old locks.
+
 ## 0.4.0-alpha.1
 
 - Published the CUT compiler, runtime, schemas, tests, examples, and VS Code source.
