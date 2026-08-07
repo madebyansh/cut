@@ -3,7 +3,7 @@ dist-cli/
 .cut/
 out/
 output/
-review/
+/review/
 coverage/
 *.log
 *.tsbuildinfo
