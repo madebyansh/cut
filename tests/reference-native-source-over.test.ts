@@ -14,12 +14,83 @@ import {
   type RgbaBlendMode,
 } from "../lib/runtime/reference/compositing";
 import {
+  executeReferenceNativeLimiterEnvelopeRange,
+  executeReferenceNativeRetainedAlphaScale,
   executeReferenceNativeRetainedMediaViewportRaster,
+  executeReferenceNativeRgbaAlphaBounds,
+  executeReferenceNativeScaleTranslationQ16,
   referenceJavascriptSourceOverImplementation,
   referenceNativeSourceOverBackend,
   referenceNativeSourceOverIdentity,
   verifyReferenceNativeSourceOverBinaryForTest,
 } from "../lib/runtime/reference/native-source-over";
+import { referenceAudioLimiterLimits } from "../lib/runtime/reference/audio-limiter";
+import { referenceAudioTruePeakCoefficients } from "../lib/runtime/reference/audio-true-peak";
+
+const limiterPhases = referenceAudioLimiterLimits.oversampleFactor;
+const limiterTaps = referenceAudioLimiterLimits.tapsPerPhase;
+const limiterFirOrder = limiterPhases * limiterTaps - 1;
+const limiterCoefficients = new Float64Array(referenceAudioTruePeakCoefficients.flat());
+
+function limiterEnvelopeWindow(totalFrames: number, rangeStart: number, rangeEnd: number) {
+  const oversampledStart = rangeStart === 0
+    ? 0
+    : Math.ceil((8 * rangeStart + limiterFirOrder) / 2);
+  const oversampledEnd = rangeEnd === totalFrames
+    ? totalFrames * limiterPhases + limiterFirOrder - (limiterPhases - 1)
+    : 4 * rangeEnd + 24;
+  const convolutionStart = Math.max(0, Math.ceil((oversampledStart - limiterFirOrder) / limiterPhases));
+  const convolutionEnd = Math.min(totalFrames, Math.floor((oversampledEnd - 1) / limiterPhases) + 1);
+  return {
+    oversampledStart,
+    oversampledEnd,
+    readStart: Math.min(rangeStart, convolutionStart),
+    readEnd: Math.max(rangeEnd, convolutionEnd),
+  };
+}
+
+function limiterEnvelopeControl(
+  decoded: Float32Array,
+  totalFrames: number,
+  rangeStart: number,
+  rangeEnd: number,
+  readStart: number,
+  oversampledStart: number,
+  oversampledEnd: number,
+) {
+  const envelope = new Float64Array(rangeEnd - rangeStart);
+  let anyNonzero = false;
+  for (const sample of decoded) if (sample !== 0) anyNonzero = true;
+  for (let frame = rangeStart; frame < rangeEnd; frame += 1) {
+    const local = (frame - readStart) * 2;
+    envelope[frame - rangeStart] = Math.max(Math.abs(decoded[local]!), Math.abs(decoded[local + 1]!));
+  }
+  if (!anyNonzero) return envelope;
+  for (let baseFrame = oversampledStart / limiterPhases;
+    baseFrame < oversampledEnd / limiterPhases;
+    baseFrame += 1) {
+    const firstInputFrame = Math.max(0, baseFrame - (limiterTaps - 1));
+    const lastInputFrame = Math.min(totalFrames - 1, baseFrame);
+    const sourceFrame = Math.max(0, Math.min(totalFrames - 1, baseFrame - 6));
+    for (let phase = 0; phase < limiterPhases; phase += 1) {
+      let left = 0, right = 0, coefficientRow = baseFrame - firstInputFrame;
+      for (let inputFrame = firstInputFrame;
+        inputFrame <= lastInputFrame;
+        inputFrame += 1, coefficientRow -= 1) {
+        const local = (inputFrame - readStart) * 2;
+        const inputLeft = decoded[local]!, inputRight = decoded[local + 1]!;
+        if (inputLeft === 0 && inputRight === 0) continue;
+        const coefficient = referenceAudioTruePeakCoefficients[coefficientRow]![phase]!;
+        left += inputLeft * coefficient;
+        right += inputRight * coefficient;
+      }
+      if (sourceFrame < rangeStart || sourceFrame >= rangeEnd) continue;
+      const peak = Math.max(Math.abs(left), Math.abs(right));
+      if (peak > envelope[sourceFrame - rangeStart]!) envelope[sourceFrame - rangeStart] = peak;
+    }
+  }
+  return envelope;
+}
 
 function retainedRasterControl(input: Readonly<{
   source: Uint8Array;
@@ -180,6 +251,253 @@ test("unsupported blend semantics fail closed to the unchanged JS compositor", (
   assert.equal(automatic.counters.nativeExecutions, 0);
   assert.equal(automatic.counters.nativeFastNormalStraightPixels, 0);
   assert.ok(automatic.counters.scalarPixels > 0);
+});
+
+test("authenticated native alpha support and retained opacity are exact, isolated, and bounded", () => {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return;
+  const width = 17, height = 9;
+  const source = new Uint8Array(width * height * 4);
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const offset = pixel * 4;
+    source[offset] = (pixel * 31 + 7) & 255;
+    source[offset + 1] = (pixel * 67 + 11) & 255;
+    source[offset + 2] = (pixel * 101 + 13) & 255;
+    source[offset + 3] = pixel % 7 === 0 ? 0 : [1, 63, 127, 128, 191, 254, 255][pixel % 7]!;
+  }
+  const before = Buffer.from(source);
+  const expectedBounds = (() => {
+    let left = width, top = height, right = 0, bottom = 0, nonzeroAlphaPixels = 0;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (source[(y * width + x) * 4 + 3] === 0) continue;
+        nonzeroAlphaPixels += 1;
+        left = Math.min(left, x); top = Math.min(top, y);
+        right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1);
+      }
+    }
+    const empty = nonzeroAlphaPixels === 0;
+    return { empty, left: empty ? 0 : left, top: empty ? 0 : top, right: empty ? 0 : right, bottom: empty ? 0 : bottom, nonzeroAlphaPixels };
+  })();
+  assert.deepEqual(executeReferenceNativeRgbaAlphaBounds({ source, width, height }), expectedBounds);
+
+  for (const opacity of [1 / 255, 0.125, 0.5, 0.731, 254 / 255]) {
+    const bounds = { left: 2, top: 1, right: 15, bottom: 8 };
+    const output = new Uint8Array(source.byteLength).fill(0xaa);
+    const result = executeReferenceNativeRetainedAlphaScale({ source, output, width, height, bounds, opacity });
+    const expected = new Uint8Array(source.byteLength);
+    let left = width, top = height, right = 0, bottom = 0, nonzeroAlphaPixels = 0;
+    for (let y = bounds.top; y < bounds.bottom; y += 1) {
+      for (let x = bounds.left; x < bounds.right; x += 1) {
+        const offset = (y * width + x) * 4;
+        const alpha = Math.round(source[offset + 3]! * opacity);
+        if (alpha === 0) continue;
+        expected.set(source.subarray(offset, offset + 3), offset);
+        expected[offset + 3] = alpha;
+        nonzeroAlphaPixels += 1;
+        left = Math.min(left, x); top = Math.min(top, y);
+        right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1);
+      }
+    }
+    const empty = nonzeroAlphaPixels === 0;
+    assert.deepEqual(output, expected, `native retained opacity bytes at ${opacity}`);
+    assert.deepEqual(result, {
+      empty,
+      left: empty ? 0 : left,
+      top: empty ? 0 : top,
+      right: empty ? 0 : right,
+      bottom: empty ? 0 : bottom,
+      nonzeroAlphaPixels,
+    });
+  }
+  assert.deepEqual(Buffer.from(source), before, "native alpha kernels must not mutate caller-owned source bytes");
+  assert.throws(
+    () => executeReferenceNativeRetainedAlphaScale({
+      source,
+      output: source,
+      width,
+      height,
+      bounds: { left: 0, top: 0, right: width, bottom: height },
+      opacity: 0.5,
+    }),
+    /separate|ownership|typed boundary/u,
+  );
+  assert.throws(
+    () => executeReferenceNativeRgbaAlphaBounds({ source: source.subarray(1), width, height }),
+    /typed boundary/u,
+  );
+});
+
+test("authenticated native Q16 scale-translation is scalar-law exact and rejects hostile ownership or axes", () => {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return;
+  const sourceWidth = 3, sourceHeight = 2, outputWidth = 5, outputHeight = 3;
+  const source = new Uint8Array([
+    255, 0, 0, 255, 0, 255, 0, 128, 9, 8, 7, 0,
+    0, 0, 255, 64, 255, 255, 255, 254, 50, 60, 70, 255,
+  ]);
+  const before = Buffer.from(source);
+  const sourceXQ16 = new Float64Array([-32768, 0, 32768, 65536, 98304]);
+  const sourceYQ16 = new Float64Array([-32768, 0, 32768]);
+  const output = new Uint8Array(outputWidth * outputHeight * 4).fill(0xaa);
+  const result = executeReferenceNativeScaleTranslationQ16({
+    source, output, sourceWidth, sourceHeight, sourceXQ16, sourceYQ16, outputWidth, outputHeight,
+  });
+  assert.ok(result);
+  const scalar = executeReferenceNativeScaleTranslationQ16({
+    source: source.slice(),
+    output: new Uint8Array(output.byteLength),
+    sourceWidth,
+    sourceHeight,
+    sourceXQ16,
+    sourceYQ16,
+    outputWidth,
+    outputHeight,
+  });
+  assert.deepEqual(scalar, result);
+  const repeated = new Uint8Array(output.byteLength);
+  executeReferenceNativeScaleTranslationQ16({
+    source, output: repeated, sourceWidth, sourceHeight, sourceXQ16, sourceYQ16, outputWidth, outputHeight,
+  });
+  assert.deepEqual(repeated, output);
+  assert.deepEqual(Buffer.from(source), before);
+  assert.throws(
+    () => executeReferenceNativeScaleTranslationQ16({
+      source,
+      output: source,
+      sourceWidth,
+      sourceHeight,
+      sourceXQ16,
+      sourceYQ16,
+      outputWidth,
+      outputHeight,
+    }),
+    /typed boundary|alias/u,
+  );
+  const hostileX = new Float64Array(sourceXQ16);
+  hostileX[2] = Number.NaN;
+  assert.throws(
+    () => executeReferenceNativeScaleTranslationQ16({
+      source,
+      output: new Uint8Array(output.byteLength),
+      sourceWidth,
+      sourceHeight,
+      sourceXQ16: hostileX,
+      sourceYQ16,
+      outputWidth,
+      outputHeight,
+    }),
+    /typed boundary/u,
+  );
+});
+
+test("authenticated native limiter envelope is Float64-byte-identical to the scalar law across chunk boundaries", () => {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return;
+  const totalFrames = 257;
+  let state = 0x6d2b79f5;
+  const source = new Float32Array(totalFrames * 2);
+  for (let index = 0; index < source.length; index += 1) {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    source[index] = index % 37 === 0 ? 0 : Math.fround(((state / 0xffff_ffff) * 2 - 1) * 0.95);
+  }
+  const sourceBefore = Buffer.from(source.buffer.slice(0));
+  for (const [rangeStart, rangeEnd] of [[0, 64], [64, 128], [193, 257]] as const) {
+    const window = limiterEnvelopeWindow(totalFrames, rangeStart, rangeEnd);
+    const decoded = source.slice(window.readStart * 2, window.readEnd * 2);
+    const decodedBefore = Buffer.from(decoded.buffer.slice(0));
+    const output = new Float64Array(rangeEnd - rangeStart);
+    const result = executeReferenceNativeLimiterEnvelopeRange({
+      decoded,
+      output,
+      coefficients: limiterCoefficients,
+      totalFrames,
+      rangeStart,
+      rangeEnd,
+      readStart: window.readStart,
+      oversampledStart: window.oversampledStart,
+      oversampledEnd: window.oversampledEnd,
+      maximumAbsoluteInputSample: referenceAudioLimiterLimits.maximumAbsoluteInputSample,
+      maximumEnvelopeLinear: referenceAudioLimiterLimits.maximumEnvelopeLinear,
+    });
+    assert.ok(result);
+    assert.equal(result.frames, rangeEnd - rangeStart);
+    assert.equal(result.firBaseFrames, (window.oversampledEnd - window.oversampledStart) / limiterPhases);
+    const expected = limiterEnvelopeControl(
+      decoded,
+      totalFrames,
+      rangeStart,
+      rangeEnd,
+      window.readStart,
+      window.oversampledStart,
+      window.oversampledEnd,
+    );
+    assert.deepEqual(Buffer.from(output.buffer), Buffer.from(expected.buffer));
+    assert.deepEqual(Buffer.from(decoded.buffer), decodedBefore);
+    assert.notEqual(output.buffer, decoded.buffer);
+  }
+  assert.deepEqual(Buffer.from(source.buffer), sourceBefore);
+
+  const zero = new Float32Array(16);
+  const zeroOutput = new Float64Array(8);
+  const zeroResult = executeReferenceNativeLimiterEnvelopeRange({
+    decoded: zero,
+    output: zeroOutput,
+    coefficients: limiterCoefficients,
+    totalFrames: 8,
+    rangeStart: 0,
+    rangeEnd: 8,
+    readStart: 0,
+    oversampledStart: 0,
+    oversampledEnd: 8 * limiterPhases + limiterFirOrder - (limiterPhases - 1),
+    maximumAbsoluteInputSample: referenceAudioLimiterLimits.maximumAbsoluteInputSample,
+    maximumEnvelopeLinear: referenceAudioLimiterLimits.maximumEnvelopeLinear,
+  });
+  assert.deepEqual(zeroResult, { frames: 8, firBaseFrames: 0 });
+  assert.deepEqual(zeroOutput, new Float64Array(8));
+});
+
+test("native limiter envelope rejects malformed work, nonfinite bytes, and aliased ownership", () => {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return;
+  const valid = {
+    decoded: new Float32Array([0.5, -0.25]),
+    output: new Float64Array(1),
+    coefficients: limiterCoefficients,
+    totalFrames: 1,
+    rangeStart: 0,
+    rangeEnd: 1,
+    readStart: 0,
+    oversampledStart: 0,
+    oversampledEnd: limiterPhases + limiterFirOrder - (limiterPhases - 1),
+    maximumAbsoluteInputSample: referenceAudioLimiterLimits.maximumAbsoluteInputSample,
+    maximumEnvelopeLinear: referenceAudioLimiterLimits.maximumEnvelopeLinear,
+  } as const;
+  assert.throws(
+    () => executeReferenceNativeLimiterEnvelopeRange({ ...valid, output: new Float64Array(2) }),
+    /exact typed boundary/,
+  );
+  const nonfinite = valid.decoded.slice();
+  nonfinite[0] = Number.NaN;
+  assert.throws(
+    () => executeReferenceNativeLimiterEnvelopeRange({ ...valid, decoded: nonfinite }),
+    /invalid sample/,
+  );
+  const badCoefficients = valid.coefficients.slice();
+  badCoefficients[0] = Number.POSITIVE_INFINITY;
+  assert.throws(
+    () => executeReferenceNativeLimiterEnvelopeRange({ ...valid, coefficients: badCoefficients }),
+    /exact typed boundary/,
+  );
+  const shared = new ArrayBuffer(8);
+  assert.throws(
+    () => executeReferenceNativeLimiterEnvelopeRange({
+      ...valid,
+      decoded: new Float32Array(shared),
+      output: new Float64Array(shared),
+    }),
+    /exact typed boundary/,
+  );
+  assert.throws(
+    () => executeReferenceNativeLimiterEnvelopeRange({ ...valid, readStart: 1 }),
+    /inconsistent|cover/,
+  );
 });
 
 test("authenticated native retained-media raster is byte-exact, bounded, and mutation isolated", () => {

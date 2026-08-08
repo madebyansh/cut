@@ -10,6 +10,7 @@ import { loadCutAvIr } from "../lib/language/ir-loader";
 import { parseCutLanguage } from "../lib/language/parser";
 import { rational } from "../lib/language/rational";
 import { createIncrementalRenderPlan, finalizeGraphHashes } from "../lib/runtime/graph";
+import { referenceNativeSourceOverBackend } from "../lib/runtime/reference/native-source-over";
 import {
   createReferenceRetainedAlphaScaleDiagnostic,
   ReferenceRetainedSurfaceError,
@@ -637,6 +638,7 @@ test("retained opacity aligned-word dispatch and scalar fallback preserve the fr
   const aligned = { data: alignedBytes, width, height };
   const alignedSnapshot = Buffer.from(alignedBytes);
   const littleEndian = new Uint8Array(new Uint32Array([0x0102_0304]).buffer)[0] === 0x04;
+  const native = referenceNativeSourceOverBackend().mode === "native";
   const observationIdentity = (mode: "automatic" | "forced-scalar") =>
     createHash("sha256").update(
       `${referenceRetainedAlphaScaleKernelAlgorithmVersion};mode=${mode}`,
@@ -683,10 +685,11 @@ test("retained opacity aligned-word dispatch and scalar fallback preserve the fr
     assert.equal(automaticSnapshot.requests, 1);
     assert.equal(automaticSnapshot.identitySkips, 0);
     assert.equal(automaticSnapshot.zeroOpacityExecutions, 0);
-    assert.equal(automaticSnapshot.alignedWordExecutions, littleEndian ? 1 : 0);
-    assert.equal(automaticSnapshot.scalarExecutions, littleEndian ? 0 : 1);
+    assert.equal(automaticSnapshot.nativeExecutions, native ? 1 : 0);
+    assert.equal(automaticSnapshot.alignedWordExecutions, !native && littleEndian ? 1 : 0);
+    assert.equal(automaticSnapshot.scalarExecutions, native || littleEndian ? 0 : 1);
     assert.equal(automaticSnapshot.unalignedFallbackExecutions, 0);
-    assert.equal(automaticSnapshot.endianFallbackExecutions, littleEndian ? 0 : 1);
+    assert.equal(automaticSnapshot.endianFallbackExecutions, native || littleEndian ? 0 : 1);
     assert.equal(automaticSnapshot.alphaBytesObserved, width * height);
     assert.deepEqual(
       referenceRetainedAlphaScaleDiagnosticSnapshot(scalarDiagnostic),
@@ -702,6 +705,7 @@ test("retained opacity aligned-word dispatch and scalar fallback preserve the fr
         automaticExecutions: 0,
         scalarExecutions: 1,
         alignedWordExecutions: 0,
+        nativeExecutions: 0,
         unalignedFallbackExecutions: 0,
         endianFallbackExecutions: 0,
         alphaBytesObserved: width * height,
@@ -735,10 +739,11 @@ test("retained opacity aligned-word dispatch and scalar fallback preserve the fr
       identitySkips: 0,
       zeroOpacityExecutions: 0,
       automaticExecutions: 1,
-      scalarExecutions: 1,
+      scalarExecutions: native ? 0 : 1,
       alignedWordExecutions: 0,
-      unalignedFallbackExecutions: 1,
-      endianFallbackExecutions: littleEndian ? 0 : 1,
+      nativeExecutions: native ? 1 : 0,
+      unalignedFallbackExecutions: native ? 0 : 1,
+      endianFallbackExecutions: native || littleEndian ? 0 : 1,
       alphaBytesObserved: width * height,
     },
   );
@@ -815,6 +820,7 @@ test("retained opacity aligned-word dispatch and scalar fallback preserve the fr
       automaticExecutions: 0,
       scalarExecutions: 0,
       alignedWordExecutions: 0,
+      nativeExecutions: 0,
       unalignedFallbackExecutions: 0,
       endianFallbackExecutions: 0,
       alphaBytesObserved: 0,

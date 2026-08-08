@@ -1,11 +1,16 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import {
+  executeReferenceNativeRetainedAlphaScale,
+  executeReferenceNativeRetainedTranslationQ16,
+  referenceNativeSourceOverBackend,
+} from "./native-source-over";
 
 export const referenceRetainedSurfacePhaseUnits = 65_536;
 export const referenceRetainedSurfaceAlphaSupportAlgorithmVersion =
   "cut-reference-retained-surface-alpha-support-v4" as const;
 export const referenceRetainedAlphaScaleKernelAlgorithmVersion =
-  "cut-reference-retained-alpha-scale-kernel-v1" as const;
+  "cut-reference-retained-alpha-scale-kernel-v2" as const;
 
 export const referenceRetainedSurfaceLimits = Object.freeze({
   maximumCanvasPixels: 16_777_216,
@@ -75,6 +80,7 @@ export type ReferenceRetainedAlphaScaleDiagnosticSnapshot =
     automaticExecutions: number;
     scalarExecutions: number;
     alignedWordExecutions: number;
+    nativeExecutions: number;
     unalignedFallbackExecutions: number;
     endianFallbackExecutions: number;
     alphaBytesObserved: number;
@@ -159,6 +165,7 @@ type MutableReferenceRetainedAlphaScaleDiagnostic = {
   automaticExecutions: number;
   scalarExecutions: number;
   alignedWordExecutions: number;
+  nativeExecutions: number;
   unalignedFallbackExecutions: number;
   endianFallbackExecutions: number;
   alphaBytesObserved: number;
@@ -203,6 +210,7 @@ export function createReferenceRetainedAlphaScaleDiagnostic(
     automaticExecutions: 0,
     scalarExecutions: 0,
     alignedWordExecutions: 0,
+    nativeExecutions: 0,
     unalignedFallbackExecutions: 0,
     endianFallbackExecutions: 0,
     alphaBytesObserved: 0,
@@ -254,6 +262,7 @@ export function validateReferenceRetainedAlphaScaleKernelEvidence(
     "automaticExecutions",
     "scalarExecutions",
     "alignedWordExecutions",
+    "nativeExecutions",
     "unalignedFallbackExecutions",
     "endianFallbackExecutions",
     "alphaBytesObserved",
@@ -272,9 +281,10 @@ export function validateReferenceRetainedAlphaScaleKernelEvidence(
   const automaticExecutions = evidence.automaticExecutions as number;
   const scalarExecutions = evidence.scalarExecutions as number;
   const alignedWordExecutions = evidence.alignedWordExecutions as number;
+  const nativeExecutions = evidence.nativeExecutions as number;
   const unalignedFallbackExecutions = evidence.unalignedFallbackExecutions as number;
   const endianFallbackExecutions = evidence.endianFallbackExecutions as number;
-  const kernelExecutions = scalarExecutions + alignedWordExecutions;
+  const kernelExecutions = scalarExecutions + alignedWordExecutions + nativeExecutions;
   if (requests !== identitySkips + zeroOpacityExecutions + kernelExecutions
     || unalignedFallbackExecutions > scalarExecutions
     || endianFallbackExecutions > scalarExecutions
@@ -282,6 +292,7 @@ export function validateReferenceRetainedAlphaScaleKernelEvidence(
     || (evidence.mode === "forced-scalar"
       && (automaticExecutions !== 0
         || alignedWordExecutions !== 0
+        || nativeExecutions !== 0
         || unalignedFallbackExecutions !== 0
         || endianFallbackExecutions !== 0))) {
     fail(
@@ -627,6 +638,34 @@ function translateReferenceRetainedSurfaceInternal(
   }
 
   const denominator = units * units;
+  const native = executeReferenceNativeRetainedTranslationQ16({
+    source: surface.data,
+    output,
+    sourceWidth: surface.width,
+    sourceHeight: surface.height,
+    canvasWidth,
+    canvasHeight,
+    integerX: horizontal.integer,
+    integerY: vertical.integer,
+    phaseX: horizontal.phase,
+    phaseY: vertical.phase,
+    bounds: { left: boundedLeft, top: boundedTop, right: boundedRight, bottom: boundedBottom },
+  });
+  if (native) {
+    return publishAlphaSupport(
+      { data: output, width: canvasWidth, height: canvasHeight },
+      "fractional-sample",
+      {
+        left: native.left,
+        top: native.top,
+        right: native.right,
+        bottom: native.bottom,
+        nonzeroAlphaPixels: native.nonzeroAlphaPixels,
+      },
+      native.alphaBytesObserved,
+      native.destinationPixelsVisited,
+    );
+  }
   const support = emptyMutableAlphaSupport(canvasWidth, canvasHeight);
   let alphaBytesObserved = 0;
   for (let destinationY = firstY; destinationY <= lastY; destinationY += 1) {
@@ -774,12 +813,51 @@ export function scaleReferenceRetainedSurfaceAlpha(
   }
 
   const known = referenceRetainedSurfaceAlphaSupport(surface);
-  const output = known ? Buffer.alloc(surface.data.byteLength) : Buffer.from(surface.data);
   const support = emptyMutableAlphaSupport(surface.width, surface.height);
   const left = known ? known.left : 0;
   const top = known ? known.top : 0;
   const right = known ? known.right : surface.width;
   const bottom = known ? known.bottom : surface.height;
+  const alphaBytesObserved = (right - left) * (bottom - top);
+  if (diagnosticCounters) {
+    diagnosticCounters.alphaBytesObserved += alphaBytesObserved;
+    if (diagnostic?.mode === "automatic") diagnosticCounters.automaticExecutions += 1;
+  }
+
+  if (diagnostic?.mode !== "forced-scalar"
+    && referenceNativeSourceOverBackend().mode === "native") {
+    const output = Buffer.allocUnsafe(surface.data.byteLength);
+    const native = executeReferenceNativeRetainedAlphaScale({
+      source: surface.data,
+      output,
+      width: surface.width,
+      height: surface.height,
+      bounds: { left, top, right, bottom },
+      opacity,
+    });
+    if (!native) {
+      fail(
+        "CUT_VISUAL_SUBPIXEL_SURFACE",
+        "authenticated native retained-alpha backend disappeared during one execution.",
+      );
+    }
+    if (diagnosticCounters) diagnosticCounters.nativeExecutions += 1;
+    return publishAlphaSupport(
+      { data: output, width: surface.width, height: surface.height },
+      "alpha-scale",
+      {
+        left: native.left,
+        top: native.top,
+        right: native.right,
+        bottom: native.bottom,
+        nonzeroAlphaPixels: native.nonzeroAlphaPixels,
+      },
+      alphaBytesObserved,
+      (right - left) * (bottom - top),
+    );
+  }
+
+  const output = known ? Buffer.alloc(surface.data.byteLength) : Buffer.from(surface.data);
   if (known && !known.empty) {
     // Known retained support lets the zero-filled output remain authoritative
     // outside the exact alpha rectangle. Copy each admitted source row in the
@@ -792,11 +870,6 @@ export function scaleReferenceRetainedSurfaceAlpha(
       const rowStart = (y * surface.width + left) * 4;
       output.set(surface.data.subarray(rowStart, rowStart + rowBytes), rowStart);
     }
-  }
-  const alphaBytesObserved = (right - left) * (bottom - top);
-  if (diagnosticCounters) {
-    diagnosticCounters.alphaBytesObserved += alphaBytesObserved;
-    if (diagnostic?.mode === "automatic") diagnosticCounters.automaticExecutions += 1;
   }
 
   // RGBA bytes form 0xAABBGGRR words only on little-endian hosts. Both views

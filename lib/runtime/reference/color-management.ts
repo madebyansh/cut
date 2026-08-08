@@ -317,6 +317,42 @@ function encodeCode(encoded: number, range: ReferenceColorRange) {
   return Math.round(range === "limited" ? 16 + encoded * 219 : encoded * 255);
 }
 
+const colorConversionTables = new Map<string, Uint8Array>();
+
+/**
+ * Every managed SDR surface is RGBA8 and each color channel is independent.
+ * Derive the complete byte mapping once from CUT's existing scalar transfer
+ * law, then reuse those exact bytes for every pixel. This is an execution
+ * optimization only: the scalar law remains the authority that constructs the
+ * table, including JavaScript exponentiation and rounding semantics.
+ */
+function colorConversionTable(from: ReferenceColorProfile, to: ReferenceColorProfile) {
+  const key = `${from}\u0000${to}`;
+  const existing = colorConversionTables.get(key);
+  if (existing) return existing;
+  const input = profileMetadata[from], output = profileMetadata[to];
+  const table = new Uint8Array(256);
+  for (let code = 0; code < table.length; code += 1) {
+    const encoded = decodeCode(code, input.range);
+    const linear = decodeTransfer(encoded, input.transfer);
+    table[code] = encodeCode(encodeTransfer(linear, output.transfer), output.range);
+  }
+  colorConversionTables.set(key, table);
+  return table;
+}
+
+function limitedRangeViolations(surface: ReferenceColorSurface) {
+  let lower = 0, upper = 0;
+  for (let offset = 0; offset < surface.data.byteLength; offset += 4) {
+    for (let channel = 0; channel < 3; channel += 1) {
+      const code = surface.data[offset + channel];
+      if (code < 16) lower += 1;
+      if (code > 235) upper += 1;
+    }
+  }
+  return Object.freeze({ lower, upper });
+}
+
 function curveValue(points: readonly ReferenceTonalCurvePoint[], input: number) {
   const bounded = Math.max(0, Math.min(1, input));
   for (let index = 0; index < points.length - 1; index += 1) {
@@ -448,22 +484,22 @@ export function convertReferenceColorSurface(
   if (!referenceColorProfiles.includes(from) || !referenceColorProfiles.includes(to)) {
     surfaceError("CUT_COLOR_PROFILE", `unsupported conversion ${String(from)} -> ${String(to)}.`, options.node);
   }
-  const inspection = inspectReferenceColorSurface(surface, from);
-  if (inspection.lowerLegalViolations || inspection.upperLegalViolations) {
+  const violations = profileMetadata[from].range === "limited"
+    ? limitedRangeViolations(surface)
+    : Object.freeze({ lower: 0, upper: 0 });
+  if (violations.lower || violations.upper) {
     surfaceError(
       "CUT_COLOR_RANGE",
-      `${from} input contains ${inspection.lowerLegalViolations} channel code(s) below 16 and ${inspection.upperLegalViolations} above 235; legal-range violations are refused, not clipped.`,
+      `${from} input contains ${violations.lower} channel code(s) below 16 and ${violations.upper} above 235; legal-range violations are refused, not clipped.`,
       options.node,
     );
   }
   if (from === to) return surface;
-  const input = profileMetadata[from], output = profileMetadata[to], data = Buffer.alloc(surface.data.byteLength);
+  const table = colorConversionTable(from, to), data = Buffer.allocUnsafe(surface.data.byteLength);
   for (let offset = 0; offset < data.byteLength; offset += 4) {
-    for (let channel = 0; channel < 3; channel += 1) {
-      const encoded = decodeCode(surface.data[offset + channel], input.range);
-      const linear = decodeTransfer(encoded, input.transfer);
-      data[offset + channel] = encodeCode(encodeTransfer(linear, output.transfer), output.range);
-    }
+    data[offset] = table[surface.data[offset]];
+    data[offset + 1] = table[surface.data[offset + 1]];
+    data[offset + 2] = table[surface.data[offset + 2]];
     data[offset + 3] = surface.data[offset + 3];
   }
   return { data, width: surface.width, height: surface.height, alphaMode: "straight" };

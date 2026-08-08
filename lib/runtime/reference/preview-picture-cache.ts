@@ -62,9 +62,10 @@ const maximumManifestBytes = 64 * 1024;
 const maximumArtifactBytes = 2_147_483_648;
 export const referencePreviewPictureParallelLimits = Object.freeze({
   /**
-   * More than one renderer is a measurement-only override until an exact
-   * production range establishes a bounded native/process RSS ceiling. The
-   * RGBA arithmetic below deliberately is not that authority.
+   * Production uses this fixed worker count only for stateless ranges that
+   * pass the closed canvas/RGBA admission below. Stateful media remains
+   * serial. The RGBA arithmetic is deliberately only a lower bound; the
+   * worker pool also enforces the process RSS ceiling at runtime.
    */
   maximumMeasurementRenderers: 2,
   productionWorkerThreads: 3,
@@ -790,17 +791,21 @@ function previewPictureParallelPlan(input: Readonly<{
         : `requested ${requested} renderers exceed the ${admittedMeasurementRenderers}-renderer RGBA-only measurement admission.`,
     );
   }
-  const productionWorkerAdmitted = requestedWorkers !== undefined
+  const automaticWorkers = requested === undefined && requestedWorkers === undefined
+    ? referencePreviewPictureParallelLimits.productionWorkerThreads
+    : undefined;
+  const workerThreads = requestedWorkers ?? automaticWorkers;
+  const workerThreadsAdmitted = workerThreads !== undefined
     && !stateful
-    && frames >= requestedWorkers * framesPerRendererChunk
+    && frames >= workerThreads * framesPerRendererChunk
     && input.width * input.height <= referencePreviewPictureParallelLimits.maximumProductionCanvasPixels
     && input.composition.width * input.composition.height <= referencePreviewPictureParallelLimits.maximumProductionCanvasPixels
-    && requestedWorkers
+    && workerThreads
       * (referencePreviewPictureParallelLimits.workerLocalPaintCacheBytes
         + perRendererRgbaLowerBoundBytes
         + frameRgbaBytes * framesPerRendererChunk)
       <= referencePreviewPictureParallelLimits.maximumParallelRgbaLowerBoundBytes;
-  if (requestedWorkers !== undefined && !productionWorkerAdmitted) {
+  if (requestedWorkers !== undefined && !workerThreadsAdmitted) {
     throw new ReferencePreviewPictureCacheError(
       "CUT_PREVIEW_PICTURE_CACHE_RESOURCE_LIMIT",
       stateful
@@ -808,7 +813,7 @@ function previewPictureParallelPlan(input: Readonly<{
         : "worker-thread diagnostic exceeds the closed frame/canvas/RGBA admission.",
     );
   }
-  const rendererCount = requestedWorkers ?? requested ?? 1;
+  const rendererCount = workerThreadsAdmitted ? workerThreads! : requested ?? 1;
   const maximumBufferedFrames = rendererCount * framesPerRendererChunk;
   const maximumBufferedRgbaBytes = maximumBufferedFrames * frameRgbaBytes;
   const aggregateRgbaLowerBoundBytes =
@@ -831,7 +836,9 @@ function previewPictureParallelPlan(input: Readonly<{
     ? "stateful-picture-context" as const
     : requestedWorkers !== undefined
       ? "worker-thread-measurement-override" as const
-    : rendererCount === 1 && usefulRenderers === 1
+    : workerThreadsAdmitted
+      ? "production-worker-threads" as const
+    : rendererCount === 1 && frames < referencePreviewPictureParallelLimits.productionWorkerThreads * framesPerRendererChunk
       ? "insufficient-frames" as const
       : requested === undefined
         ? "production-serial-native-rss-unmeasured" as const
@@ -842,13 +849,13 @@ function previewPictureParallelPlan(input: Readonly<{
     performanceClaim: stateful
       ? "INSUFFICIENT_FOR_CCH05"
       : "REQUIRES_EXACT_RANGE_MEASUREMENT",
-    admissionScope: requestedWorkers !== undefined
+    admissionScope: workerThreadsAdmitted
       ? "closed-rgba+node-process-rss-watchdog"
       : "rgba-only-lower-bound-not-total-process-memory",
-    nativePeakRss: requestedWorkers !== undefined
+    nativePeakRss: workerThreadsAdmitted
       ? "NODE_PROCESS_RSS_WATCHDOG_4_GIB_PROCESS_TREE_UNMEASURED"
       : "UNMEASURED",
-    preparationScope: requestedWorkers !== undefined
+    preparationScope: workerThreadsAdmitted
       ? "canonical-parent-plan+worker-closure-and-resource-revalidation"
       : "root-eager+nested-lazy-on-first-active-frame",
     measurementOnly: requested !== undefined || requestedWorkers !== undefined,
@@ -1947,7 +1954,8 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
     requestedWorkerThreads: input.__testHooks?.requestedWorkerThreads,
   });
   await input.__testHooks?.plan?.(parallelPlan);
-  const useWorkerThreads = parallelPlan.reason === "worker-thread-measurement-override";
+  const useWorkerThreads = parallelPlan.reason === "worker-thread-measurement-override"
+    || parallelPlan.reason === "production-worker-threads";
   const sharedLocalPaintSurfaceCache = useWorkerThreads ? undefined : new ReferenceLocalPaintSurfaceCache();
   const renderers = useWorkerThreads ? [] : Array.from(
     { length: parallelPlan.rendererCount },

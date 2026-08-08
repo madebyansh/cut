@@ -268,6 +268,7 @@ import {
   prepareReferenceVectorPathNode,
   referenceAnchoredVectorPathFrameResolutionAt,
   referenceVectorPathFrameAt,
+  referenceVectorPathRenderFrameAt,
   referenceVectorPathSvg,
   referenceVectorPathTransformedSvg,
   referenceVectorPathVisibleBounds,
@@ -5252,7 +5253,7 @@ export class ReferenceVisualRenderer {
       const cached = this.staticImages.get(node.id);
       if (cached) return cached;
     }
-    const frame = referenceVectorPathFrameAt(this.ir, node, plan, time);
+    const frame = referenceVectorPathRenderFrameAt(this.ir, node, plan, time);
     const surface = await svgSurface(referenceVectorPathSvg(frame, this.composition.width, this.composition.height, node), this.composition.width, this.composition.height);
     if (!plan.frameDynamic) this.staticImages.set(node.id, surface);
     return surface;
@@ -6014,7 +6015,7 @@ export class ReferenceVisualRenderer {
   private async localVectorPathSurface(node: IRNode, config: ReferenceBoundedLocalRasterContext, time: Rational) {
     const plan = this.vectorPathPlans.get(node.id);
     if (!plan) throw new ReferenceLocalSpaceError("CUT_LOCAL_SPACE_RASTER", node, "retained Path has no prepared public geometry plan.");
-    const frame = referenceVectorPathFrameAt(this.ir, node, plan, time);
+    const frame = referenceVectorPathRenderFrameAt(this.ir, node, plan, time);
     const origin = this.localSpaceOrigin(config), bounds = {
       left: 0,
       top: 0,

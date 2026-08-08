@@ -18,6 +18,7 @@ import {
   prepareReferenceVectorPathNode,
   referenceVectorPathDashPolylines,
   referenceVectorPathFrameAt,
+  referenceVectorPathRenderFrameAt,
   referenceVectorPathInspect,
   referenceVectorPathSlice,
   referenceVectorPathSvg,
@@ -151,6 +152,12 @@ test("mixed retained line/cubic geometry owns exact trim and canonical odd dash 
   assert.equal(frame.trimEnd, .75);
   assert.ok(frame.strokePolylines.length > 1, "dash semantics must split visible geometry rather than remain metadata");
   assert.ok(frame.strokePolylines.every((polyline) => polyline.length >= 2));
+  assert.ok(frame.strokePolylines.every((polyline, index) => polyline === frame.strokeFragments[index]?.points),
+    "compatibility polylines must share the one immutable frame-owned point representation");
+  assert.ok(frame.strokeFragments.every((fragment) => Object.isFrozen(fragment)
+    && Object.isFrozen(fragment.points)
+    && fragment.points.every(Object.isFrozen)),
+  "shared stroke points must remain transitively immutable");
   const svg = referenceVectorPathSvg(frame, 100, 60);
   assert.match(svg, /stroke="#ff3300"/);
   assert.doesNotMatch(svg, /stroke-dasharray/u, "CUT, not the SVG rasterizer, must own dash segmentation");
@@ -164,6 +171,50 @@ test("arc-length slicing places both boundaries on the requested metric", () => 
     [{ x: 0, y: 0 }, { x: 10, y: 0 }],
     [{ x: 15, y: 0 }, { x: 25, y: 0 }],
   ]);
+});
+
+test("complete undashed strokes share immutable prepared points while partial trims own their slice", () => {
+  const complete = pathNode({
+    geometry: geometry(point(0, 0), [lineTo(50, 0), lineTo(50, 30)]),
+    stroke: { kind: "color", value: "#ffffff" },
+    width: px(2),
+  });
+  const completePlan = prepareReferenceVectorPathNode(ir(), complete)!;
+  const completeFrame = referenceVectorPathFrameAt(ir(), complete, completePlan, rational(0));
+  assert.equal(completeFrame.strokeFragments[0]!.points, completePlan.staticPrepared.points);
+  assert.ok(Object.isFrozen(completeFrame.strokeFragments[0]!.points));
+  assert.ok(completeFrame.strokeFragments[0]!.points.every(Object.isFrozen));
+
+  const partial = pathNode({
+    geometry: geometry(point(0, 0), [lineTo(50, 0), lineTo(50, 30)]),
+    stroke: { kind: "color", value: "#ffffff" },
+    width: px(2),
+    trimEnd: ratio(1, 2),
+  });
+  const partialPlan = prepareReferenceVectorPathNode(ir(), partial)!;
+  const partialFrame = referenceVectorPathFrameAt(ir(), partial, partialPlan, rational(0));
+  assert.notEqual(partialFrame.strokeFragments[0]!.points, partialPlan.staticPrepared.points);
+  assert.ok(Object.isFrozen(partialFrame.strokeFragments[0]!.points));
+});
+
+test("renderer-owned vector frames preserve exact SVG while avoiding published freeze work", () => {
+  const node = pathNode({
+    geometry: geometry(point(0, 0), [lineTo(50, 0), lineTo(50, 30)]),
+    stroke: { kind: "color", value: "#ffffff" },
+    width: px(2),
+    trimEnd: ratio(1, 2),
+  });
+  const runtime = ir();
+  const plan = prepareReferenceVectorPathNode(runtime, node)!;
+  const published = referenceVectorPathFrameAt(runtime, node, plan, rational(0));
+  const rendering = referenceVectorPathRenderFrameAt(runtime, node, plan, rational(0));
+  assert.equal(referenceVectorPathSvg(rendering, 100, 60), referenceVectorPathSvg(published, 100, 60));
+  assert.deepEqual(rendering, published);
+  assert.ok(Object.isFrozen(published));
+  assert.ok(Object.isFrozen(published.strokeFragments));
+  assert.equal(Object.isFrozen(rendering), false);
+  assert.equal(Object.isFrozen(rendering.strokeFragments), false);
+  assert.equal(Object.isFrozen(rendering.strokeFragments[0]!.points), false);
 });
 
 test("topology-safe morph fails closed on segment-kind or closure mismatch", () => {

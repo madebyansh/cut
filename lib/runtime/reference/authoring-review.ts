@@ -67,6 +67,7 @@ import {
 import {
   renderReferencePreviewPictureArtifact,
   type ReferencePreviewPictureCacheEvidence,
+  type ReferencePreviewPictureParallelPlan,
   type ReferencePreviewPictureTestHooks,
 } from "./preview-picture-cache";
 
@@ -957,7 +958,32 @@ export async function renderReferencePreviewArtifact(ir: CutAVIR, projectRoot: s
     const selectedAudio = resolve(staging, "selected.f32le"), normalizedAudio = resolve(staging, "normalized.wav");
     const cacheRoot = await ensureProjectWriteDirectory(projectRoot, ".cut/cache/reference");
     const sceneToolchain = await bindReferencePictureMediaToolchain();
-    const picture = await renderReferencePreviewPictureArtifact({
+    const originalPictureHooks = options.__testPictureHooks as ReferencePreviewPictureTestHooks | undefined;
+    let releaseAudioStart!: () => void;
+    let audioStartReleased = false;
+    let overlapEligible = false;
+    let writtenPictureFrames = 0;
+    const audioStart = new Promise<void>((accept) => {
+      releaseAudioStart = () => {
+        if (audioStartReleased) return;
+        audioStartReleased = true;
+        accept();
+      };
+    });
+    const pictureHooks: ReferencePreviewPictureTestHooks = Object.freeze({
+      ...originalPictureHooks,
+      async plan(value: ReferencePreviewPictureParallelPlan) {
+        overlapEligible = value.reason === "production-worker-threads"
+          || value.reason === "worker-thread-measurement-override";
+        await originalPictureHooks?.plan?.(value);
+      },
+      async frameWritten(value) {
+        await originalPictureHooks?.frameWritten?.(value);
+        writtenPictureFrames += 1;
+        if (overlapEligible && writtenPictureFrames >= Math.ceil(selection.frames / 2)) releaseAudioStart();
+      },
+    });
+    const picturePromise = renderReferencePreviewPictureArtifact({
       ir: session.ir,
       composition: session.composition,
       projectRoot,
@@ -970,69 +996,92 @@ export async function renderReferencePreviewArtifact(ir: CutAVIR, projectRoot: s
       backend: session.backend,
       toolchain: sceneToolchain,
       verifiedResourcePath: session.pathFor,
-      __testHooks: options.__testPictureHooks as ReferencePreviewPictureTestHooks | undefined,
+      __testHooks: pictureHooks,
     });
+    // Cache hits, serial/stateful ranges, and early picture failures start audio
+    // only after the picture branch settles. Eligible worker ranges release it
+    // after half the ordered frames publish, limiting native CPU contention
+    // while still hiding the exact audio preparation behind the picture tail.
+    void picturePromise.then(releaseAudioStart, releaseAudioStart);
     const roots = referenceMasterAudioRootIds(session.ir, session.composition);
     const target = deriveReferenceMasteringTarget(session.ir, session.composition);
     const peakSource = referenceMasteringPeakSource(session.ir, session.composition);
-    const cachedSelection = await readReferenceAudioSelectionFromCache(session.ir, session.composition, projectRoot, {
-      sampleRange: { start: selection.sampleStart, end: selection.sampleEnd },
-      output: selectedAudio,
-      samplePeakDbfs: target.samplePeakDbfs,
-      source: peakSource,
-    });
-    let audioExecution: { roots: number; filters: number };
-    let audioSource: ReferencePreviewManifest["execution"]["audioSource"];
-    if (cachedSelection.status === "hit") {
-      audioExecution = cachedSelection.build;
-      audioSource = Object.freeze({
-        mode: "full-program-cache-slice",
-        graphExecution: "not-executed-this-invocation",
-        authorizedCachedBuild: Object.freeze({ ...cachedSelection.build }),
-        selection: cachedSelection.evidence,
-      });
-    } else {
-      audioExecution = await renderReferenceAudioSelection(session.ir, session.composition, projectRoot, selectedAudio, roots, {
-        outputFormat: "raw-stereo-f32le",
+    const audioPreparationPromise = audioStart.then(async () => {
+      const cachedSelection = await readReferenceAudioSelectionFromCache(session.ir, session.composition, projectRoot, {
         sampleRange: { start: selection.sampleStart, end: selection.sampleEnd },
-        __verifiedResourcePath: session.pathFor,
+        output: selectedAudio,
+        samplePeakDbfs: target.samplePeakDbfs,
+        source: peakSource,
       });
-      const selectedSha256 = await fileSha256(selectedAudio);
-      audioSource = Object.freeze({
-        mode: "selected-execution",
-        graphExecution: "causal-history-from-zero-through-selected-end",
-        execution: Object.freeze({ roots: audioExecution.roots, filters: audioExecution.filters }),
-        selection: cachedSelection.evidence,
-        artifact: Object.freeze({
-          semantics: "half-open",
-          startSample: selection.sampleStart,
-          endSampleExclusive: selection.sampleEnd,
-          samples: selection.samples,
-          bytes: selection.samples * 8,
-          sha256: selectedSha256,
-          verification: "selected-execution+exact-f32le+sha256",
-        }),
+      let audioSource: ReferencePreviewManifest["execution"]["audioSource"];
+      if (cachedSelection.status === "hit") {
+        audioSource = Object.freeze({
+          mode: "full-program-cache-slice",
+          graphExecution: "not-executed-this-invocation",
+          authorizedCachedBuild: Object.freeze({ ...cachedSelection.build }),
+          selection: cachedSelection.evidence,
+        });
+      } else {
+        const audioExecution = await renderReferenceAudioSelection(session.ir, session.composition, projectRoot, selectedAudio, roots, {
+          outputFormat: "raw-stereo-f32le",
+          sampleRange: { start: selection.sampleStart, end: selection.sampleEnd },
+          __verifiedResourcePath: session.pathFor,
+        });
+        const selectedSha256 = await fileSha256(selectedAudio);
+        audioSource = Object.freeze({
+          mode: "selected-execution",
+          graphExecution: "causal-history-from-zero-through-selected-end",
+          execution: Object.freeze({ roots: audioExecution.roots, filters: audioExecution.filters }),
+          selection: cachedSelection.evidence,
+          artifact: Object.freeze({
+            semantics: "half-open",
+            startSample: selection.sampleStart,
+            endSampleExclusive: selection.sampleEnd,
+            samples: selection.samples,
+            bytes: selection.samples * 8,
+            sha256: selectedSha256,
+            verification: "selected-execution+exact-f32le+sha256",
+          }),
+        });
+      }
+      // Keep the bounded authoring path on the same pre-master boundary as a
+      // final render. PCM24 WAVE is an intentional delivery/audition format,
+      // but quantizing to it before loudness normalization made a full-range
+      // preview normalize different samples from the final raw-f32 cache.
+      const inputPeak = await scanReferenceStereoF32LeFile(selectedAudio, {
+        expectedFrames: selection.samples,
+        thresholdDbfs: target.samplePeakDbfs,
+        source: peakSource,
       });
-    }
-    // Keep the bounded authoring path on the same pre-master boundary as a
-    // final render. PCM24 WAVE is an intentional delivery/audition format, but
-    // quantizing to it before loudness normalization made a full-range preview
-    // normalize different samples from the final raw-f32 audio cache.
-    const inputPeak = await scanReferenceStereoF32LeFile(selectedAudio, {
-      expectedFrames: selection.samples,
-      thresholdDbfs: target.samplePeakDbfs,
-      source: peakSource,
+      const normalization = await normalizeReferenceAudio(
+        selectedAudio,
+        normalizedAudio,
+        target.integratedLufs,
+        target.truePeakDbtp,
+        target.loudnessRangeLu,
+        session.composition.sampleRate,
+        { inputFormat: "raw-stereo-f32le", inputPeak },
+      );
+      return Object.freeze({
+        audioSource,
+        audioState: cachedSelection.status === "hit"
+          ? "full-program-cache-authority-no-graph-execution" as const
+          : "causal-history-executed-from-zero" as const,
+        normalization,
+        audioToolchain: cachedSelection.evidence.identity.toolchain,
+      });
     });
-    const normalization = await normalizeReferenceAudio(
-      selectedAudio,
-      normalizedAudio,
-      target.integratedLufs,
-      target.truePeakDbtp,
-      target.loudnessRangeLu,
-      session.composition.sampleRate,
-      { inputFormat: "raw-stereo-f32le", inputPeak },
-    );
-    const audioToolchain = cachedSelection.evidence.identity.toolchain;
+    // Picture workers and the exact audio graph own disjoint staging files.
+    // Drain both bounded branches before surfacing either failure so no worker,
+    // decoder, limiter, or staging transaction survives a rejected preview.
+    const [pictureResult, audioPreparationResult] = await Promise.allSettled([
+      picturePromise,
+      audioPreparationPromise,
+    ]);
+    if (pictureResult.status === "rejected") throw pictureResult.reason;
+    if (audioPreparationResult.status === "rejected") throw audioPreparationResult.reason;
+    const picture = pictureResult.value;
+    const { audioSource, audioState, normalization, audioToolchain } = audioPreparationResult.value;
     delivery = await prepareReferenceAacDelivery({
       silentVideo: picture.path,
       normalizedPcm: normalizedAudio,
@@ -1063,9 +1112,7 @@ export async function renderReferencePreviewArtifact(ir: CutAVIR, projectRoot: s
       execution: {
         picture: "selected-frames-only",
         audio: "selected-samples-serialized",
-        audioState: cachedSelection.status === "hit"
-          ? "full-program-cache-authority-no-graph-execution"
-          : "causal-history-executed-from-zero",
+        audioState,
         inputProfile: "proxy",
         cache: picture.cache,
         audioSource,

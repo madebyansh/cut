@@ -632,3 +632,62 @@ test("renderer-invocation preparation reuses only verified graph/dependency/atla
     /belongs to another IR\/composition invocation/,
   );
 });
+
+test("prepared map geometry reuse preserves dynamic child pixels and invalidates on camera state", async () => {
+  const linear: IRValue = { kind: "symbol", name: "@cut/motion#linear" };
+  const reveal: IRSignal = {
+    id: "route-reveal",
+    kind: "track",
+    valueType: "Ratio",
+    initial: ratio(0),
+    events: [{ kind: "animate", start: rational(0), end: rational(1), from: ratio(0), to: ratio(1), curve: linear }],
+    contentHash: "route-reveal-content",
+    provenance: provenance("route-reveal"),
+  };
+  const scale: IRSignal = {
+    id: "camera-scale",
+    kind: "track",
+    valueType: "Number",
+    initial: scalar(2),
+    events: [{ kind: "animate", start: rational(0), end: rational(1), from: scalar(2), to: scalar(3), curve: linear }],
+    contentHash: "camera-scale-content",
+    provenance: provenance("camera-scale"),
+  };
+  const map = visualNode("map", "cut.geo.map", {
+    detail: { kind: "string", value: "110m" },
+    background: { kind: "color", value: "#091820" },
+    land: { kind: "color", value: "#31545d" },
+  });
+  const route = visualNode("route", "cut.geo.route", {
+    points: list(point(0, -45), point(12, 0), point(0, 45)),
+    color: { kind: "color", value: "#e74c3c" },
+    width: length(4),
+  }, [], { reveal: { signal: reveal.id } });
+  const value = fixture({
+    children: [map, route],
+    cameraProperties: { scale: { signal: scale.id } },
+    signals: { [reveal.id]: reveal, [scale.id]: scale },
+  });
+  const preparation = prepareReferenceMapCameraRenderInvocation(value.ir, value.composition);
+  const preparedConfig = referenceMapCameraPreparedConfigurations(preparation).get(value.camera.id)!;
+  const context = {
+    annotationMode: "reject" as const,
+    evidenceKind: "completed-isolated-frame-execution" as const,
+    publicRuntimeStatus: "not-connected" as const,
+    cacheStatus: "identity-only-no-cache-read-write-or-locality-evidence" as const,
+    preparation,
+  };
+  for (const time of [rational(0), rational(1, 2)] as const) {
+    const fresh = await renderReferenceMapCameraFrame(value.ir, value.composition, value.config, time);
+    const prepared = await renderReferenceMapCameraFrame(value.ir, value.composition, preparedConfig, time, context);
+    assert.deepEqual(prepared.surface.data, fresh.surface.data);
+    assert.equal(prepared.surface.sha256, fresh.surface.sha256);
+    assert.equal(prepared.canonicalDrawingStream.sha256, fresh.canonicalDrawingStream.sha256);
+  }
+  const first = await renderReferenceMapCameraFrame(value.ir, value.composition, preparedConfig, rational(0), context);
+  const middle = await renderReferenceMapCameraFrame(value.ir, value.composition, preparedConfig, rational(1, 2), context);
+  assert.notEqual(first.children.find((child) => child.kind === "map")?.fragmentDigest,
+    middle.children.find((child) => child.kind === "map")?.fragmentDigest,
+  "camera-state changes must miss projected map geometry reuse");
+  assert.notEqual(first.surface.sha256, middle.surface.sha256);
+});

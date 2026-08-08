@@ -56,6 +56,7 @@ import {
 } from "./audio-tempo-delay-preparation";
 import { validateReferenceTempoDelayPlans } from "./audio-tempo-delay-config";
 import { referenceLinkedClipAudioExecutionPlan } from "./linked-av-presentation";
+import { renderReferenceStaticDspIsland } from "./audio-static-dsp-island";
 
 function dbLinear(db: number) { return 10 ** (db / 20); }
 function clamp(value: number, minimum: number, maximum: number) { return Math.max(minimum, Math.min(maximum, value)); }
@@ -1305,6 +1306,8 @@ export type ReferenceAudioSelectionOptions = {
   __verifiedResourcePath?: ReferenceVerifiedInputSession["pathFor"];
   /** @internal One authenticated expanded source selection for TimelineEdit TimeStretch preparation. */
   __timelineTimeStretchChildEvaluation?: ReferenceTimelineTimeStretchChildEvaluation;
+  /** @internal Exact A/B controller; production always attempts admitted static DSP islands. */
+  __disableStaticDspIsland?: boolean;
 };
 
 function selectionFail(owner: ReferenceAudioSelectionOwner, code: ReferenceAudioSelectionErrorCode, message: string): never {
@@ -1470,7 +1473,28 @@ async function renderReferenceAudioSelectionInternal(
       composition,
       rootIds,
       async (childIds, childOutput) => {
-        await renderReferenceAudioSelectionInternal(ir, composition, projectRoot, childOutput, childIds, accumulator, { outputFormat: "raw-stereo-f32le", __verifiedResourcePath: options.__verifiedResourcePath }, true, true);
+        const optimized = options.__disableStaticDspIsland
+          ? false
+          : await renderReferenceStaticDspIsland(
+              ir,
+              composition,
+              childIds,
+              childOutput,
+              async (boundaryIds, boundaryOutput) => {
+                await renderReferenceAudioSelectionInternal(ir, composition, projectRoot, boundaryOutput, boundaryIds, accumulator, {
+                  outputFormat: "raw-stereo-f32le",
+                  __verifiedResourcePath: options.__verifiedResourcePath,
+                  __disableStaticDspIsland: options.__disableStaticDspIsland,
+                }, true, true);
+              },
+            );
+        if (!optimized) {
+          await renderReferenceAudioSelectionInternal(ir, composition, projectRoot, childOutput, childIds, accumulator, {
+            outputFormat: "raw-stereo-f32le",
+            __verifiedResourcePath: options.__verifiedResourcePath,
+            __disableStaticDspIsland: options.__disableStaticDspIsland,
+          }, true, true);
+        }
       },
     );
     for (const source of preparedLimiter.sources.values()) accumulator.limiterExecutions.push(source.evidence);

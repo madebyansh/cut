@@ -137,6 +137,8 @@ export type ReferenceProjectiveWarpResult = Readonly<{
 export type ReferenceProjectiveWarpExecutionOptions = Readonly<{
   /** @internal Allocation seam used to prove all validation precedes output allocation. */
   allocateOutput?: (bytes: number) => Uint8Array;
+  /** @internal Exact scalar parity seam for the authenticated Q16 native raster. */
+  disableNativeScaleTranslation?: boolean;
 }>;
 
 const q16 = BigInt(referenceProjectiveWarpPhaseUnits);

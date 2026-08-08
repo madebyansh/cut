@@ -13,6 +13,7 @@ import {
   type ReferenceAudioLimiterSummary,
 } from "./audio-limiter";
 import type { ReferenceAudioPeakSource } from "./audio-peak";
+import { executeReferenceNativeLimiterEnvelopeRange } from "./native-source-over";
 import { referenceAudioTruePeakCoefficients } from "./audio-true-peak";
 
 const channels = 2;
@@ -26,6 +27,7 @@ const maximumFrames = supportedSampleRate * 60 * 5;
 const maximumAggregateFirMultiplyAdds = 2 ** 34;
 const reconciliationSafetyLinear = 10 ** (-referenceAudioLimiterReconciliationSafetyDb / 20);
 const maximumEnvelopeLinear = referenceAudioLimiterLimits.maximumEnvelopeLinear;
+const flattenedTruePeakCoefficients = new Float64Array(referenceAudioTruePeakCoefficients.flat());
 
 /**
  * A separate bounded domain for the file-backed adapter. The original 2^30
@@ -49,7 +51,16 @@ export type ReferenceAudioLimiterFileWorkOptions = Readonly<{
 }>;
 
 export type ReferenceAudioLimiterFileProcessOptions =
-  Readonly<ReferenceAudioLimiterFileWorkOptions & ReferenceAudioLimiterControls>;
+  Readonly<ReferenceAudioLimiterFileWorkOptions & ReferenceAudioLimiterControls & {
+    /**
+     * Present only when the compiled graph proves that release has no
+     * automation. The callback is still evaluated and checked at every frame;
+     * this authority only permits reuse of the exact release coefficient.
+     */
+    staticReleaseSeconds?: number;
+    /** Present only when the compiled graph proves no ceiling automation. */
+    staticCeilingDbtp?: number;
+  }>;
 
 export type ReferenceAudioLimiterUniformFileCorrectionResult = Readonly<{
   format: "cut-reference-audio-limiter-uniform-file-correction";
@@ -451,6 +462,21 @@ function deriveDecodedEnvelopeRange(
   }
   if (!decoded.anyNonzero) return envelope;
 
+  const native = executeReferenceNativeLimiterEnvelopeRange({
+    decoded: decoded.samples,
+    output: envelope,
+    coefficients: flattenedTruePeakCoefficients,
+    totalFrames,
+    rangeStart,
+    rangeEnd,
+    readStart,
+    oversampledStart,
+    oversampledEnd,
+    maximumAbsoluteInputSample: referenceAudioLimiterLimits.maximumAbsoluteInputSample,
+    maximumEnvelopeLinear,
+  });
+  if (native) return envelope;
+
   // Both admitted oversampled boundaries are exact phase boundaries. Traverse
   // base input frames and phases directly so the frozen scalar multiply/add
   // order is unchanged while avoiding per-sample division, modulo, and
@@ -503,15 +529,38 @@ async function deriveEnvelopeRange(
   rangeEnd: number,
   source: ReferenceAudioPeakSource,
 ) {
+  return (await readDecodedEnvelopeWindow(
+    handle,
+    totalFrames,
+    rangeStart,
+    rangeEnd,
+    source,
+  )).envelope;
+}
+
+async function readDecodedEnvelopeWindow(
+  handle: FileHandle,
+  totalFrames: number,
+  rangeStart: number,
+  rangeEnd: number,
+  source: ReferenceAudioPeakSource,
+) {
   const length = rangeEnd - rangeStart;
-  if (length === 0) return new Float64Array();
+  if (length === 0) {
+    return Object.freeze({
+      envelope: new Float64Array(),
+      decoded: Object.freeze({ samples: new Float32Array(), anyNonzero: false }),
+      readStart: rangeStart,
+      readEnd: rangeEnd,
+    });
+  }
   const { oversampledStart, oversampledEnd, readStart, readEnd } = envelopeReadWindow(totalFrames, rangeStart, rangeEnd);
   const decoded = decodeStereo(
     await readExact(handle, readStart * bytesPerFrame, (readEnd - readStart) * bytesPerFrame, source, totalFrames),
     readStart,
     source,
   );
-  return deriveDecodedEnvelopeRange(
+  const envelope = deriveDecodedEnvelopeRange(
     decoded,
     totalFrames,
     rangeStart,
@@ -521,6 +570,7 @@ async function deriveEnvelopeRange(
     oversampledEnd,
     source,
   );
+  return Object.freeze({ envelope, decoded, readStart, readEnd });
 }
 
 function controlValue(
@@ -581,6 +631,15 @@ type PeakScan = Readonly<{
   reconciliationFrame: number | null;
 }>;
 
+type PendingOutputChunk = Readonly<{
+  start: number;
+  end: number;
+  frames: Float32Array;
+  precedingTailStart: number;
+  precedingTail: Float32Array;
+  authoredCeilings?: Float64Array;
+}>;
+
 async function readCeilings(
   handle: FileHandle,
   startFrame: number,
@@ -600,24 +659,80 @@ function encodeCeilings(values: Float64Array) {
   return bytes;
 }
 
+function scanPendingOutputChunk(
+  pending: PendingOutputChunk,
+  nextFrames: Float32Array | undefined,
+  expectedFrames: number,
+  source: ReferenceAudioPeakSource,
+) {
+  const { oversampledStart, oversampledEnd, readStart, readEnd } = envelopeReadWindow(
+    expectedFrames,
+    pending.start,
+    pending.end,
+  );
+  const decodedSamples = new Float32Array((readEnd - readStart) * channels);
+  if (readStart < pending.start) {
+    const tailOffset = (readStart - pending.precedingTailStart) * channels;
+    const tailLength = (pending.start - readStart) * channels;
+    decodedSamples.set(
+      pending.precedingTail.subarray(tailOffset, tailOffset + tailLength),
+      0,
+    );
+  }
+  decodedSamples.set(pending.frames, (pending.start - readStart) * channels);
+  if (readEnd > pending.end) {
+    if (!nextFrames) {
+      fail(
+        "CUT_AUDIO_LIMITER_STRUCTURE",
+        source,
+        "fused limiter scan is missing its exact following halo.",
+        { kind: "structure", reason: "fused-scan-halo", expectedFrames },
+      );
+    }
+    decodedSamples.set(
+      nextFrames.subarray(0, (readEnd - pending.end) * channels),
+      (pending.end - readStart) * channels,
+    );
+  }
+  let anyNonzero = false;
+  for (let index = 0; index < decodedSamples.length; index += 1) {
+    if (decodedSamples[index] !== 0) {
+      anyNonzero = true;
+      break;
+    }
+  }
+  return deriveDecodedEnvelopeRange(
+    { samples: decodedSamples, anyNonzero },
+    expectedFrames,
+    pending.start,
+    pending.end,
+    readStart,
+    oversampledStart,
+    oversampledEnd,
+    source,
+  );
+}
+
 async function scanOutput(
   outputPath: string,
-  ceilingPath: string,
+  ceilingBoundary: Readonly<{ path: string } | { staticLinear: number }>,
   expectedFrames: number,
   source: ReferenceAudioPeakSource,
 ): Promise<PeakScan> {
   const output = await openExactInput(outputPath, expectedFrames, source);
   let ceilings: FileHandle | undefined;
   try {
-    ceilings = await open(ceilingPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-    const ceilingStat = await ceilings.stat({ bigint: true });
-    if (!ceilingStat.isFile() || ceilingStat.size !== BigInt(expectedFrames * 8)) {
-      fail(
-        "CUT_AUDIO_LIMITER_STRUCTURE",
-        source,
-        "file-backed limiter control boundary has an invalid exact length.",
-        { kind: "structure", reason: "control-boundary", expectedFrames },
-      );
+    if ("path" in ceilingBoundary) {
+      ceilings = await open(ceilingBoundary.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      const ceilingStat = await ceilings.stat({ bigint: true });
+      if (!ceilingStat.isFile() || ceilingStat.size !== BigInt(expectedFrames * 8)) {
+        fail(
+          "CUT_AUDIO_LIMITER_STRUCTURE",
+          source,
+          "file-backed limiter control boundary has an invalid exact length.",
+          { kind: "structure", reason: "control-boundary", expectedFrames },
+        );
+      }
     }
     let maximumLinear = 0;
     let maximumFrame: number | null = null;
@@ -626,7 +741,9 @@ async function scanOutput(
     for (let start = 0; start < expectedFrames; start += chunkFrames) {
       const end = Math.min(expectedFrames, start + chunkFrames);
       const envelope = await deriveEnvelopeRange(output.handle, expectedFrames, start, end, source);
-      const authoredCeilings = await readCeilings(ceilings, start, end - start, expectedFrames, source);
+      const authoredCeilings = ceilings
+        ? await readCeilings(ceilings, start, end - start, expectedFrames, source)
+        : undefined;
       for (let index = 0; index < envelope.length; index += 1) {
         const frame = start + index;
         const peak = envelope[index];
@@ -634,8 +751,10 @@ async function scanOutput(
           maximumLinear = peak;
           maximumFrame = frame;
         }
-        if (peak > authoredCeilings[index]) {
-          const candidate = authoredCeilings[index] / peak;
+        const authoredCeiling = authoredCeilings?.[index]
+          ?? ("staticLinear" in ceilingBoundary ? ceilingBoundary.staticLinear : NaN);
+        if (peak > authoredCeiling) {
+          const candidate = authoredCeiling / peak;
           if (candidate < reconciliationFactor) {
             reconciliationFactor = candidate;
             reconciliationFrame = frame;
@@ -904,6 +1023,46 @@ export async function processReferenceAudioLimiterFile(
       { kind: "structure", reason: "invalid-control-callbacks", expectedFrames: contract.expectedFrames },
     );
   }
+  const staticReleaseSeconds = authoredOptions.staticReleaseSeconds;
+  let staticReleaseCoefficient: number | undefined;
+  if (staticReleaseSeconds !== undefined) {
+    if (!Number.isFinite(staticReleaseSeconds)
+      || staticReleaseSeconds < referenceAudioLimiterLimits.minimumReleaseSeconds
+      || staticReleaseSeconds > referenceAudioLimiterLimits.maximumReleaseSeconds) {
+      fail(
+        "CUT_AUDIO_LIMITER_BOUNDS",
+        contract.source,
+        "staticReleaseSeconds is outside the bounded limiter release domain.",
+        {
+          kind: "bounds",
+          reason: "static-release-seconds",
+          expectedFrames: contract.expectedFrames,
+          value: staticReleaseSeconds,
+        },
+      );
+    }
+    staticReleaseCoefficient = Math.exp(-1 / (staticReleaseSeconds * supportedSampleRate));
+  }
+  const staticCeilingDbtp = authoredOptions.staticCeilingDbtp;
+  let staticCeilingLinear: number | undefined;
+  if (staticCeilingDbtp !== undefined) {
+    if (!Number.isFinite(staticCeilingDbtp)
+      || staticCeilingDbtp < referenceAudioLimiterLimits.minimumCeilingDbtp
+      || staticCeilingDbtp > referenceAudioLimiterLimits.maximumCeilingDbtp) {
+      fail(
+        "CUT_AUDIO_LIMITER_BOUNDS",
+        contract.source,
+        "staticCeilingDbtp is outside the bounded limiter ceiling domain.",
+        {
+          kind: "bounds",
+          reason: "static-ceiling-dbtp",
+          expectedFrames: contract.expectedFrames,
+          value: staticCeilingDbtp,
+        },
+      );
+    }
+    staticCeilingLinear = 10 ** (staticCeilingDbtp / 20);
+  }
   const unreconciledPath = `${outputPath}.unreconciled`;
   const correctedPath = `${outputPath}.corrected`;
   const ceilingPath = `${outputPath}.ceilings`;
@@ -926,7 +1085,7 @@ export async function processReferenceAudioLimiterFile(
   let published = false;
   try {
     unreconciled = await open(unreconciledPath, "wx", 0o600);
-    ceilings = await open(ceilingPath, "wx", 0o600);
+    if (staticCeilingLinear === undefined) ceilings = await open(ceilingPath, "wx", 0o600);
     let previousGain = 1;
     let minimumAppliedGain = 1;
     let firstCeilingDbtp: number | undefined;
@@ -935,30 +1094,71 @@ export async function processReferenceAudioLimiterFile(
     let maximumCeilingDbtp = -Infinity;
     const guardLinear = 10 ** (-referenceAudioLimiterGuardDb / 20);
     const unreconciledDigest = createHash("sha256");
+    let scanMaximumLinear = 0;
+    let scanMaximumFrame: number | null = null;
+    let scanReconciliationFactor = 1;
+    let scanReconciliationFrame: number | null = null;
+    let pendingOutput: PendingOutputChunk | undefined;
+    let previousOutputTailStart = 0;
+    let previousOutputTail = new Float32Array();
+    let deferredScanError: unknown;
+
+    const foldPendingScan = (pending: PendingOutputChunk, nextFrames: Float32Array | undefined) => {
+      if (deferredScanError !== undefined) return;
+      try {
+        const envelope = scanPendingOutputChunk(
+          pending,
+          nextFrames,
+          contract.expectedFrames,
+          contract.source,
+        );
+        for (let index = 0; index < envelope.length; index += 1) {
+          const frame = pending.start + index;
+          const peak = envelope[index];
+          if (peak > scanMaximumLinear) {
+            scanMaximumLinear = peak;
+            scanMaximumFrame = frame;
+          }
+          const authoredCeiling = pending.authoredCeilings?.[index] ?? staticCeilingLinear;
+          if (authoredCeiling === undefined) {
+            fail(
+              "CUT_AUDIO_LIMITER_STRUCTURE",
+              contract.source,
+              "fused limiter scan has no exact authored ceiling.",
+              { kind: "structure", reason: "fused-scan-ceiling", expectedFrames: contract.expectedFrames },
+            );
+          }
+          if (peak > authoredCeiling) {
+            const candidate = authoredCeiling / peak;
+            if (candidate < scanReconciliationFactor) {
+              scanReconciliationFactor = candidate;
+              scanReconciliationFrame = frame;
+            }
+          }
+        }
+      } catch (error) {
+        deferredScanError = error;
+      }
+    };
 
     for (let start = 0; start < contract.expectedFrames; start += chunkFrames) {
       const end = Math.min(contract.expectedFrames, start + chunkFrames);
       const windowEnd = Math.min(contract.expectedFrames, end + contract.lookaheadSamples);
-      const envelope = await deriveEnvelopeRange(
+      const decodedWindow = await readDecodedEnvelopeWindow(
         input.handle,
         contract.expectedFrames,
         start,
         windowEnd,
         contract.source,
       );
-      const inputFrames = decodeStereo(
-        await readExact(
-          input.handle,
-          start * bytesPerFrame,
-          (end - start) * bytesPerFrame,
-          contract.source,
-          contract.expectedFrames,
-        ),
-        start,
-        contract.source,
-      ).samples;
+      const envelope = decodedWindow.envelope;
+      const inputOffset = (start - decodedWindow.readStart) * channels;
+      const inputFrames = decodedWindow.decoded.samples.subarray(
+        inputOffset,
+        inputOffset + (end - start) * channels,
+      );
       const outputFrames = new Float32Array(inputFrames.length);
-      const authoredCeilings = new Float64Array(end - start);
+      const authoredCeilings = ceilings ? new Float64Array(end - start) : undefined;
       const queue = new Int32Array(envelope.length);
       let queueHead = 0;
       let queueTail = 0;
@@ -968,12 +1168,42 @@ export async function processReferenceAudioLimiterFile(
         const frame = start + localFrame;
         const ceiling = controlValue(authoredOptions.ceilingDbtp, "ceilingDbtp", frame, contract.source);
         const release = controlValue(authoredOptions.releaseSeconds, "releaseSeconds", frame, contract.source);
+        if (staticCeilingDbtp !== undefined && ceiling !== staticCeilingDbtp) {
+          fail(
+            "CUT_AUDIO_LIMITER_CONTROL",
+            contract.source,
+            `ceilingDbtp callback contradicted its static authority at frame ${frame}.`,
+            {
+              kind: "control",
+              reason: "static-ceiling-mismatch",
+              expectedFrames: contract.expectedFrames,
+              frame,
+              control: "ceilingDbtp",
+              value: ceiling,
+            },
+          );
+        }
+        if (staticReleaseSeconds !== undefined && release !== staticReleaseSeconds) {
+          fail(
+            "CUT_AUDIO_LIMITER_CONTROL",
+            contract.source,
+            `releaseSeconds callback contradicted its static authority at frame ${frame}.`,
+            {
+              kind: "control",
+              reason: "static-release-mismatch",
+              expectedFrames: contract.expectedFrames,
+              frame,
+              control: "releaseSeconds",
+              value: release,
+            },
+          );
+        }
         if (frame === 0) firstCeilingDbtp = ceiling;
         else if (ceiling !== firstCeilingDbtp) constantCeiling = false;
         if (ceiling < minimumCeilingDbtp) minimumCeilingDbtp = ceiling;
         if (ceiling > maximumCeilingDbtp) maximumCeilingDbtp = ceiling;
         const authoredCeilingLinear = 10 ** (ceiling / 20);
-        authoredCeilings[localFrame] = authoredCeilingLinear;
+        if (authoredCeilings) authoredCeilings[localFrame] = authoredCeilingLinear;
 
         const futureEnd = Math.min(envelope.length - 1, localFrame + contract.lookaheadSamples);
         while (lastAdded < futureEnd) {
@@ -986,7 +1216,8 @@ export async function processReferenceAudioLimiterFile(
         const guardedCeiling = authoredCeilingLinear * guardLinear;
         const futurePeak = envelope[queue[queueHead]];
         const requiredGain = futurePeak > guardedCeiling ? guardedCeiling / futurePeak : 1;
-        const releaseCoefficient = Math.exp(-1 / (release * supportedSampleRate));
+        const releaseCoefficient = staticReleaseCoefficient
+          ?? Math.exp(-1 / (release * supportedSampleRate));
         const releasedGain = releaseCoefficient * previousGain + (1 - releaseCoefficient);
         const gain = Math.max(0, Math.min(1, requiredGain, releasedGain));
         previousGain = gain;
@@ -998,26 +1229,50 @@ export async function processReferenceAudioLimiterFile(
       const outputBytes = encodeStereo(outputFrames);
       unreconciledDigest.update(outputBytes);
       await writeExact(unreconciled, outputBytes, start * bytesPerFrame, contract.source, contract.expectedFrames);
-      await writeExact(
-        ceilings,
-        encodeCeilings(authoredCeilings),
-        start * 8,
-        contract.source,
-        contract.expectedFrames,
-      );
+      if (ceilings && authoredCeilings) {
+        await writeExact(
+          ceilings,
+          encodeCeilings(authoredCeilings),
+          start * 8,
+          contract.source,
+          contract.expectedFrames,
+        );
+      }
+      if (pendingOutput) foldPendingScan(pendingOutput, outputFrames);
+      pendingOutput = Object.freeze({
+        start,
+        end,
+        frames: outputFrames,
+        precedingTailStart: previousOutputTailStart,
+        precedingTail: previousOutputTail,
+        ...(authoredCeilings ? { authoredCeilings } : {}),
+      });
+      const tailFrames = Math.min(tapsPerPhase, end - start);
+      previousOutputTailStart = end - tailFrames;
+      previousOutputTail = outputFrames.slice((end - start - tailFrames) * channels);
     }
+    if (pendingOutput) foldPendingScan(pendingOutput, undefined);
     await unreconciled.sync();
-    await ceilings.sync();
+    await ceilings?.sync();
     await unreconciled.close();
     unreconciled = undefined;
-    await ceilings.close();
+    await ceilings?.close();
     ceilings = undefined;
     await verifyBoundFile(inputPath, input, contract.expectedFrames, contract.source);
     await input.handle.close();
+    if (deferredScanError !== undefined) throw deferredScanError;
 
     const unreconciledSha256 = unreconciledDigest.digest("hex");
     let finalSha256 = unreconciledSha256;
-    let scan = await scanOutput(unreconciledPath, ceilingPath, contract.expectedFrames, contract.source);
+    const ceilingBoundary = staticCeilingLinear === undefined
+      ? Object.freeze({ path: ceilingPath })
+      : Object.freeze({ staticLinear: staticCeilingLinear });
+    let scan: PeakScan = Object.freeze({
+      maximumLinear: scanMaximumLinear,
+      maximumFrame: scanMaximumFrame,
+      reconciliationFactor: scanReconciliationFactor,
+      reconciliationFrame: scanReconciliationFrame,
+    });
     let reconciliationFactor = 1;
     let finalPath = unreconciledPath;
     if (scan.reconciliationFactor < 1) {
@@ -1065,7 +1320,7 @@ export async function processReferenceAudioLimiterFile(
       finalSha256 = correctedBoundary.outputSha256;
       scan = await scanOutput(
         correctedPath,
-        ceilingPath,
+        ceilingBoundary,
         contract.expectedFrames,
         contract.source,
       );

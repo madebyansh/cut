@@ -19,6 +19,7 @@ import {
 import {
   ReferencePreviewPictureCacheError,
   referencePreviewPictureParallelPlanForTest,
+  type ReferencePreviewPictureParallelPlan,
 } from "../lib/runtime/reference/preview-picture-cache";
 import { runFfmpeg } from "../lib/runtime/reference/ffmpeg";
 import { ReferenceVisualRenderer } from "../lib/runtime/reference/visual";
@@ -303,7 +304,7 @@ test("two-renderer measurement failure aborts publication, waits all work, close
   }
 });
 
-test("production admission stays serial until native RSS is measured and stateful picture contexts remain serial", () => {
+test("production admits bounded stateless worker threads while stateful picture contexts remain serial", () => {
   const ir = compile();
   const composition = ir.compositions[0]!;
   const production = referencePreviewPictureParallelPlanForTest({
@@ -322,12 +323,12 @@ test("production admission stays serial until native RSS is measured and statefu
     preparationScope: production.preparationScope,
     measurementOnly: production.measurementOnly,
   }, {
-    mode: "serial",
-    reason: "production-serial-native-rss-unmeasured",
-    rendererCount: 1,
-    admissionScope: "rgba-only-lower-bound-not-total-process-memory",
-    nativePeakRss: "UNMEASURED",
-    preparationScope: "root-eager+nested-lazy-on-first-active-frame",
+    mode: "ordered-parallel",
+    reason: "production-worker-threads",
+    rendererCount: 3,
+    admissionScope: "closed-rgba+node-process-rss-watchdog",
+    nativePeakRss: "NODE_PROCESS_RSS_WATCHDOG_4_GIB_PROCESS_TREE_UNMEASURED",
+    preparationScope: "canonical-parent-plan+worker-closure-and-resource-revalidation",
     measurementOnly: false,
   });
   assert.equal(referencePreviewPictureParallelPlanForTest({
@@ -575,8 +576,8 @@ async function assertNoWorkerPublication(root: string, output: string) {
   );
 }
 
-test("three persistent picture workers preserve serial pixels, order, picture bytes, and delivery bytes", { timeout: 240_000 }, async () => {
-  const roots = await Promise.all(["serial", "worker"].map((label) =>
+test("production picture workers preserve serial pixels, order, picture bytes, and delivery bytes", { timeout: 240_000 }, async () => {
+  const roots = await Promise.all(["serial", "worker-override", "production"].map((label) =>
     mkdtemp(resolve(tmpdir(), `cut-preview-${label}-`))));
   try {
     const results = await Promise.all(roots.map(async (root, index) => {
@@ -584,16 +585,23 @@ test("three persistent picture workers preserve serial pixels, order, picture by
       const output = resolve(root, "review", "preview.mp4");
       const written: number[] = [];
       const closed: Array<{ rendererIndex: number; status: string }> = [];
+      const plans: ReferencePreviewPictureParallelPlan[] = [];
       const manifest = await renderReferencePreviewArtifact(ir, root, output, {
         range: "0s:1s",
         width: 64,
-        __testPictureHooks: index === 0 ? undefined : {
-          requestedWorkerThreads: 3,
+        __testPictureHooks: index === 0 ? { requestedRenderers: 1 } : {
+          ...(index === 1 ? { requestedWorkerThreads: 3 as const } : {}),
+          plan(value: ReferencePreviewPictureParallelPlan) { plans.push(value); },
           frameWritten(event: { globalFrame: number }) { written.push(event.globalFrame); },
           rendererClosed(event: { rendererIndex: number; status: string }) { closed.push(event); },
         },
       });
-      if (index === 1) {
+      if (index > 0) {
+        assert.equal(plans.length, 1);
+        assert.equal(plans[0]!.reason, index === 1
+          ? "worker-thread-measurement-override"
+          : "production-worker-threads");
+        assert.equal(plans[0]!.measurementOnly, index === 1);
         assert.deepEqual(written, Array.from({ length: 12 }, (_, frame) => frame));
         assert.deepEqual(closed.toSorted((left, right) => left.rendererIndex - right.rendererIndex), [
           { rendererIndex: 0, status: "fulfilled" },
@@ -612,6 +620,7 @@ test("three persistent picture workers preserve serial pixels, order, picture by
     assert.equal(results[1]!.picture, results[0]!.picture);
     assert.equal(results[1]!.delivery, results[0]!.delivery);
     assert.deepEqual(results[1]!.decoded, results[0]!.decoded);
+    assert.deepEqual(results[2], results[1], "production admission must be byte-identical to the audited worker override");
   } finally {
     await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
   }
