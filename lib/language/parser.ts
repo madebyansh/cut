@@ -1,14 +1,17 @@
 import type { CutModule, Declaration, Expression, LanguageDiagnostic, Parameter, SceneDeclaration, SourceSpan, Statement, TimelineItem, TypeReference } from "./ast";
 import { CutLexerError, lexCut, type Token } from "./lexer";
+import { decimalLiteralExceedsRationalBudget, maximumRationalDigits } from "./rational";
 
 class ParseFailure extends Error {
-  constructor(message: string, readonly token: Token, readonly hint?: string) { super(message); }
+  constructor(message: string, readonly token: Token, readonly hint?: string, readonly code = "CUT1002") { super(message); }
 }
 
 const binaryPrecedence: Record<string, number> = { "||": 1, "&&": 2, "==": 3, "!=": 3, "<": 4, "<=": 4, ">": 4, ">=": 4, "+": 5, "-": 5, "*": 6, "/": 6, "%": 6 };
 const merge = (start: SourceSpan, end: SourceSpan): SourceSpan => ({ start: start.start, end: end.end });
 const maximumParseDepth = 256;
 export const maximumParseDiagnostics = 256;
+const topLevelDeclarationStarters = new Set(["cut", "project", "import", "asset", "const", "function", "component", "timeline", "export"]);
+const nestedStatementStarters = new Set(["scene", "let", "set", "animate", "at", "for", "if", "assert"]);
 
 class Parser {
   private index = 0;
@@ -44,7 +47,7 @@ class Parser {
     if (this.diagnosticLimitReached) return;
     const diagnostic: LanguageDiagnostic = {
       severity: "error",
-      code: "CUT1002",
+      code: error.code,
       message: error.message,
       span: error.token.span,
       ...(error.hint === undefined ? {} : { hint: error.hint }),
@@ -74,6 +77,16 @@ class Parser {
     for (let cursor = startIndex; cursor < this.tokens.length; cursor += 1) {
       const token = this.tokens[cursor]!;
       if (token.kind === "eof") { this.index = cursor; return; }
+      const atRecoveryBoundary = cursor > startIndex
+        && cursor >= failureIndex
+        && braces === 0
+        && brackets === 0
+        && parentheses === 0
+        && token.kind === "identifier"
+        && (boundary === "top-level"
+          ? topLevelDeclarationStarters.has(token.value)
+          : nestedStatementStarters.has(token.value) || this.tokens[cursor + 1]?.value === "(");
+      if (atRecoveryBoundary) { this.index = cursor; return; }
       if (token.kind !== "punctuation") continue;
       if (token.value === "{") { braces += 1; sawBrace = true; }
       else if (token.value === "[") brackets += 1;
@@ -344,7 +357,18 @@ class Parser {
   private prefix(): Expression {
     const token = this.current();
     if (token.value === "-" || token.value === "!") { this.consume(); const value = this.expression(7); return { kind: "unary", operator: token.value as "-" | "!", value, span: merge(token.span, value.span) }; }
-    if (token.kind === "number") { this.consume(); return { kind: "number", value: Number(token.value), unit: token.unit ?? "", raw: `${token.value}${token.unit ?? ""}`, span: token.span }; }
+    if (token.kind === "number") {
+      if (decimalLiteralExceedsRationalBudget(token.value) || !Number.isFinite(Number(token.value))) {
+        throw new ParseFailure(
+          `Exact numeric literal exceeds the ${maximumRationalDigits}-digit rational budget.`,
+          token,
+          "Shorten the literal or use a smaller exact ratio; CUT does not silently round source numbers.",
+          "CUT2064",
+        );
+      }
+      this.consume();
+      return { kind: "number", value: Number(token.value), unit: token.unit ?? "", raw: `${token.value}${token.unit ?? ""}`, span: token.span };
+    }
     if (token.kind === "string") { this.consume(); return { kind: "string", value: token.value, span: token.span }; }
     if (token.kind === "color") { this.consume(); return { kind: "color", value: token.value, span: token.span }; }
     if (token.value === "true" || token.value === "false") { this.consume(); return { kind: "boolean", value: token.value === "true", span: token.span }; }

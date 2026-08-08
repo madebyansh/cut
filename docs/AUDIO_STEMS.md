@@ -1,6 +1,6 @@
 # Deterministic audio stems
 
-Status: implemented in the current `0.4.0-alpha.1` development line. This is a
+Status: implemented in the current `0.4.0-alpha.2` development line. This is a
 narrow pre-master delivery contract, not a claim that arbitrary routing or
 every professional audio workflow is complete. Explicit Send/Return/Submix
 routing is supported inside one delivered program Bus and across program buses
@@ -247,7 +247,7 @@ loudness against a same-parent staged MP4, fully prepares every WAVE and `cut-st
 and stages both the incremental composition manifest and adjacent render
 manifest. One ordered publication transaction then covers all requested WAVs,
 the stem manifest, the MP4, the composition manifest, and the render manifest.
-The v10 render manifest contains only portable final locators relative to its
+The v11 render manifest contains only portable final locators relative to its
 own adjacent MP4 directory (`output` is the MP4 basename; stem directory and
 manifest locators use normalized `/` separators), binds the SHA-256 of the exact
 canonical staged `cut-stems.json` bytes, and is promoted last as the commit

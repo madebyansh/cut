@@ -12,9 +12,9 @@ const tool = (policyLabel, character, version = "1.0.0") => ({
 });
 const fixture = (overrides = {}) => ({
   packageName: "cut-lang",
-  packageVersion: "0.4.0-alpha.1",
+  packageVersion: "0.4.0-alpha.2",
   artifactProfile: "runtime",
-  artifact: { name: "cut-lang-0.4.0-alpha.1.tgz", bytes: 1234, sha256: hash("a") },
+  artifact: { name: "cut-lang-0.4.0-alpha.2.tgz", bytes: 1234, sha256: hash("a") },
   payloadPaths: ["README.md", "dist-cli/cli/cut.js", "package.json"],
   materials: { shrinkwrapSha256: hash("b"), sbomSha256: hash("c") },
   reproducibility: { byteIdentical: true, sameSourceReplaySha256: hash("a") },

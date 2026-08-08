@@ -113,7 +113,7 @@ test("render publication commits final paths, removes only manifest-owned stale 
     });
     assert.equal(manifest.output, "release.mp4");
     assert.deepEqual(manifest.lock, { sha256: testRenderLockSha256 });
-    assert.equal(manifest.version, 10);
+    assert.equal(manifest.version, 11);
     assert.ok(manifest.stems);
     assert.deepEqual(
       { directory: manifest.stems.directory, manifest: manifest.stems.manifest, count: manifest.stems.count },

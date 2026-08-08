@@ -14,7 +14,7 @@ version—is the authority for `CUT_TARBALL`.
 ```sh
 mkdir cut-consumer && cd cut-consumer
 export CONSUMER_ROOT="$PWD"
-export CUT_TARBALL=/absolute/path/to/cut-lang-0.4.0-alpha.1.tgz
+export CUT_TARBALL=/absolute/path/to/cut-lang-0.4.0-alpha.2.tgz
 
 npm init -y
 npm install --ignore-scripts --omit=dev --save-exact "$CUT_TARBALL"
@@ -228,4 +228,4 @@ your project policy; do not convert a no-clobber failure into overwrite.
 This path proves installed CLI authoring, not an installed VSIX, a language
 server, registry packages, automatic acquisition, rights approval, Windows
 media execution, independent-user usability, or human playback. Those remain
-separate gates while the package is `0.4.0-alpha.1`.
+separate gates while the package is `0.4.0-alpha.2`.

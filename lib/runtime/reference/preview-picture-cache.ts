@@ -34,9 +34,14 @@ import {
   writeFrame,
   type ReferenceMediaNativeProcessExecution,
 } from "./ffmpeg";
-import type { bindReferenceFfmpegExecutableToolchain } from "./audio-limiter-compatibility";
 import { referenceSceneEncodingContract } from "./scene-encoding";
 import { assertReferenceSceneArtifactContract } from "./render";
+import {
+  referencePictureArtifactProbe,
+  type BoundReferencePictureMediaToolchain,
+  type ReferencePictureArtifactProbe,
+  type ReferencePictureMediaToolchainIdentity,
+} from "./picture-media-toolchain";
 import {
   maximumLocalPaintSurfaceCacheBytes,
   maximumStaticMediaGradeCacheBytes,
@@ -52,7 +57,7 @@ import {
   type ReferenceMediaProfileExecutionAuthority,
 } from "./media-profile-state";
 
-export const referencePreviewPictureCacheAlgorithm = "cut-reference-preview-picture-range-cache-v2" as const;
+export const referencePreviewPictureCacheAlgorithm = "cut-reference-preview-picture-range-cache-v3" as const;
 const maximumManifestBytes = 64 * 1024;
 const maximumArtifactBytes = 2_147_483_648;
 export const referencePreviewPictureParallelLimits = Object.freeze({
@@ -94,7 +99,7 @@ type SceneSegment = Readonly<{
 
 export type ReferencePreviewPictureCacheEvidence = Readonly<{
   format: "cut-reference-preview-picture-cache";
-  version: 1;
+  version: 2;
   algorithm: typeof referencePreviewPictureCacheAlgorithm;
   status: "hit" | "miss" | "rebuilt";
   reason:
@@ -106,6 +111,7 @@ export type ReferencePreviewPictureCacheEvidence = Readonly<{
     runtime: string;
     backendIntegrity: string;
     toolchainIntegrity: string;
+    pictureToolchain: ReferencePictureMediaToolchainIdentity;
     selectedSceneKeys: readonly Readonly<{ id: string; key: string }>[];
     range: Readonly<{ firstFrame: number; endFrameExclusive: number; frames: number }>;
     sourceCanvas: Readonly<{ width: number; height: number }>;
@@ -128,7 +134,7 @@ export type ReferencePreviewPictureCacheEvidence = Readonly<{
 
 type CacheEntry = Readonly<{
   format: "cut-reference-preview-picture-cache-entry";
-  version: 1;
+  version: 2;
   algorithm: typeof referencePreviewPictureCacheAlgorithm;
   key: string;
   identity: ReferencePreviewPictureCacheEvidence["identity"];
@@ -959,6 +965,7 @@ function entryIdentity(value: Readonly<{
   runtime: string;
   backendIntegrity: string;
   toolchainIntegrity: string;
+  pictureToolchain: ReferencePictureMediaToolchainIdentity;
   segments: readonly SceneSegment[];
   firstFrame: number;
   endFrameExclusive: number;
@@ -972,6 +979,7 @@ function entryIdentity(value: Readonly<{
     runtime: value.runtime,
     backendIntegrity: value.backendIntegrity,
     toolchainIntegrity: value.toolchainIntegrity,
+    pictureToolchain: value.pictureToolchain,
     selectedSceneKeys,
     range: Object.freeze({
       firstFrame: value.firstFrame,
@@ -993,7 +1001,7 @@ function entryIdentity(value: Readonly<{
 function cacheKey(identity: ReturnType<typeof entryIdentity>) {
   return hash({
     format: "cut-reference-preview-picture-cache-key",
-    version: 1,
+    version: 2,
     algorithm: referencePreviewPictureCacheAlgorithm,
     identity,
   });
@@ -1016,7 +1024,7 @@ function sameEntryIdentity(value: unknown, key: string, identity: ReturnType<typ
   if (!plain(value)
     || !exactKeys(value, ["format", "version", "algorithm", "key", "identity", "artifact"])
     || value.format !== "cut-reference-preview-picture-cache-entry"
-    || value.version !== 1
+    || value.version !== 2
     || value.algorithm !== referencePreviewPictureCacheAlgorithm
     || value.key !== key
     || stableJsonStringify(value.identity) !== stableJsonStringify(identity)
@@ -1047,6 +1055,7 @@ function artifactExpectation(identity: ReturnType<typeof entryIdentity>, key: st
     runtime: identity.runtime,
     backendIntegrity: identity.backendIntegrity,
     toolchainIntegrity: identity.toolchainIntegrity,
+    pictureToolchain: identity.pictureToolchain,
     color: identity.color,
   } as const;
 }
@@ -1054,7 +1063,7 @@ function artifactExpectation(identity: ReturnType<typeof entryIdentity>, key: st
 async function validArtifact(
   projectRoot: string,
   entry: CacheEntry,
-  artifactProbe?: () => ReferenceMediaNativeProcessExecution,
+  artifactProbe: ReferencePictureArtifactProbe,
 ) {
   const path = resolve(projectRoot, ...entry.artifact.locator.split("/"));
   if (relative(resolve(projectRoot), path).split(sep).includes("..")) return undefined;
@@ -1062,7 +1071,7 @@ async function validArtifact(
     const metadata = await lstat(path);
     if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size !== entry.artifact.bytes) return undefined;
     if (await sha256(path) !== entry.artifact.sha256) return undefined;
-    await assertReferenceSceneArtifactContract(path, artifactExpectation(entry.identity, entry.key), artifactProbe?.());
+    await assertReferenceSceneArtifactContract(path, artifactExpectation(entry.identity, entry.key), artifactProbe);
     return path;
   } catch {
     return undefined;
@@ -1102,7 +1111,7 @@ async function publishLinkNoClobber(staged: string, destination: string, validEx
   }
 }
 
-type PictureToolchain = Awaited<ReturnType<typeof bindReferenceFfmpegExecutableToolchain>>;
+type PictureToolchain = BoundReferencePictureMediaToolchain;
 
 type WorkerChunk = Readonly<{
   rendererIndex: number;
@@ -1892,6 +1901,7 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
     runtime: cutReferenceRuntimeIdentity,
     backendIntegrity: input.backend.integrity,
     toolchainIntegrity: input.toolchain.toolchain.integrity,
+    pictureToolchain: input.toolchain.toolchain,
     segments,
     firstFrame: input.firstFrame,
     endFrameExclusive: input.endFrameExclusive,
@@ -1907,7 +1917,11 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
   const entryPath = resolve(entriesDirectory, `${key}.json`);
   const existing = await boundedEntry(entryPath);
   if (sameEntryIdentity(existing, key, identity)) {
-    const artifact = await validArtifact(input.projectRoot, existing, input.__testHooks?.nativeProcesses?.artifactProbe);
+    const artifact = await validArtifact(
+      input.projectRoot,
+      existing,
+      referencePictureArtifactProbe(input.toolchain, input.__testHooks?.nativeProcesses?.artifactProbe()),
+    );
     if (artifact) return Object.freeze({
       path: artifact,
       cache: Object.freeze({
@@ -1972,7 +1986,7 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
       `${input.composition.fps.numerator}/${input.composition.fps.denominator}`,
       stagedArtifact,
       input.color,
-      input.toolchain.executablePath,
+      input.toolchain.ffmpegExecutablePath,
     );
   let encoderFinished = false;
   let bodyError: unknown;
@@ -2159,7 +2173,7 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
     await assertReferenceSceneArtifactContract(
       stagedArtifact,
       artifactExpectation(identity, key),
-      input.__testHooks?.nativeProcesses?.artifactProbe(),
+      referencePictureArtifactProbe(input.toolchain, input.__testHooks?.nativeProcesses?.artifactProbe()),
     );
     input.__testHooks?.performanceDiagnostic?.(Object.freeze({
       kind: "parent-tail",
@@ -2184,7 +2198,7 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
     });
     const entry = Object.freeze({
       format: "cut-reference-preview-picture-cache-entry" as const,
-      version: 1 as const,
+      version: 2 as const,
       algorithm: referencePreviewPictureCacheAlgorithm,
       key,
       identity,
@@ -2198,7 +2212,7 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
         await assertReferenceSceneArtifactContract(
           blobPath,
           artifactExpectation(identity, key),
-          input.__testHooks?.nativeProcesses?.artifactProbe(),
+          referencePictureArtifactProbe(input.toolchain, input.__testHooks?.nativeProcesses?.artifactProbe()),
         );
         return true;
       } catch { return false; }
@@ -2211,7 +2225,11 @@ export async function renderReferencePreviewPictureArtifact(input: Readonly<{
       if (winner.artifact.sha256 !== artifact.sha256) {
         throw new ReferencePreviewPictureCacheError("CUT_PREVIEW_PICTURE_CACHE_NONDETERMINISM", `cache key ${key} produced both ${winner.artifact.sha256} and ${artifact.sha256}.`);
       }
-      return Boolean(await validArtifact(input.projectRoot, winner, input.__testHooks?.nativeProcesses?.artifactProbe));
+      return Boolean(await validArtifact(
+        input.projectRoot,
+        winner,
+        referencePictureArtifactProbe(input.toolchain, input.__testHooks?.nativeProcesses?.artifactProbe()),
+      ));
     });
     return Object.freeze({
       path: blobPath,

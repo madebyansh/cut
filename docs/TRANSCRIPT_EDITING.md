@@ -1,7 +1,7 @@
 # Edit-safe transcript selection
 
 Status: executable public audiovisual vertical in `cut-lang`
-`0.4.0-alpha.1`. This is a bounded transcript-editing contract, not a CUT 1.0
+`0.4.0-alpha.2`. This is a bounded transcript-editing contract, not a CUT 1.0
 claim and not professional creative proof.
 
 ## What CUT owns
@@ -578,7 +578,7 @@ This vertical is deliberately bounded:
   fixtures, not qualifying professional projects; named-human sync, full-speed
   playback, intelligibility, and creative review remain `UNPERFORMED`.
 
-The repository therefore remains `0.4.0-alpha.1`. This slice reduces one real
+The repository therefore remains `0.4.0-alpha.2`. This slice reduces one real
 authoring burden. The current-source V3 three-project nonlinear-editor
 conformance is a technical pass with explicit partial ceilings; every
 shipped-byte freeze must replay it from that exact package, and the separately

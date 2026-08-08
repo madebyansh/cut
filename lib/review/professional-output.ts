@@ -24,6 +24,7 @@ import { scanReferenceStereoF32LeFile, type ReferenceAudioPeakScan } from "../ru
 import { scanReferenceStereoF32LeTruePeakFile, type ReferenceAudioTruePeakScan } from "../runtime/reference/audio-true-peak";
 import { measureReferenceAudioAuthoredBoundary, type ReferenceLoudnessMeasurement } from "../runtime/reference/audio";
 import { inspectReferenceDecodedTruePeak } from "../runtime/reference/audio-delivery-inspection";
+import { isReferencePictureMediaToolchainIdentity } from "../runtime/reference/picture-media-toolchain";
 import { verifyReferenceStemEvidence } from "./reference-stem-evidence";
 
 export const professionalOutputReviewFormat = "cut-professional-output-review" as const;
@@ -1605,7 +1606,8 @@ async function authenticateFreshCurrentRuntimeRender(
     }
     const outputSha256 = await hashFile(freshOutput), manifestPath = `${freshOutput}.manifest.json`, manifestBytes = await readFile(manifestPath), manifestSha256 = hashArtifactBytes(manifestBytes);
     if (outputSha256 !== manifest.sha256 || outputSha256 !== review.artifact.output.sha256) fail("CUT_REVIEW_RENDER_AUTHENTICATION", "$.artifact.output.sha256", "declared hero bytes are not byte-identical to a fresh isolated render of the verified lock-applied IR.");
-    if (manifest.format !== "cut-reference-render" || manifest.version !== 10 || manifest.runtime !== executable.lock.toolchain.referenceRuntime
+    if (manifest.format !== "cut-reference-render" || manifest.version !== 11 || manifest.runtime !== executable.lock.toolchain.referenceRuntime
+      || !isReferencePictureMediaToolchainIdentity(manifest.pictureToolchain)
       || stableJsonStringify(manifest.backend) !== stableJsonStringify(executable.lock.toolchain.referenceBackend)
       || manifest.lock.sha256 !== review.artifact.lock.sha256 || manifest.buildId !== executable.ir.buildId
       || manifest.executionBuildId !== retained.executionBuildId || manifest.output !== basename(review.artifact.output.path)
@@ -1623,7 +1625,7 @@ async function authenticateFreshCurrentRuntimeRender(
     const semanticProjection = (value: Record<string, unknown> | ReferenceRenderManifest) => {
       const stems = record(value.stems, "$.artifact.renderManifest.stems");
       return {
-        format: value.format, version: value.version, runtime: value.runtime, backend: value.backend, lock: value.lock,
+        format: value.format, version: value.version, runtime: value.runtime, backend: value.backend, pictureToolchain: value.pictureToolchain, lock: value.lock,
         buildId: value.buildId, executionBuildId: value.executionBuildId, sha256: value.sha256, duration: value.duration,
         canvas: value.canvas, color: value.color, audio: value.audio, media: value.media,
         stems: { manifestSha256: stems.manifestSha256, count: stems.count },
@@ -1716,10 +1718,11 @@ async function verifyRenderManifestBinding(
   const path = resolve(root, ...review.artifact.renderManifest.path.split("/")), metadata = await lstat(path);
   if (metadata.size > defaultJsonLimits.maxInputBytes) fail("CUT_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest", "render manifest exceeds the bounded JSON input limit.");
   const value = await readBoundedJsonArtifact(root, review.artifact.renderManifest, "$.artifact.renderManifest"), manifest = closed(value, "$.artifact.renderManifest", [
-    "audio", "backend", "buildId", "cache", "canvas", "color", "duration", "executionBuildId", "format", "lock", "media", "output", "runtime", "sha256", "stems", "version",
+    "audio", "backend", "buildId", "cache", "canvas", "color", "duration", "executionBuildId", "format", "lock", "media", "output", "pictureToolchain", "runtime", "sha256", "stems", "version",
   ]);
   if (manifest.format !== "cut-reference-render") fail("CUT_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest", "must be a cut-reference-render manifest.");
-  if (manifest.version !== 10) fail("CUT_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.version", "must be lock-and-stem-bound render-manifest v10.");
+  if (manifest.version !== 11) fail("CUT_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.version", "must be lock, stem and picture-toolchain-bound render-manifest v11.");
+  if (!isReferencePictureMediaToolchainIdentity(manifest.pictureToolchain)) fail("CUT_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.pictureToolchain", "must bind one exact FFmpeg and FFprobe picture toolchain identity.");
   const runtime = textValue(manifest.runtime, "$.artifact.renderManifest.runtime", 1024), backend = record(manifest.backend, "$.artifact.renderManifest.backend");
   if (runtime !== executable.lock.toolchain.referenceRuntime || stableJsonStringify(backend) !== stableJsonStringify(executable.lock.toolchain.referenceBackend)) fail("CUT_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.backend", "does not bind the current lock's exact reference runtime/backend identity.");
   record(manifest.media, "$.artifact.renderManifest.media");
@@ -1919,10 +1922,10 @@ async function verifyTechnicalEvidenceRecords(
     if (id === "renderManifest") {
       const { item, status } = technicalReportEnvelope(value, path, id, gateEvidence, expected, ["manifest"]);
       const manifest = closed(item.manifest, `${path}.manifest`, ["buildId", "executionBuildId", "format", "path", "sha256", "version"]);
-      const valid = manifest.format === "cut-reference-render" && manifest.version === 10
+      const valid = manifest.format === "cut-reference-render" && manifest.version === 11
         && manifest.path === review.artifact.renderManifest.path && manifest.sha256 === review.artifact.renderManifest.sha256
         && manifest.buildId === render.buildId && manifest.executionBuildId === render.manifest.executionBuildId;
-      if (status !== derivedTechnicalStatus(valid) || status !== "pass") fail("CUT_REVIEW_TECHNICAL_REPORT", `${path}.manifest`, "does not bind the verified current render-manifest v10.");
+      if (status !== derivedTechnicalStatus(valid) || status !== "pass") fail("CUT_REVIEW_TECHNICAL_REPORT", `${path}.manifest`, "does not bind the verified current render-manifest v11.");
       continue;
     }
     if (id === "deterministicReplay") {
@@ -1935,7 +1938,8 @@ async function verifyTechnicalEvidenceRecords(
         { role: "technical.deterministicReplay.renderManifest", artifact: replayManifestArtifact },
       );
       const replayManifest = record(await readBoundedJsonArtifact(root, replayManifestArtifact, `${path}.replayRenderManifest`), `${path}.replayRenderManifest`);
-      const replayValid = replayManifest.format === "cut-reference-render" && replayManifest.version === 10
+      const replayValid = replayManifest.format === "cut-reference-render" && replayManifest.version === 11
+        && isReferencePictureMediaToolchainIdentity(replayManifest.pictureToolchain)
         && replayManifest.buildId === render.buildId && record(replayManifest.lock, `${path}.replayRenderManifest.lock`).sha256 === review.artifact.lock.sha256
         && replayManifest.sha256 === replayOutput.sha256 && replayManifest.output === basename(replayOutput.path)
         && replayManifest.duration === review.artifact.durationSeconds && replayOutput.sha256 === review.artifact.output.sha256;
@@ -2034,11 +2038,11 @@ async function verifyFailedIterationBindings(
         { sourceSha256: iteration.source.sha256, lockSha256: iteration.lock.sha256, irSha256: iteration.ir.sha256, buildId: retainedIr.buildId },
         { sourceSha256: review.artifact.source.sha256, lockSha256: review.artifact.lock.sha256, irSha256: review.artifact.ir.sha256, buildId: hero.ir.buildId },
       )) fail("CUT_REVIEW_FAILED_ITERATION", path, "must be a genuinely revised source/lock/IR execution, not the final locked build paired with different self-described output bytes.");
-      const manifest = closed(await readBoundedJsonArtifact(root, iteration.renderManifest, `${path}.renderManifest`), `${path}.renderManifest`, ["audio", "backend", "buildId", "cache", "canvas", "color", "duration", "executionBuildId", "format", "lock", "media", "output", "runtime", "sha256", "stems", "version"]);
+      const manifest = closed(await readBoundedJsonArtifact(root, iteration.renderManifest, `${path}.renderManifest`), `${path}.renderManifest`, ["audio", "backend", "buildId", "cache", "canvas", "color", "duration", "executionBuildId", "format", "lock", "media", "output", "pictureToolchain", "runtime", "sha256", "stems", "version"]);
       const manifestLock = closed(manifest.lock, `${path}.renderManifest.lock`, ["sha256"]);
       sha256(manifest.executionBuildId, `${path}.renderManifest.executionBuildId`);
-      if (manifest.format !== "cut-reference-render" || manifest.version !== 10 || manifest.runtime !== lock.toolchain.referenceRuntime || stableJsonStringify(manifest.backend) !== stableJsonStringify(lock.toolchain.referenceBackend)
-        || manifestLock.sha256 !== iteration.lock.sha256 || manifest.buildId !== retainedIr.buildId || manifest.sha256 !== iteration.output.sha256 || manifest.output !== basename(iteration.output.path)) fail("CUT_REVIEW_FAILED_ITERATION", `${path}.renderManifest`, "does not strictly bind the retained source/lock/IR/output and locked runtime/backend through render-manifest v10.");
+      if (manifest.format !== "cut-reference-render" || manifest.version !== 11 || !isReferencePictureMediaToolchainIdentity(manifest.pictureToolchain) || manifest.runtime !== lock.toolchain.referenceRuntime || stableJsonStringify(manifest.backend) !== stableJsonStringify(lock.toolchain.referenceBackend)
+        || manifestLock.sha256 !== iteration.lock.sha256 || manifest.buildId !== retainedIr.buildId || manifest.sha256 !== iteration.output.sha256 || manifest.output !== basename(iteration.output.path)) fail("CUT_REVIEW_FAILED_ITERATION", `${path}.renderManifest`, "does not strictly bind the retained source/lock/IR/output and exact runtime/backend/picture toolchain through render-manifest v11.");
       const duration = finiteNumber(manifest.duration, `${path}.renderManifest.duration`, 180, 300);
       if (retainedIr.outputs.length !== 1) fail("CUT_REVIEW_FAILED_ITERATION", `${path}.ir.outputs`, "must retain exactly one canonical render output.");
       const composition = retainedIr.compositions.find((item) => item.id === retainedIr.outputs[0]!.timelineId);

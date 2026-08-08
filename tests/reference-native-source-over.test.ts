@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { copyFile, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +15,8 @@ import {
 } from "../lib/runtime/reference/compositing";
 import {
   executeReferenceNativeRetainedMediaViewportRaster,
+  referenceJavascriptSourceOverImplementation,
+  referenceNativeSourceOverBackend,
   referenceNativeSourceOverIdentity,
   verifyReferenceNativeSourceOverBinaryForTest,
 } from "../lib/runtime/reference/native-source-over";
@@ -113,6 +116,41 @@ function compose(
   });
 }
 
+test("importing the native adapter does not load a platform binary eagerly", () => {
+  const modulePath = resolve(__dirname, "../lib/runtime/reference/native-source-over.js");
+  const result = spawnSync(process.execPath, ["-e", `
+    require(${JSON.stringify(modulePath)});
+    process.stdout.write(String(Object.keys(require.cache).some((path) => path.endsWith(".node"))));
+  `], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "false");
+});
+
+test("native adapter publishes the exact selected compositor identity", () => {
+  const selected = referenceNativeSourceOverBackend();
+  const common = {
+    platform: process.platform,
+    architecture: process.arch,
+    algorithm: referenceNativeSourceOverIdentity.algorithm,
+  };
+  assert.deepEqual(selected, process.platform === "darwin" && process.arch === "arm64"
+    ? { mode: "native", ...common, binarySha256: referenceNativeSourceOverIdentity.binary.sha256 }
+    : { mode: "javascript", ...common, implementation: "cut-reference-javascript-source-over-v1" });
+  assert.equal(referenceJavascriptSourceOverImplementation, "cut-reference-javascript-source-over-v1");
+});
+
+test("Linux compositor selection never loads the bundled Darwin native binary", { skip: process.platform !== "linux" }, () => {
+  const modulePath = resolve(__dirname, "../lib/runtime/reference/native-source-over.js");
+  const result = spawnSync(process.execPath, ["-e", `
+    const adapter = require(${JSON.stringify(modulePath)});
+    const selected = adapter.referenceNativeSourceOverBackend();
+    const nativeBinary = Object.keys(require.cache).some((path) => /reference-retained-source-over-darwin-arm64\\.node$/.test(path));
+    process.stdout.write(JSON.stringify({ mode: selected.mode, nativeBinary }));
+  `], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { mode: "javascript", nativeBinary: false });
+});
+
 test("authenticated native normal source-over is byte-identical to the JS-fast and scalar laws", () => {
   const layers = fixtures(97, 53);
   const native = compose(layers, "automatic");
@@ -121,9 +159,11 @@ test("authenticated native normal source-over is byte-identical to the JS-fast a
   assert.deepEqual(native.bytes, js.bytes);
   assert.deepEqual(native.bytes, scalar.bytes);
   assert.equal(native.counters.executions, layers.length);
-  assert.equal(native.counters.nativeExecutions, layers.length);
-  assert.equal(native.counters.nativeFastNormalStraightPixels, native.counters.fastNormalStraightPixels);
-  assert.ok(native.counters.nativeFastNormalStraightPixels > 0);
+  const nativeHost = process.platform === referenceNativeSourceOverIdentity.platform
+    && process.arch === referenceNativeSourceOverIdentity.architecture;
+  assert.equal(native.counters.nativeExecutions, nativeHost ? layers.length : 0);
+  assert.equal(native.counters.nativeFastNormalStraightPixels, nativeHost ? native.counters.fastNormalStraightPixels : 0);
+  if (nativeHost) assert.ok(native.counters.nativeFastNormalStraightPixels > 0);
   assert.equal(native.counters.scalarPixels, 0);
   assert.equal(js.counters.nativeExecutions, 0);
   assert.equal(js.counters.nativeFastNormalStraightPixels, 0);
@@ -246,6 +286,7 @@ test("native executable authority rejects byte mutation and symlink substitution
     await writeFile(changed, bytes);
     const changedCanonical = await realpath(changed);
     assert.throws(() => verifyReferenceNativeSourceOverBinaryForTest(changedCanonical), /do not match their implementation authority/);
+    assert.throws(() => verifyReferenceNativeSourceOverBinaryForTest(join(root, "missing.node")), /binary is missing/);
     await symlink(exact, linked);
     assert.throws(() => verifyReferenceNativeSourceOverBinaryForTest(linked), /regular non-link artifact/);
   } finally {

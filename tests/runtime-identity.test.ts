@@ -15,6 +15,7 @@ import { createIncrementalRenderPlan } from "../lib/runtime/graph";
 import {
   collectReferenceBackendIdentity,
   createReferenceBackendIdentity,
+  type CutReferenceCompositorIdentity,
   type CutReferenceNativeIdentity,
 } from "../lib/runtime/reference/runtime-identity";
 import { cutReferenceRuntimeIdentity } from "../lib/version";
@@ -30,6 +31,28 @@ function native(overrides: Partial<CutReferenceNativeIdentity> = {}): CutReferen
     nodeAbi: process.versions.modules!,
     sharp: versionMap().sharp,
     libvips: "8.17.3",
+    ...overrides,
+  };
+}
+
+function nativeCompositor(overrides: Partial<Extract<CutReferenceCompositorIdentity, { mode: "native" }>> = {}): Extract<CutReferenceCompositorIdentity, { mode: "native" }> {
+  return {
+    mode: "native",
+    platform: process.platform,
+    architecture: process.arch,
+    algorithm: "cut-reference-private-straight-rgba-native-pixel-kernels-v2",
+    binarySha256: "1".repeat(64),
+    ...overrides,
+  };
+}
+
+function javascriptCompositor(overrides: Partial<Extract<CutReferenceCompositorIdentity, { mode: "javascript" }>> = {}): Extract<CutReferenceCompositorIdentity, { mode: "javascript" }> {
+  return {
+    mode: "javascript",
+    platform: process.platform,
+    architecture: process.arch,
+    algorithm: "cut-reference-private-straight-rgba-native-pixel-kernels-v2",
+    implementation: "cut-reference-javascript-source-over-v1",
     ...overrides,
   };
 }
@@ -122,26 +145,48 @@ test("compiler package loading does not initialize the native Sharp module", () 
   const packagesPath = resolve(__dirname, "../lib/language/packages.js");
   const result = spawnSync(process.execPath, ["-e", `
     require(${JSON.stringify(packagesPath)});
-    const loaded = Object.keys(require.cache).some((path) => /node_modules[\\/]sharp[\\/]/.test(path));
-    process.stdout.write(String(loaded));
+    const loaded = Object.keys(require.cache);
+    process.stdout.write(JSON.stringify({
+      sharp: loaded.some((path) => /node_modules[\\/]sharp[\\/]/.test(path)),
+      compositor: loaded.some((path) => /runtime[\\/]reference[\\/]native-source-over\\.js$/.test(path)),
+      nativeBinary: loaded.some((path) => /reference-retained-source-over-darwin-arm64\\.node$/.test(path)),
+    }));
   `], { encoding: "utf8", timeout: 10_000 });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "false");
+  assert.deepEqual(JSON.parse(result.stdout), { sharp: false, compositor: false, nativeBinary: false });
 });
 
-test("native Sharp/libvips identity is collected lazily and changes render/cache identity", async () => {
+test("native Sharp/libvips and selected compositor identity are collected lazily", async () => {
   const actual = await collectReferenceBackendIdentity();
+  assert.equal(actual.version, 2);
   assert.equal(actual.runtime, cutReferenceRuntimeIdentity);
   assert.equal(actual.dependencies.integrity, referenceDependencyIdentity.integrity);
   assert.equal(actual.native.sharp, versionMap().sharp);
   assert.match(actual.native.libvips, /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/);
+  assert.equal(actual.compositor.platform, process.platform);
+  assert.equal(actual.compositor.architecture, process.arch);
+  assert.equal(actual.compositor.mode, process.platform === "darwin" && process.arch === "arm64" ? "native" : "javascript");
+  assert.match(actual.compositor.algorithm, /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/);
+  if (actual.compositor.mode === "native") assert.match(actual.compositor.binarySha256, /^[a-f0-9]{64}$/);
+  else assert.equal(actual.compositor.implementation, "cut-reference-javascript-source-over-v1");
   assert.match(actual.integrity, /^[a-f0-9]{64}$/);
+});
 
-  const first = createReferenceBackendIdentity(referenceDependencyIdentity, native({ libvips: "8.17.3" }));
-  const changed = createReferenceBackendIdentity(referenceDependencyIdentity, native({ libvips: "8.17.4" }));
-  assert.notEqual(first.integrity, changed.integrity);
+test("backend integrity and render cache close over compositor mode and native binary hash", () => {
+  const first = createReferenceBackendIdentity(referenceDependencyIdentity, native({ libvips: "8.17.3" }), nativeCompositor());
+  const changedNativeHash = createReferenceBackendIdentity(
+    referenceDependencyIdentity,
+    native({ libvips: "8.17.3" }),
+    nativeCompositor({ binarySha256: "2".repeat(64) }),
+  );
+  const changedMode = createReferenceBackendIdentity(referenceDependencyIdentity, native({ libvips: "8.17.3" }), javascriptCompositor());
+  assert.notEqual(first.integrity, changedNativeHash.integrity);
+  assert.notEqual(first.integrity, changedMode.integrity);
+
   const previous = createIncrementalRenderPlan(fixture(), "main", undefined, cutReferenceRuntimeIdentity, first.integrity).manifest;
-  const plan = createIncrementalRenderPlan(fixture(), "main", previous, cutReferenceRuntimeIdentity, changed.integrity);
-  assert.ok(plan.scenes.every((scene) => scene.status === "miss"));
-  assert.equal(plan.manifest.backendIntegrity, changed.integrity);
+  for (const changed of [changedNativeHash, changedMode]) {
+    const plan = createIncrementalRenderPlan(fixture(), "main", previous, cutReferenceRuntimeIdentity, changed.integrity);
+    assert.ok(plan.scenes.every((scene) => scene.status === "miss"));
+    assert.equal(plan.manifest.backendIntegrity, changed.integrity);
+  }
 });

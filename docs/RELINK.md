@@ -50,7 +50,7 @@ contract is one declaration and one string literal.
 | `video` | Bounded `ffprobe`; a video stream with exact positive time base and duration plus dimensions |
 | `audio` | Bounded `ffprobe`; an audio stream with exact positive time base and duration plus sample rate/channels |
 | `image` | Bounded Sharp/libvips decode; one static image within image limits |
-| `font` | Stable regular-file bytes and SHA-256 only, matching the honest lock-v2 coverage |
+| `font` | Stable regular-file bytes and SHA-256 only, matching the honest lock-v3 coverage |
 | `data` | Stable regular-file bytes and SHA-256 only; the consuming component owns schema validation |
 
 The old locator may be missing: repairing an offline or moved source is the

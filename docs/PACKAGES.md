@@ -1,6 +1,6 @@
 # CUT local packages
 
-Status: executable local/file vertical slice in CUT `0.4.0-alpha.1`. Local/file
+Status: executable local/file vertical slice in CUT `0.4.0-alpha.2`. Local/file
 distribution is the only supported distribution boundary. Registry, Git,
 native, WASM, shader-plugin, and network installation are not implemented.
 The separate bounded zero-host-import executable ABI is documented in

@@ -1,6 +1,7 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { stableJsonStringify } from "../core/stable";
+import { isReferencePictureMediaToolchainIdentity } from "../runtime/reference/picture-media-toolchain";
 import {
   CutProfessionalOutputReviewError,
   type HashedArtifact,
@@ -357,7 +358,8 @@ async function verifyManifest(root: string, review: ReferenceStudyReview) {
   const manifestPath = resolve(root, ...review.artifact.renderManifest.path.split("/"));
   const bytes = await readFile(manifestPath), value = parseStrictReviewJson(bytes), manifest = record(value, "$.artifact.renderManifest");
   if (manifest.format !== "cut-reference-render") fail("CUT_STUDY_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest", "must be a cut-reference-render manifest.");
-  if (manifest.version !== 10) fail("CUT_STUDY_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.version", "must be lock-and-stem-bound render-manifest v10.");
+  if (manifest.version !== 11) fail("CUT_STUDY_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.version", "must be lock, stem and picture-toolchain-bound render-manifest v11.");
+  if (!isReferencePictureMediaToolchainIdentity(manifest.pictureToolchain)) fail("CUT_STUDY_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.pictureToolchain", "must bind one exact FFmpeg and FFprobe picture toolchain identity.");
   const manifestLock = closed(manifest.lock, "$.artifact.renderManifest.lock", ["sha256"]);
   if (digest(manifestLock.sha256, "$.artifact.renderManifest.lock.sha256") !== review.artifact.lock.sha256) fail("CUT_STUDY_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.lock.sha256", "does not bind the selected cut.lock SHA-256.");
   if (manifest.sha256 !== review.artifact.output.sha256) fail("CUT_STUDY_REVIEW_RENDER_MANIFEST", "$.artifact.renderManifest.sha256", "does not bind the selected output SHA-256.");

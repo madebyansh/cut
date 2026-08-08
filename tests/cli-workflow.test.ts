@@ -630,7 +630,7 @@ export preview = render(main, width: 128px, height: 72px, codec: "h264");
     assert.ok((await readFile(join(workspace, "review/range.mp4.manifest.json"))).byteLength > 0);
     const legacy = JSON.parse((await run(["preview", "main.cut", "--lock", "cut.lock", "--out", "review/full.mp4", "--json"], workspace)).stdout) as { manifest: { format: string; version: number; lock: { sha256: string }; duration: number; canvas: { width: number; height: number } } };
     const lockSha256 = createHash("sha256").update(await readFile(join(workspace, "cut.lock"))).digest("hex");
-    assert.deepEqual({ format: legacy.manifest.format, version: legacy.manifest.version, lock: legacy.manifest.lock, duration: legacy.manifest.duration, width: legacy.manifest.canvas.width, height: legacy.manifest.canvas.height }, { format: "cut-reference-render", version: 10, lock: { sha256: lockSha256 }, duration: 1, width: 128, height: 72 }, "preview without range/width must retain the lock-bound full-render path");
+    assert.deepEqual({ format: legacy.manifest.format, version: legacy.manifest.version, lock: legacy.manifest.lock, duration: legacy.manifest.duration, width: legacy.manifest.canvas.width, height: legacy.manifest.canvas.height }, { format: "cut-reference-render", version: 11, lock: { sha256: lockSha256 }, duration: 1, width: 128, height: 72 }, "preview without range/width must retain the lock-bound full-render path");
     for (const flag of ["--range", "--width"]) {
       const rejected = await run(["render", "missing.cut", flag, flag === "--range" ? "0s:1s" : "64", "--out", "x.mp4"], workspace, 1);
       assert.match(rejected.stderr, new RegExp(`CUTC1001: Unknown option "${flag}" for render`));

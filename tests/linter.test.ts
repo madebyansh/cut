@@ -70,6 +70,17 @@ export out = render(main);
   assert.ok(diagnostics.some((diagnostic) => diagnostic.code === "CUTL1001" && diagnostic.message.includes("Circle")));
 });
 
+test("function defaults resolve globals before binding the current parameter", () => {
+  const source = `cut 0.4;
+project "lint function default";
+const fallback: Number = 24;
+function useFallback(fallback: Number = fallback) -> Number = fallback;
+timeline main(duration: 1s, fps: useFallback()) { scene only(duration: 1s) {} }
+export out = render(main);
+`;
+  assert.ok(!lintCutModule(parse(source)).some((diagnostic) => diagnostic.code === "CUTL1002" && diagnostic.message.includes("fallback")));
+});
+
 test("nested lexical bindings do not leak into their parent or sibling scopes", () => {
   const source = `cut 0.4;
 project "lint nested scopes";

@@ -67,7 +67,7 @@ test("reference export passes the authored Meter target into normalization", { t
   const ir = compile('cut 0.4; project "render target"; import { Meter, Tone } from "@cut/audio"; timeline main(duration: 3s, fps: 24, width: 320px, height: 180px) { scene only(duration: 3s) { Meter(target: -20lufs, truePeak: -2.5dbtp, range: 7) { Tone(frequency: 440hz, duration: 3s, amplitude: 5%); } } } export out = render(main);');
   const directory = await mkdtemp(resolve(tmpdir(), "cut-mastering-target-"));
   const output = resolve(directory, "mastered.mp4"); const manifest = await renderReferenceIr(ir, directory, output);
-  assert.equal(manifest.version, 10);
+  assert.equal(manifest.version, 11);
   assert.equal(manifest.audio.samplePeak.thresholdDbfs, 0);
   assert.equal(manifest.audio.samplePeak.observedFrames, 144_000);
   assert.deepEqual(manifest.audio.loudness.target, { integratedLufs: -20, truePeakDbtp: -2.5, loudnessRangeLu: 7 });

@@ -256,7 +256,7 @@ test("CLI preview decodes proxies, render decodes masters, reports fallback, and
     const previewPath = resolve(root, "preview.mp4"), finalPath = resolve(root, "final.mp4");
     const preview = JSON.parse((await runCli(["preview", "main.cut", "--lock", "cut.lock", "--out", previewPath, "--json"], root)).stdout) as { format: string; manifest: { version: number; buildId: string; executionBuildId: string; media: { requested: string; selectedProxyResources: number; fallbackResources: number; resources: Array<{ resourceId: string; kind: string; requested: string; selected: string; fallback: boolean; locator: string; sha256: string }> } } };
     const final = JSON.parse((await runCli(["render", "main.cut", "--lock", "cut.lock", "--output", "release", "--out", finalPath, "--json"], root)).stdout) as typeof preview;
-    assert.equal(preview.format, "cut-preview-report"); assert.equal(preview.manifest.version, 10); assert.equal(preview.manifest.media.requested, "proxy");
+    assert.equal(preview.format, "cut-preview-report"); assert.equal(preview.manifest.version, 11); assert.equal(preview.manifest.media.requested, "proxy");
     assert.equal(preview.manifest.media.selectedProxyResources, 2); assert.equal(preview.manifest.media.fallbackResources, 1);
     const background = preview.manifest.media.resources.find((resource) => resource.resourceId === "background");
     assert.deepEqual({ kind: background?.kind, requested: background?.requested, selected: background?.selected, fallback: background?.fallback, locator: background?.locator }, { kind: "video", requested: "proxy", selected: "master", fallback: true, locator: "media/linked-master.mov" });

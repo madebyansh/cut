@@ -1,6 +1,6 @@
 {
   "name": "cut-lang",
-  "version": "0.4.0-alpha.1",
+  "version": "0.4.0-alpha.2",
   "description": "A typed language and deterministic runtime for audiovisual editing.",
   "license": "MIT",
   "private": false,
@@ -21,10 +21,8 @@
     "language"
   ],
   "engines": {
-    "node": "20.x"
+    "node": ">=20.19.0 <21 || >=24.0.0 <25"
   },
-  "os": ["darwin"],
-  "cpu": ["arm64"],
   "bin": {
     "cut": "dist-cli/cli/cut.js"
   },
@@ -75,6 +73,7 @@
     "lint": "node node_modules/eslint/bin/eslint.js cli lib tests scripts",
     "test": "npm run test:core",
     "test:core": "node scripts/run-dist-core-tests.mjs --build",
+    "test:portable": "npm run cli:build && node --test dist-cli/tests/formatter.test.js dist-cli/tests/linter.test.js dist-cli/tests/language.test.js dist-cli/tests/doctor.test.js dist-cli/tests/reference-native-source-over.test.js dist-cli/tests/reference-media-camera2d-runtime.test.js",
     "test:scripts": "node --test scripts/*.test.mjs",
     "audit:public": "node scripts/audit-public-tree.mjs",
     "verify": "npm run audit:public && npm run test:scripts && npm run lint && npm run test:core",

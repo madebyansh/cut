@@ -10,7 +10,7 @@ import { compileCutModule, CutCompileError, CutCompileLimitError, CutCompileRati
 import { applyCutLock, createCutLock, resolveLockedProjectPath } from "../lib/language/lock";
 import { createIncrementalRenderPlan } from "../lib/runtime/graph";
 import { propertyAt } from "../lib/runtime/reference/signals";
-import { rational, rationalToNumber } from "../lib/language/rational";
+import { decimalLiteralExceedsRationalBudget, rational, rationalToNumber } from "../lib/language/rational";
 import { builtinPackages } from "../lib/language/packages";
 import { hash } from "../lib/core/stable";
 import { validateReferenceSession } from "../lib/runtime/reference/validate";
@@ -25,6 +25,41 @@ const parse = (source: string) => {
 };
 
 test("lexer distinguishes subtraction from identifiers", () => assert.deepEqual(lexCut("width-padding").slice(0, 3).map((item) => item.value), ["width", "-", "padding"]));
+test("lexer keeps an exclusive range operator after an integer", () => {
+  assert.deepEqual(lexCut("0..<3").slice(0, 3).map((item) => [item.kind, item.value]), [
+    ["number", "0"],
+    ["operator", "..<"],
+    ["number", "3"],
+  ]);
+});
+test("lexer preserves the existing trailing-point decimal spelling", () => {
+  assert.deepEqual(lexCut("1.;").slice(0, 2).map((item) => [item.kind, item.value]), [
+    ["number", "1."],
+    ["punctuation", ";"],
+  ]);
+});
+test("lexer diagnostics cover the unexpected source byte", () => {
+  const source = 'cut 0.4; project "bad byte"; const bad = @;';
+  const result = parseCutLanguage(source);
+  assert.equal(result.module, null);
+  assert.equal(result.diagnostics[0]?.code, "CUT1001");
+  assert.equal(result.diagnostics[0]?.span.start.offset, source.indexOf("@"));
+  assert.equal(result.diagnostics[0]?.span.end.offset, source.indexOf("@") + 1);
+  assert.equal(source.slice(result.diagnostics[0]?.span.start.offset, result.diagnostics[0]?.span.end.offset), "@");
+});
+test("lexer diagnostics preserve a complete unexpected Unicode scalar", () => {
+  const source = 'cut 0.4; project "bad scalar"; const bad = 💥;';
+  const result = parseCutLanguage(source);
+  const offset = source.indexOf("💥");
+  assert.equal(result.module, null);
+  assert.equal(result.diagnostics[0]?.code, "CUT1001");
+  assert.match(result.diagnostics[0]?.message ?? "", /💥/u);
+  assert.deepEqual(
+    [result.diagnostics[0]?.span.start.offset, result.diagnostics[0]?.span.end.offset],
+    [offset, offset + "💥".length],
+  );
+  assert.equal(source.slice(result.diagnostics[0]?.span.start.offset, result.diagnostics[0]?.span.end.offset), "💥");
+});
 test("parser preserves timeline source order", () => {
   const cutModule = parse('cut 0.4; project "x"; timeline main(duration: 2s, fps: 24) { Text(content: "before"); scene one(duration: 1s) { Text(content: "inside"); } Text(content: "after"); } export out = render(main);');
   const timeline = cutModule.declarations.find((item) => item.kind === "timeline");
@@ -55,6 +90,40 @@ export out = render(main);`;
     "Positional arguments cannot follow named arguments.",
     'Expected an expression, found “;”.',
     "Positional arguments cannot follow named arguments.",
+  ]);
+});
+test("parser recovery does not consume the declaration after a missing semicolon", () => {
+  const source = `cut 0.4;
+project "recover declaration";
+const first = 1
+const second = ;
+const third = ;`;
+  const result = parseCutLanguage(source);
+  assert.equal(result.module, null);
+  assert.deepEqual(result.diagnostics.map((diagnostic) => diagnostic.code), ["CUT1002", "CUT1002", "CUT1002"]);
+  assert.deepEqual(result.diagnostics.map((diagnostic) => diagnostic.span.start.offset), [
+    source.indexOf("const second"),
+    source.indexOf(";", source.indexOf("const second")),
+    source.indexOf(";", source.indexOf("const third")),
+  ]);
+});
+test("parser recovery does not consume the statement after a missing semicolon", () => {
+  const source = `cut 0.4;
+project "recover statement";
+timeline main(duration: 1s, fps: 24) {
+  scene only(duration: 1s) {
+    let first = 1
+    let second = ;
+    let third = ;
+  }
+}`;
+  const result = parseCutLanguage(source);
+  assert.equal(result.module, null);
+  assert.deepEqual(result.diagnostics.map((diagnostic) => diagnostic.code), ["CUT1002", "CUT1002", "CUT1002"]);
+  assert.deepEqual(result.diagnostics.map((diagnostic) => diagnostic.span.start.offset), [
+    source.indexOf("let second"),
+    source.indexOf(";", source.indexOf("let second")),
+    source.indexOf(";", source.indexOf("let third")),
   ]);
 });
 test("parser syntax recovery has one closed diagnostic limit", () => {
@@ -97,6 +166,19 @@ test("parser rejects excessive nesting with a source diagnostic instead of overf
   const result = parseCutLanguage(`cut 0.4; project "deep"; const value = ${nested};`);
   assert.equal(result.module, null);
   assert.match(result.diagnostics[0]?.message ?? "", /nesting exceeds/);
+});
+test("parser rejects numeric literals outside the exact-rational budget before constructing an AST", () => {
+  for (const literal of ["9".repeat(400), `0.${"0".repeat(399)}1`]) {
+    const source = `cut 0.4; project "numeric ast"; const value = ${literal};`;
+    const result = parseCutLanguage(source);
+    assert.equal(result.module, null);
+    assert.deepEqual(result.diagnostics.map((diagnostic) => diagnostic.code), ["CUT2064"]);
+    assert.equal(result.diagnostics[0]?.message, "Exact numeric literal exceeds the 256-digit rational budget.");
+    assert.deepEqual(
+      [result.diagnostics[0]?.span.start.offset, result.diagnostics[0]?.span.end.offset],
+      [source.indexOf(literal), source.indexOf(literal) + literal.length],
+    );
+  }
 });
 test("type checker rejects mixed audiovisual dimensions", () => {
   const cutModule = parse('cut 0.4; project "x"; const impossible = 2s + 3px; timeline main(duration: 1s, fps: 24) { scene one(duration: 1s) {} } export out = render(main);');
@@ -180,6 +262,18 @@ test("forward top-level constants and asset paths resolve independent of declara
   const video = Object.values(ir.nodes).find((node) => node.op === "cut.visual.video")!;
   assert.equal(ir.resources.source.locator, "media/source.mp4"); assert.deepEqual(video.inputs.source, { kind: "resource-ref", id: "source" }); assert.deepEqual(ir.compositions[0].fps, { numerator: "24", denominator: "1" });
 });
+test("function defaults resolve forward globals before an omitted call argument", () => {
+  const source = 'cut 0.4; project "forward default"; const FPS: Number = useFallback(); const fallback: Number = 24; function useFallback(fallback: Number = fallback) -> Number = fallback; timeline main(duration: 1s, fps: FPS) { scene one(duration: 1s) {} } export out = render(main);';
+  const ir = compileCutModule(parse(source)).ir;
+  assert.deepEqual(ir.compositions[0].fps, { numerator: "24", denominator: "1" });
+});
+test("explicit positional and named arguments do not activate unused default dependencies", () => {
+  for (const call of ["useFallback(24)", "useFallback(fallback: 24)"]) {
+    const source = `cut 0.4; project "unused default"; const FPS: Number = ${call}; const fallback: Number = FPS; function useFallback(fallback: Number = fallback) -> Number = fallback; timeline main(duration: 1s, fps: FPS) { scene one(duration: 1s) {} } export out = render(main);`;
+    const ir = compileCutModule(parse(source)).ir;
+    assert.deepEqual(ir.compositions[0].fps, { numerator: "24", denominator: "1" });
+  }
+});
 test("forward type inference cannot hide an invalid timeline rate", () => {
   const source = 'cut 0.4; project "forward-types"; const FPS = LATER; const LATER = "twenty-four"; timeline main(duration: 1s, fps: FPS) { scene one(duration: 1s) {} } export out = render(main);';
   assert.ok(checkCutModule(parse(source)).diagnostics.some((item) => item.code === "CUT2049"));
@@ -205,17 +299,25 @@ test("radians lower through one deterministic rational degree boundary", () => {
   assert.deepEqual(input(arithmetic), { kind: "quantity", dimension: "angle", magnitude: rational("728697243913529", "12500000000000"), unit: "deg" });
 });
 test("source and derived exact rationals share the CutAVIR digit budget", () => {
+  assert.equal(decimalLiteralExceedsRationalBudget(`-${"9".repeat(256)}`), false);
+  assert.equal(decimalLiteralExceedsRationalBudget(`-${"9".repeat(257)}`), true);
+
   const enormousDecimal = `0.${"0".repeat(399)}1`;
   const source = `cut 0.4; project "literal budget"; const tiny = ${enormousDecimal};`;
-  const diagnostic = checkCutModule(parse(source)).diagnostics.find((item) => item.code === "CUT2064");
+  const parsed = parseCutLanguage(source);
+  const diagnostic = parsed.diagnostics.find((item) => item.code === "CUT2064");
   const offset = source.indexOf(enormousDecimal);
+  assert.equal(parsed.module, null);
   assert.equal(diagnostic?.message, "Exact numeric literal exceeds the 256-digit rational budget.");
   assert.deepEqual([diagnostic?.span.start.offset, diagnostic?.span.end.offset], [offset, offset + enormousDecimal.length]);
-  assert.throws(() => compileCutModule(parse(source)), CutCompileError);
 
   const reducible = `cut 0.4; project "reduced budget"; const exact = 1.${"0".repeat(300)};`;
   assert.equal(checkCutModule(parse(reducible)).diagnostics.filter((item) => item.code === "CUT2064").length, 0);
   assert.doesNotThrow(() => compileCutModule(parse(reducible)));
+
+  const factorReducible = `cut 0.4; project "factored budget"; const exact = 0.${"0".repeat(255)}5;`;
+  assert.equal(checkCutModule(parse(factorReducible)).diagnostics.filter((item) => item.code === "CUT2064").length, 0);
+  assert.doesNotThrow(() => compileCutModule(parse(factorReducible)));
 
   const operand = "9".repeat(256);
   const derived = `cut 0.4; project "derived budget"; const tooLarge = ${operand} * ${operand};`;

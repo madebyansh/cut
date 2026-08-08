@@ -54,6 +54,14 @@ test("formatter is deterministic and idempotent", () => {
   assert.match(first, /timeline main\(duration: 2s, fps: 24\) \{\n  scene one/);
 });
 
+test("formatter preserves a parseable exclusive range after an integer", () => {
+  const source = 'cut 0.4; project "range"; const window = 0 ..< 3;';
+  const formatted = formatCutSource(source);
+  assert.match(formatted, /const window = 0\.\.<3;/);
+  assert.equal(parse(formatted).declarations.length, 3);
+  assert.equal(formatCutSource(formatted), formatted);
+});
+
 test("formatter preserves leading, trailing, nested, and string-like line comments", () => {
   const source = `// module reason
 cut 0.4; // language reason

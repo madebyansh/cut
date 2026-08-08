@@ -2,7 +2,7 @@ import type { CutModule, Declaration, Expression, LanguageDiagnostic, SourceSpan
 import { kernelAcceptsAuthoringInput, kernelAcceptsProperty, kernelPropertyValueType, kernelStringInputValues, referenceKernelSchema } from "./kernel-registry";
 import { builtinPackages, implicitSymbols, type CutPackageManifest, type EffectKind, type NodeDomain, type PackageSymbol } from "./packages";
 import { cutDomainAssertionPredicates } from "./domain-assertions";
-import { compareRational, decimalRational, rational, type Rational } from "./rational";
+import { compareRational, decimalLiteralExceedsRationalBudget as decimalSourceLiteralExceedsRationalBudget, decimalRational, maximumRationalDigits, rational, type Rational } from "./rational";
 import { cutAnchoredPathLimits } from "./anchored-path-contract";
 import {
   cutMediaCamera2DMaximumNativeEffectDepth,
@@ -122,18 +122,9 @@ const quantityNames: Record<string, QuantityDimension> = {
 };
 
 const unitDimensions: Record<string, QuantityDimension> = { "": "scalar", ms: "time", s: "time", f: "time", beat: "beat", px: "length", "%": "ratio", deg: "angle", rad: "angle", db: "gain", hz: "frequency", khz: "frequency", lufs: "loudness", dbtp: "true-peak", dbfs: "sample-peak" };
-const maximumRationalDigits = 256;
-
 function decimalLiteralExceedsRationalBudget(expression: Extract<Expression, { kind: "number" }>) {
   const decimal = expression.raw.slice(0, expression.raw.length - expression.unit.length);
-  const [integer = "0", fraction = ""] = decimal.split(".");
-  const combined = `${integer}${fraction}`.replace(/^0+/, "");
-  if (!combined) return false;
-  const trailingZeros = combined.length - combined.replace(/0+$/, "").length;
-  const cancelled = Math.min(trailingZeros, fraction.length);
-  const numeratorDigits = combined.length - cancelled;
-  const denominatorDigits = fraction.length - cancelled + 1;
-  return numeratorDigits > maximumRationalDigits || denominatorDigits > maximumRationalDigits;
+  return decimalSourceLiteralExceedsRationalBudget(decimal);
 }
 
 function containsFrameLiteral(expression: Expression): boolean {

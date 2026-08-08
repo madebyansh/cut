@@ -111,7 +111,7 @@ function fixture(options: {
     buildId: "build",
     determinism: { semantic: "locked", decodedMedia: "verified", bitstream: "unverified" },
     timebase: { defaultFps: composition.fps, audioSampleRate: 48_000 },
-    modules: [{ specifier: "@cut/geo", version: "0.4.0-alpha.1", integrity: "geo-integrity" }],
+    modules: [{ specifier: "@cut/geo", version: "0.4.0-alpha.2", integrity: "geo-integrity" }],
     resources: {},
     compositions: [composition],
     scenes: {

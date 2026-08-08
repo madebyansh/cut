@@ -3792,7 +3792,7 @@ export class ReferenceVisualRenderer {
       const resource = this.ir.resources[resourceId], expectedBytes = resource?.metadata?.bytes;
       if (!resource || resource.kind !== "data" || resource.state !== "locked" || resource.metadata?.lockVersion !== 2
         || typeof expectedBytes !== "number" || !Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > cutSeriesChartLimits.maxDataBytesPerSource) {
-        throw new ReferenceSeriesChartError("CUT_SERIES_CHART_RESOURCE_STATE", node, `locked cut-table DataAsset ${resourceId} is missing cut.lock v2 state, a safe byte count, or exceeds ${cutSeriesChartLimits.maxDataBytesPerSource} bytes`);
+        throw new ReferenceSeriesChartError("CUT_SERIES_CHART_RESOURCE_STATE", node, `locked cut-table DataAsset ${resourceId} is missing cut.lock v3 state, a safe byte count, or exceeds ${cutSeriesChartLimits.maxDataBytesPerSource} bytes`);
       }
       seriesChartResourceBytes += expectedBytes;
       if (!Number.isSafeInteger(seriesChartResourceBytes) || seriesChartResourceBytes > 64 * 1024 * 1024) {
@@ -3806,7 +3806,7 @@ export class ReferenceVisualRenderer {
       const resource = this.ir.resources[resourceId], expectedBytes = resource?.metadata?.bytes;
       if (!resource || resource.kind !== "font" || resource.state !== "locked" || resource.metadata?.lockVersion !== 2
         || typeof expectedBytes !== "number" || !Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > cutSeriesChartLimits.maxFontBytes) {
-        throw new ReferenceSeriesChartError("CUT_SERIES_CHART_RESOURCE_STATE", node, `locked FontAsset ${resourceId} is missing cut.lock v2 state, a safe byte count, or exceeds ${cutSeriesChartLimits.maxFontBytes} bytes`);
+        throw new ReferenceSeriesChartError("CUT_SERIES_CHART_RESOURCE_STATE", node, `locked FontAsset ${resourceId} is missing cut.lock v3 state, a safe byte count, or exceeds ${cutSeriesChartLimits.maxFontBytes} bytes`);
       }
       seriesChartFontBytes += expectedBytes;
       if (!Number.isSafeInteger(seriesChartFontBytes) || seriesChartFontBytes > 32 * 1024 * 1024) {

@@ -399,6 +399,25 @@ export async function runFfprobeCapture(
   );
 }
 
+/** Run one already-bound absolute FFprobe executable without PATH lookup. */
+export async function runBoundReferenceFfprobeCapture(
+  executable: string,
+  args: string[],
+  timeout = 60_000,
+  limits: ReferenceMediaProcessCaptureLimits = {},
+  execution?: ReferenceMediaNativeProcessExecution,
+) {
+  if (typeof executable !== "string" || !isAbsolute(executable) || executable.includes("\0") || Buffer.byteLength(executable, "utf8") > 32_768) {
+    throw processFailure(
+      "CUT_MEDIA_PROCESS_CONTRACT",
+      "ffprobe",
+      "bound FFprobe executable must be one bounded absolute path without NUL bytes.",
+      { kind: "contract", reason: "invalid-bound-executable" },
+    );
+  }
+  return runReferenceMediaProcess("ffprobe", args, timeout, limits, true, executable, execution);
+}
+
 export async function writeFrame(child: EncoderChild, frame: Buffer) {
   if (!child.stdin.write(frame)) await once(child.stdin, "drain");
 }

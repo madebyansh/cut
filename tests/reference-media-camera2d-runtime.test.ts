@@ -873,10 +873,11 @@ test("direct Q16 oracle preserves associated alpha and differs from a two-resamp
     assert.equal(controlKernel.zeroWeightTaps, automaticKernel.zeroWeightTaps);
     assert.equal(controlKernel.outputPixelsWritten, automaticKernel.outputPixelsWritten);
     assert.equal(controlKernel.allocatedControlPixels, controlKernel.visibleDestinationPixels);
-    assert.equal(automaticKernel.reusableScratchPixels, 0);
-    assert.equal(automaticKernel.nativePixels, automaticKernel.visibleDestinationPixels);
-    assert.equal(automaticKernel.nativeExecutions, automaticKernel.visibleRasterRequests);
-    assert.equal(automaticKernel.scalarExecutions, 0);
+    const nativeHost = process.platform === "darwin" && process.arch === "arm64";
+    assert.equal(automaticKernel.reusableScratchPixels, nativeHost ? 0 : automaticKernel.visibleDestinationPixels);
+    assert.equal(automaticKernel.nativePixels, nativeHost ? automaticKernel.visibleDestinationPixels : 0);
+    assert.equal(automaticKernel.nativeExecutions, nativeHost ? automaticKernel.visibleRasterRequests : 0);
+    assert.equal(automaticKernel.scalarExecutions, nativeHost ? 0 : automaticKernel.visibleRasterRequests);
     const affine = affineFromQ16(framePlan.geometry.sourceToDeliveryQ16);
     const oracle = directQ16Oracle(hostile.length ? { data: hostile, width: plan.decodedCrop.width, height: plan.decodedCrop.height } : assert.fail(), plan.output, affine, framePlan.controls.opacityPhase / 255, framePlan.geometry.outputBounds!);
     assert.deepEqual(executed.surface.data, oracle, "runtime bytes must equal an independent Q16 associated-alpha inverse-affine oracle");

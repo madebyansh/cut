@@ -26,7 +26,7 @@ import {
 import { CutDiagramContractError, validateCutDiagramLanguageIR } from "./diagram-contract";
 import type { CutAVIR, IRAudioAmplitudeProducer, IRAssertion, IRComposition, IREditorial, IREditorialInterval, IREffectJob, IRLinkedEdit, IRNode, IROutput, IRProvenance, IRResource, IRScene, IRSemanticMatchSubjectV1, IRSemanticMatchTransitionV1, IRSignal, IRSignalEvent, IRTimelineMarker, IRTimelineRegion, IRTranscriptBindingV1, IRTranscriptMediaAuthorityV1, IRValue } from "./ir";
 import { builtinPackages, type NodeDomain, type PackageCompileTimeLowering, type PackageSymbol } from "./packages";
-import { addRational as rawAddRational, compareRational, decimalRational, divideRational as rawDivideRational, multiplyRational as rawMultiplyRational, rational, rationalToNumber, subtractRational as rawSubtractRational, type Rational, zeroRational } from "./rational";
+import { addRational as rawAddRational, compareRational, decimalRational, divideRational as rawDivideRational, maximumRationalDigits, multiplyRational as rawMultiplyRational, rational, rationalToNumber, subtractRational as rawSubtractRational, type Rational, zeroRational } from "./rational";
 import { cutIrIdentity, cutSignalContentHash, finalizeGraphHashes } from "../runtime/graph";
 import { cutCompilerIdentity, cutLanguageVersion } from "../version";
 import { assertResolvedCutIr } from "./resolution";
@@ -389,7 +389,6 @@ function consumeBudget(context: LowerContext, counter: BudgetCounter) {
   if (context.budget[counter] > context.budget.limits[limit]) throw new CutCompileLimitError(limit);
 }
 
-const maximumRationalDigits = 256;
 function boundedRational(value: Rational) {
   const numeratorDigits = value.numerator.startsWith("-") ? value.numerator.length - 1 : value.numerator.length;
   if (numeratorDigits > maximumRationalDigits || value.denominator.length > maximumRationalDigits) throw new CutCompileRationalLimitError();
@@ -6009,33 +6008,48 @@ function expressionDependencies(expression: Expression, topLevelNames: Set<strin
   return result;
 }
 
-function expressionNames(expression: Expression, result = new Set<string>()): Set<string> {
-  if (expression.kind === "identifier") { result.add(expression.name); return result; }
-  if (["number", "string", "boolean", "null", "color"].includes(expression.kind)) return result;
-  if (expression.kind === "array") expression.items.forEach((item) => expressionNames(item, result));
-  else if (expression.kind === "object") expression.entries.forEach((entry) => expressionNames(entry.value, result));
-  else if (expression.kind === "member") expressionNames(expression.object, result);
-  else if (expression.kind === "index") { expressionNames(expression.object, result); expressionNames(expression.index, result); }
-  else if (expression.kind === "range") { expressionNames(expression.start, result); expressionNames(expression.end, result); }
-  else if (expression.kind === "group" || expression.kind === "unary") expressionNames(expression.value, result);
-  else if (expression.kind === "binary") { expressionNames(expression.left, result); expressionNames(expression.right, result); }
-  else if (expression.kind === "call") { expressionNames(expression.callee, result); expression.positional.forEach((item) => expressionNames(item, result)); expression.named.forEach((item) => expressionNames(item.value, result)); }
-  return result;
-}
-
 function resolveTopLevelValues(module: CutModule, context: LowerContext) {
   const declarations = module.declarations.filter((item): item is Extract<Declaration, { kind: "asset" | "const" }> => item.kind === "asset" || item.kind === "const");
   const byName = new Map(declarations.map((item) => [item.name, item])); const names = new Set(byName.keys());
   const functions = new Map(module.declarations.filter((item): item is Extract<Declaration, { kind: "function" }> => item.kind === "function").map((item) => [item.name, item]));
   const valueDependencies = (expression: Expression) => {
-    const dependencies = expressionDependencies(expression, names), visitedFunctions = new Set<string>();
-    const visit = (candidate: Expression) => {
-      for (const name of expressionNames(candidate)) {
-        const declaration = functions.get(name);
-        if (!declaration || visitedFunctions.has(name)) continue;
-        visitedFunctions.add(name);
-        expressionDependencies(declaration.value, names, dependencies, new Set(declaration.parameters.map((parameter) => parameter.name)));
-        visit(declaration.value);
+    const dependencies = expressionDependencies(expression, names);
+    const visitedFunctionBodies = new Set<string>(), visitedFunctionDefaults = new Set<string>();
+    const visit = (candidate: Expression, shadowed = new Set<string>()): void => {
+      if (["number", "string", "boolean", "null", "color", "identifier"].includes(candidate.kind)) return;
+      if (candidate.kind === "array") candidate.items.forEach((item) => visit(item, shadowed));
+      else if (candidate.kind === "object") candidate.entries.forEach((entry) => visit(entry.value, shadowed));
+      else if (candidate.kind === "member") visit(candidate.object, shadowed);
+      else if (candidate.kind === "index") { visit(candidate.object, shadowed); visit(candidate.index, shadowed); }
+      else if (candidate.kind === "range") { visit(candidate.start, shadowed); visit(candidate.end, shadowed); }
+      else if (candidate.kind === "group" || candidate.kind === "unary") visit(candidate.value, shadowed);
+      else if (candidate.kind === "binary") { visit(candidate.left, shadowed); visit(candidate.right, shadowed); }
+      else if (candidate.kind === "call") {
+        candidate.positional.forEach((item) => visit(item, shadowed));
+        candidate.named.forEach((item) => visit(item.value, shadowed));
+        const functionName = candidate.callee.kind === "identifier" && !shadowed.has(candidate.callee.name)
+          ? candidate.callee.name
+          : undefined;
+        const declaration = functionName ? functions.get(functionName) : undefined;
+        if (!declaration || !functionName) { visit(candidate.callee, shadowed); return; }
+
+        const namedArguments = new Set(candidate.named.map((argument) => argument.name));
+        const parameterScope = new Set<string>();
+        for (const [index, parameter] of declaration.parameters.entries()) {
+          const supplied = index < candidate.positional.length || namedArguments.has(parameter.name);
+          const defaultKey = `${functionName}:${index}`;
+          if (!supplied && parameter.defaultValue && !visitedFunctionDefaults.has(defaultKey)) {
+            visitedFunctionDefaults.add(defaultKey);
+            expressionDependencies(parameter.defaultValue, names, dependencies, parameterScope);
+            visit(parameter.defaultValue, parameterScope);
+          }
+          parameterScope.add(parameter.name);
+        }
+        if (!visitedFunctionBodies.has(functionName)) {
+          visitedFunctionBodies.add(functionName);
+          expressionDependencies(declaration.value, names, dependencies, parameterScope);
+          visit(declaration.value, parameterScope);
+        }
       }
     };
     visit(expression);

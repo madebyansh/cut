@@ -345,10 +345,10 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["format", "version", "runtime", "dependencies", "native", "integrity"],
+      "required": ["format", "version", "runtime", "dependencies", "native", "compositor", "integrity"],
       "properties": {
         "format": { "const": "cut-reference-backend" },
-        "version": { "const": 1 },
+        "version": { "const": 2 },
         "runtime": { "$ref": "#/definitions/runtime" },
         "dependencies": {
           "type": "object",
@@ -387,6 +387,34 @@
             "sharp": { "$ref": "#/definitions/token" },
             "libvips": { "$ref": "#/definitions/token" }
           }
+        },
+        "compositor": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "platform", "architecture", "algorithm", "binarySha256"],
+              "properties": {
+                "mode": { "const": "native" },
+                "platform": { "$ref": "#/definitions/token" },
+                "architecture": { "$ref": "#/definitions/token" },
+                "algorithm": { "$ref": "#/definitions/token" },
+                "binarySha256": { "$ref": "#/definitions/hash" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "platform", "architecture", "algorithm", "implementation"],
+              "properties": {
+                "mode": { "const": "javascript" },
+                "platform": { "$ref": "#/definitions/token" },
+                "architecture": { "$ref": "#/definitions/token" },
+                "algorithm": { "$ref": "#/definitions/token" },
+                "implementation": { "$ref": "#/definitions/token" }
+              }
+            }
+          ]
         },
         "integrity": { "$ref": "#/definitions/hash" }
       }

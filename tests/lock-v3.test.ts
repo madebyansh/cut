@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+// Top-level cut.lock v3 compatibility and authority coverage.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, symlink, truncate, writeFile } from "node:fs/promises";
@@ -20,6 +21,7 @@ import {
   type CutLockfile,
   type LockedResourceProbe,
 } from "../lib/language/lock";
+import { analyzeCutMigration, cutMigrationCompatibilityMatrix, CutMigrationError } from "../lib/language/migration";
 import { parseCutLanguage } from "../lib/language/parser";
 import { ReferenceVisualRenderer } from "../lib/runtime/reference/visual";
 import { renderReferenceAudio } from "../lib/runtime/reference/audio";
@@ -151,7 +153,7 @@ function pcm24Sample(bytes: Buffer, frame: number, channel = 0) {
 
 function clipSource(body: string) {
   return `cut 0.4;
-project "lock v2 bounds";
+project "lock v3 bounds";
 import { Clip } from "@cut/edit";
 asset media: VideoAsset = video("media/source.mkv");
 timeline main(duration: 2500ms, fps: 4, sampleRate: 48khz) {
@@ -166,11 +168,11 @@ function mediaProbe(lock: CutLockfile, id = "media") {
   return probe as Extract<LockedResourceProbe, { kind: "media" }>;
 }
 
-test("cut.lock v2 pins bounded selected streams and rejects actual source-range overruns before semantic lock", { timeout: 60_000 }, async () => {
+test("cut.lock v3 pins bounded selected streams and rejects actual source-range overruns before semantic lock", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-bounds-")); await generatedAv(root);
   const pass = compile(clipSource("Clip(source: media, range: 1s ..< 2s, duration: 500ms);"));
   const lock = await createCutLock(pass, root), probe = mediaProbe(lock);
-  assert.equal(lock.version, 2);
+  assert.equal(lock.version, 3);
   assert.deepEqual(lock.toolchain, { compiler: pass.compiler, ir: 3, packageAbi: cutPackageAbi, referenceRuntime: cutReferenceRuntimeIdentity, referenceBackend: await collectReferenceBackendIdentity() });
   assert.equal(lock.toolchain.referenceBackend.runtime, cutReferenceRuntimeIdentity);
   assert.match(lock.toolchain.referenceBackend.dependencies.integrity, /^[a-f0-9]{64}$/);
@@ -327,7 +329,7 @@ export out = render(main);`;
     && error.path === "$.resources.alpha");
 });
 
-test("cut.lock v2 applies selected-stream source bounds to every executable media kernel before lock and render", { timeout: 60_000 }, async () => {
+test("cut.lock v3 applies selected-stream source bounds to every executable media kernel before lock and render", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-all-bounds-")); await generatedAv(root);
   const header = `cut 0.4;
 project "all source bounds";
@@ -369,7 +371,7 @@ export out = render(main);`;
   await assert.rejects(verifyLockedIrResources(fullLoop, root), /beyond the selected source bound/, "render-time revalidation cannot be bypassed by mutating locked IR");
 });
 
-test("cut.lock v2 derives a safe exact stream bound when Matroska omits stream.duration", { timeout: 60_000 }, async () => {
+test("cut.lock v3 derives a safe exact stream bound when Matroska omits stream.duration", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-stream-duration-")); await generatedUnevenAv(root);
   const source = `cut 0.4;
 project "stream duration";
@@ -472,8 +474,24 @@ test("lock application rejects tampered probe metadata and stale runtime/native 
   staleBackend.toolchain.referenceBackend = createReferenceBackendIdentity(base.toolchain.referenceBackend.dependencies, {
     ...base.toolchain.referenceBackend.native,
     libvips: `${base.toolchain.referenceBackend.native.libvips}-stale`,
-  });
+  }, base.toolchain.referenceBackend.compositor);
   await assert.rejects(applyCutLock(compile(source), staleBackend, root), /reference backend identity does not match this installation/);
+
+  const staleCompositor = clone(base), selected = base.toolchain.referenceBackend.compositor;
+  staleCompositor.toolchain.referenceBackend = createReferenceBackendIdentity(
+    base.toolchain.referenceBackend.dependencies,
+    base.toolchain.referenceBackend.native,
+    selected.mode === "native"
+      ? { ...selected, binarySha256: selected.binarySha256 === "0".repeat(64) ? "1".repeat(64) : "0".repeat(64) }
+      : {
+        mode: "native",
+        platform: selected.platform,
+        architecture: selected.architecture,
+        algorithm: selected.algorithm,
+        binarySha256: "0".repeat(64),
+      },
+  );
+  await assert.rejects(applyCutLock(compile(source), staleCompositor, root), /reference backend identity does not match this installation/);
 
   const staleCompiler = clone(base); staleCompiler.toolchain.compiler = "cut-ts/stale";
   await assert.rejects(applyCutLock(compile(source), staleCompiler, root), /pins cut-ts\/stale/);
@@ -493,7 +511,7 @@ test("lock application rejects tampered probe metadata and stale runtime/native 
   await assert.rejects(applyCutLock(compile(source), base, root), /Locked resource bytes changed/);
 });
 
-test("image, audio-only, and bytes-only resources carry their precise lock-v2 metadata boundaries", { timeout: 60_000 }, async () => {
+test("image, audio-only, and bytes-only resources carry their precise cut.lock v3 metadata boundaries", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-image-")); await mkdir(resolve(root, "media"));
   await sharp({ create: { width: 7, height: 5, channels: 4, background: { r: 30, g: 90, b: 150, alpha: 0.5 } } }).png().toFile(resolve(root, "media/not-an-image-extension.bin"));
   await writeFile(resolve(root, "media/data.json"), "{\"answer\":42}\n");
@@ -524,25 +542,56 @@ export out = render(main);`;
   }
 });
 
-test("v2 validation is closed, budgeted, canonical, and gives an explicit non-migration refusal for v1", { timeout: 60_000 }, async () => {
+test("v3 validation is closed, budgeted, canonical, and refuses historical v1/v2 locks with regenerate guidance", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-validate-")); await generatedAv(root);
   const source = clipSource("Clip(source: media, range: 0s ..< 1s, duration: 1s);");
   const first = await createCutLock(compile(source), root), second = await createCutLock(compile(source), root);
   assert.equal(JSON.stringify(first, null, 2), JSON.stringify(second, null, 2), "equivalent inputs must serialize identically");
   assert.ok(Object.isFrozen(loadCutLock(JSON.stringify(first))), "loaded locks are immutable snapshots");
 
-  const legacy = { ...clone(first), version: 1 };
-  assert.throws(() => validateCutLock(legacy), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_VERSION" && /automatic migration is unsafe/.test(error.message));
+  for (const version of [1, 2] as const) {
+    const legacy = { ...clone(first), version };
+    assert.throws(
+      () => validateCutLock(legacy),
+      (error) => error instanceof CutLockError
+        && error.code === "CUT_LOCK_VERSION"
+        && error.path === "$.version"
+        && /regenerate.*current `cut lock`.*automatic migration is unsafe/iu.test(error.message),
+    );
+    assert.throws(
+      () => analyzeCutMigration(Buffer.from(JSON.stringify(legacy)), { path: `legacy-v${version}.lock` }),
+      (error) => error instanceof CutMigrationError
+        && error.code === `CUT_MIGRATE_LOCK_V${version}_UNSAFE`
+        && /regenerate v3.*current `cut lock`/iu.test(error.message),
+    );
+  }
+  assert.deepEqual(
+    cutMigrationCompatibilityMatrix
+      .filter((row) => row.artifact === "cut-lock")
+      .map(({ version, compatibility }) => ({ version, compatibility })),
+    [
+      { version: "3", compatibility: "current" },
+      { version: "2", compatibility: "unsafe" },
+      { version: "1", compatibility: "unsafe" },
+    ],
+  );
   const unknown = { ...clone(first), surprise: true };
   assert.throws(() => validateCutLock(unknown), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_UNKNOWN_FIELD" && error.path === "$.surprise");
   const nested = clone(first); (nested.resources.media.probe as unknown as Record<string, unknown>).surprise = true;
   assert.throws(() => validateCutLock(nested), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_UNKNOWN_FIELD");
   const backendTamper = clone(first); (backendTamper.toolchain.referenceBackend.native as { libvips: string }).libvips = `${backendTamper.toolchain.referenceBackend.native.libvips}-tampered`;
   assert.throws(() => validateCutLock(backendTamper), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_IDENTITY" && /backend identity/.test(error.message));
+  const compositorTamper = clone(first); (compositorTamper.toolchain.referenceBackend.compositor as { algorithm: string }).algorithm += "-tampered";
+  assert.throws(() => validateCutLock(compositorTamper), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_IDENTITY" && /backend identity/.test(error.message));
+  const legacyBackend = clone(first) as unknown as { toolchain: { referenceBackend: Record<string, unknown> } };
+  legacyBackend.toolchain.referenceBackend.version = 1;
+  delete legacyBackend.toolchain.referenceBackend.compositor;
+  assert.throws(() => validateCutLock(legacyBackend), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_VERSION" && /cut-reference-backend v2/.test(error.message));
   const foreignBackend = clone(first);
   foreignBackend.toolchain.referenceBackend = createReferenceBackendIdentity(
     first.toolchain.referenceBackend.dependencies,
     { ...first.toolchain.referenceBackend.native, architecture: `${first.toolchain.referenceBackend.native.architecture}-other` },
+    { ...first.toolchain.referenceBackend.compositor, architecture: `${first.toolchain.referenceBackend.compositor.architecture}-other` },
   );
   const deferred = compile(source);
   const binding = await applyCutLockForVerifiedInputSession(deferred, foreignBackend, root);
@@ -575,7 +624,7 @@ test("v2 validation is closed, budgeted, canonical, and gives an explicit non-mi
   assert.throws(() => validateCutLock(containerFallback), (error) => error instanceof CutLockError && error.code === "CUT_LOCK_METADATA" && /container-wide duration/.test(error.message));
 });
 
-test("v2 lock creation refuses traversal and physical symlink escape before probing", { timeout: 60_000 }, async (context) => {
+test("v3 lock creation refuses traversal and physical symlink escape before probing", { timeout: 60_000 }, async (context) => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-root-")), outside = await mkdtemp(resolve(tmpdir(), "cut-lock-v2-outside-")); await generatedAv(outside, "outside.mkv", 1);
   const traversal = compile(clipSource("Clip(source: media, duration: 1s);").replace("media/source.mkv", "../outside.mkv"));
   await assert.rejects(createCutLock(traversal, root), /project-relative POSIX path|parent segments/);

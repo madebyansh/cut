@@ -18,7 +18,7 @@ There are four distinct values:
    `DataAsset`.
 2. A `cut-query-plan` version 1 is a closed typed declaration. Its source
    schemas are available for checking before resource bytes are read.
-3. Evaluation occurs only after a caller supplies cut.lock v2 state plus the
+3. Evaluation occurs only after a caller supplies cut.lock v3 state plus the
    exact resource bytes. Size and SHA-256 are rechecked before parsing, and the
    file schema must exactly equal the plan schema.
 4. A table or series `cut-query-result` is data. Series extraction does not

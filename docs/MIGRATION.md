@@ -5,12 +5,12 @@ visible version boundary:
 
 | Surface | Current value |
 | --- | --- |
-| Package | `cut-lang@0.4.0-alpha.1` |
+| Package | `cut-lang@0.4.0-alpha.2` |
 | Source header | `cut 0.4;` |
-| Compiler | `cut-ts/0.4.0-alpha.1` |
-| Reference runtime | `cut-reference/0.4.0-alpha.1` |
+| Compiler | `cut-ts/0.4.0-alpha.2` |
+| Reference runtime | `cut-reference/0.4.0-alpha.2` |
 | CutAVIR | version 3, language `0.4` |
-| Project/package lock | current schema, language `0.4` |
+| Project/package lock | `cut.lock` v3, language `0.4` |
 
 Pre-public 0.3 source is not rewritten automatically. Change the source header
 deliberately, then run the complete source and authority loop:
