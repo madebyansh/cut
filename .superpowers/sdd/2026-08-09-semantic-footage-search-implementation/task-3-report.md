@@ -40,3 +40,9 @@ complete. one focused commit: `feat: add bounded footage sidecar protocol`.
 - green: `node node_modules/typescript/bin/tsc -p tsconfig.cli.json && node --test dist-cli/tests/footage-sidecar.test.js` passes all 14 tests, including close acknowledgement plus hang/exit-17 and no-live-PID checks.
 - hard limits now accept only named downward overrides. a close completes only after its request is actually written, acknowledged, and followed by exit code zero; its timeout covers the full acknowledgement-and-exit lifetime.
 - index artifact dimensions must exactly match the immutable handshake. new diagnostic tests prove child stderr/path-like text does not reach public errors, request overflow terminates without writing, bad executable startup fails closed, and the explicit environment does not inherit `PATH`.
+
+## review round 2
+
+- status: complete after focused follow-up fix commit `fix: seal footage sidecar after close`.
+- red: a deterministic sidecar accepted post-close `index` / `searchText` requests while close remained pending; the new test observed fulfilled work after `session.close()` had been called.
+- green: the 15-test focused suite passes twice. close intent now seals the session synchronously: later non-close public requests reject before validation or child writes, while a request already queued before close remains ordered ahead of close and completes normally.

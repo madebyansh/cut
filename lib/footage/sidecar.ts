@@ -264,12 +264,14 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
     handshake: expected,
     get pid() { return pid; },
     async index(requestValue) {
+      if (closeRequested) throw error("sidecar is closing");
       const plan = requestValue?.plan;
       const planRecord = object(plan, "index request is malformed");
       const payload = Object.freeze({ plan: Object.freeze({ path: absolutePath(planRecord.path, "index request is malformed"), bytes: positive(planRecord.bytes, Number.MAX_SAFE_INTEGER, "index request is malformed"), sha256: sha(planRecord.sha256, "index request is malformed") }), artifactPath: absolutePath(requestValue.artifactPath, "index request is malformed") });
       return request<CutFootageSidecarIndexResult>("index", payload, limits.indexMs);
     },
     async searchText(requestValue) {
+      if (closeRequested) throw error("sidecar is closing");
       const artifact = object(requestValue?.artifact, "search request is malformed");
       const payload = Object.freeze({ artifact: Object.freeze({ path: absolutePath(artifact.path, "search request is malformed"), bytes: positive(artifact.bytes, Number.MAX_SAFE_INTEGER, "search request is malformed"), sha256: sha(artifact.sha256, "search request is malformed") }), query: boundedText(requestValue.query, 4_096, "search request is malformed") });
       return request<readonly CutFootageSidecarCandidate[]>("searchText", payload, limits.searchMs);

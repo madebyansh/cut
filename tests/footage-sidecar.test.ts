@@ -116,6 +116,29 @@ test("sidecar close requires both acknowledgement and a clean child exit", async
   assert.throws(() => process.kill(badExitPid!, 0), { code: "ESRCH" });
 });
 
+test("sidecar seals new non-close work immediately while preserving work already in flight", async () => {
+  const ordered = await start();
+  const indexed = ordered.index({ plan: { path: "/tmp/cut-plan.json", bytes: 8, sha256: digest("d") }, artifactPath: "/tmp/cut-vectors.bin" });
+  const closed = ordered.close();
+  assert.deepEqual(await indexed, { bytes: 12, sha256: digest("c"), recordCount: 3, dimensions: 4 });
+  await closed;
+
+  const controller = new AbortController();
+  const sealed = await start("close-hang", { closeMs: 500, signal: controller.signal });
+  const sealing = sealed.close();
+  const later = await Promise.allSettled([
+    sealed.index({ plan: { path: "/tmp/cut-plan.json", bytes: 8, sha256: digest("d") }, artifactPath: "/tmp/cut-vectors.bin" }),
+    sealed.searchText({ artifact: { path: "/tmp/cut-vectors.bin", bytes: 12, sha256: digest("c") }, query: "harbour at night" }),
+  ]);
+  controller.abort();
+  await protocol(() => sealing);
+  for (const result of later) {
+    assert.equal(result.status, "rejected");
+    assert.ok(result.reason instanceof CutFootageError && result.reason.code === "CUT_FOOTAGE_BACKEND_PROTOCOL");
+  }
+  assert.equal(sealed.pid, undefined);
+});
+
 test("sidecar fails closed for partial, unsolicited, unknown, malformed, and duplicate output", async () => {
   const failAtStartOrIndex = async (mode: string) => {
     const session = await start(mode);
