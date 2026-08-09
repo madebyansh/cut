@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   access,
@@ -99,6 +100,38 @@ test("enumeration and invocation evidence bind sorted per-test bytes and exact a
   assert.match(identity.testFileListSha256, /^[0-9a-f]{64}$/u);
   assert.match(identity.childArgumentsSha256, /^[0-9a-f]{64}$/u);
   assert.match(identity.aggregateManifestSha256, /^[0-9a-f]{64}$/u);
+});
+
+test("the core runner caps file concurrency and binds the exact spawned argv", async () => {
+  const root = await fixtureRoot({
+    "b.test.js": "const test = require('node:test'); test('b', () => {});\n",
+    "a.test.js": "const test = require('node:test'); test('a', () => {});\n",
+  });
+  const evidence = [];
+  let spawnedArguments;
+  const child = new EventEmitter();
+  child.kill = () => true;
+  const result = await runDistCoreTests(runnerOptions(root, {
+    output(line) { evidence.push(JSON.parse(line)); },
+    spawnProcess(_command, args) {
+      spawnedArguments = args;
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    },
+  }));
+  const expectedArguments = [
+    "--test",
+    "--test-concurrency=2",
+    "dist-cli/tests/a.test.js",
+    "dist-cli/tests/b.test.js",
+  ];
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(spawnedArguments, expectedArguments);
+  assert.equal(evidence.length, 1);
+  assert.equal(
+    evidence[0].childArgumentsSha256,
+    createHash("sha256").update(JSON.stringify(expectedArguments)).digest("hex"),
+  );
 });
 
 test("default invocation evidence binds the exact runtime and closure file set", async () => {
