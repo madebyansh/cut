@@ -6,6 +6,7 @@ import {
   referenceLocalSpaceResizeGeometry,
 } from "./local-space-transform-work";
 import { placeReferenceProjectiveWarpOnCanvas } from "./projective-warp-canvas";
+import { executeReferenceNativeScaleTranslationQ16 } from "./native-source-over";
 import {
   planReferenceProjectiveWarp,
   referenceProjectiveWarpAlgorithmVersion,
@@ -385,8 +386,8 @@ function rasterDestinationClippedScaleTranslation(
   const q16Half = q16 / 2n;
   const horizontalSpan = topRight.x - topLeft.x;
   const verticalSpan = bottomLeft.y - topLeft.y;
-  const sourceXQ16 = new Array<number>(clip.width);
-  const sourceYQ16 = new Array<number>(clip.height);
+  const sourceXQ16 = new Float64Array(clip.width);
+  const sourceYQ16 = new Float64Array(clip.height);
   for (let index = 0; index < clip.width; index += 1) {
     const destination = BigInt(clip.bounds.left + index) * q16 + q16Half;
     sourceXQ16[index] = Number(roundRationalToInteger(
@@ -411,6 +412,36 @@ function rasterDestinationClippedScaleTranslation(
     throw new Error(`output allocator must return exactly ${clip.rgbaBytes} Uint8Array bytes.`);
   }
   output.fill(0);
+
+  const native = options.disableNativeScaleTranslation === true
+    ? undefined
+    : executeReferenceNativeScaleTranslationQ16({
+      source: surface.data,
+      output,
+      sourceWidth: surface.width,
+      sourceHeight: surface.height,
+      sourceXQ16,
+      sourceYQ16,
+      outputWidth: clip.width,
+      outputHeight: clip.height,
+    });
+  if (native) {
+    return Object.freeze({
+      surface: Object.freeze({
+        data: output,
+        width: clip.width,
+        height: clip.height,
+        originX: clip.bounds.left,
+        originY: clip.bounds.top,
+        alphaMode: "straight" as const,
+      }),
+      observedWork: Object.freeze({
+        destinationPixelsTested: clip.pixels,
+        insideQuadPixels: clip.pixels,
+        ...native,
+      }),
+    });
+  }
 
   let integerSamplesCopied = 0;
   let bilinearSamplesEvaluated = 0;

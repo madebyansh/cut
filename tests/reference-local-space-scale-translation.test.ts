@@ -465,7 +465,15 @@ test("the fused sampler is deterministic, clips the canvas and cannot leak trans
     { data: source.slice(), width: 4, height: 4, alphaMode: "straight" },
     structuredClone(plan),
   );
+  const scalar = executeReferenceLocalSpaceScaleTranslation(
+    diagnosticNode,
+    { data: source.slice(), width: 4, height: 4, alphaMode: "straight" },
+    structuredClone(plan),
+    { disableNativeScaleTranslation: true },
+  );
   assert.deepEqual(second.surface.data, first.surface.data);
+  assert.deepEqual(first.surface.data, scalar.surface.data, "authenticated native Q16 pixels must equal the scalar law");
+  assert.deepEqual(first.evidence.observedWork, scalar.evidence.observedWork, "native execution must preserve semantic work evidence");
   assert.equal(first.surface.width, 4);
   assert.equal(first.surface.height, 4);
   assert.equal(first.surface.originX, 0);

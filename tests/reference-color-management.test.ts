@@ -16,6 +16,7 @@ import {
   convertReferenceColorSurface,
   inspectReferenceColorSurface,
   ReferenceColorManagementError,
+  referenceColorProfiles,
   referenceColorConvertConfig,
   type ReferenceColorProfile,
 } from "../lib/runtime/reference/color-management";
@@ -76,6 +77,50 @@ test("bounded SDR transfer/range math has exact byte vectors and preserves strai
     () => convertReferenceColorSurface({ data: Uint8Array.from([10, 20, 30, 128]), width: 1, height: 1, alphaMode: "premultiplied" }, "srgb", "linear-srgb"),
     (error: unknown) => error instanceof ReferenceColorManagementError && error.code === "CUT_COLOR_ALPHA",
   );
+});
+
+test("cached RGBA8 transfer tables are exhaustive scalar-law parity and preserve input ownership", () => {
+  const metadata = {
+    srgb: { transfer: "srgb", range: "full" },
+    "linear-srgb": { transfer: "linear", range: "full" },
+    "rec709-full": { transfer: "bt709", range: "full" },
+    "rec709-limited": { transfer: "bt709", range: "limited" },
+  } as const;
+  const decodeTransfer = (encoded: number, transfer: "srgb" | "linear" | "bt709") => {
+    const value = Math.max(0, Math.min(1, encoded));
+    if (transfer === "linear") return value;
+    if (transfer === "srgb") return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    return value < 0.081 ? value / 4.5 : ((value + 0.099) / 1.099) ** (1 / 0.45);
+  };
+  const encodeTransfer = (linear: number, transfer: "srgb" | "linear" | "bt709") => {
+    const value = Math.max(0, Math.min(1, linear));
+    if (transfer === "linear") return value;
+    if (transfer === "srgb") return value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
+    return value < 0.018 ? 4.5 * value : 1.099 * value ** 0.45 - 0.099;
+  };
+  for (const from of referenceColorProfiles) {
+    const validCodes = from === "rec709-limited"
+      ? Array.from({ length: 220 }, (_unused, index) => index + 16)
+      : Array.from({ length: 256 }, (_unused, index) => index);
+    for (const to of referenceColorProfiles) {
+      const input = Uint8Array.from(validCodes.flatMap((code) => [code, code, code, code]));
+      const before = Buffer.from(input);
+      const result = convertReferenceColorSurface({ data: input, width: validCodes.length, height: 1 }, from, to);
+      assert.deepEqual(Buffer.from(input), before, `${from} -> ${to} must not mutate the caller's bytes`);
+      if (from === to) assert.equal(result.data, input, `${from} identity conversion retains ownership`);
+      validCodes.forEach((code, index) => {
+        const source = metadata[from], destination = metadata[to];
+        const encoded = source.range === "limited" ? (code - 16) / 219 : code / 255;
+        const converted = encodeTransfer(decodeTransfer(encoded, source.transfer), destination.transfer);
+        const expected = Math.round(destination.range === "limited" ? 16 + converted * 219 : converted * 255);
+        assert.deepEqual(
+          [...result.data.subarray(index * 4, index * 4 + 4)],
+          [expected, expected, expected, code],
+          `${from} -> ${to} code ${code}`,
+        );
+      });
+    }
+  }
 });
 
 test("legal-range inspection reports violations, clipping boundaries, and transparency without mutating pixels", () => {

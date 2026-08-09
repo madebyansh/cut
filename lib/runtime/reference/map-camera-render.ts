@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { geoGraticule10, geoInterpolate, geoPath, type GeoPermissibleObjects } from "d3-geo";
 import sharp, { type OutputInfo } from "sharp";
 import { feature } from "topojson-client";
-import { hash, stableJsonStringify } from "../../core/stable";
+import { hash } from "../../core/stable";
 import type { CutAVIR, IRComposition, IRNode, IRSignal, IRValue } from "../../language/ir";
 import { addRational, compareRational, rational, rationalToNumber, type Rational } from "../../language/rational";
 import {
@@ -33,6 +33,7 @@ import {
 } from "./geo-projection";
 import { ReferenceMapCameraProjectivePitchError } from "./map-camera-projective-pitch";
 import { evaluateSignal, propertyAt } from "./signals";
+import { canonicalIrValuesEqual } from "./noop-contract";
 
 export const referenceMapCameraRenderAlgorithmVersion = referenceMapCameraFinalSpaceRasterAlgorithmVersion;
 export const referenceMapCameraRenderEvidenceFormat = "cut-reference-map-camera-rendered-frame-evidence" as const;
@@ -291,10 +292,52 @@ type TrustedReferenceMapCameraRenderPreparation = Readonly<{
   frameTimeKeys: ReadonlyMap<string, ReadonlySet<string>>;
   backend?: ReturnType<typeof dependencyEvidence>;
   atlasByCamera: ReadonlyMap<string, ReadonlyMap<string, VerifiedAtlas>>;
+  mapGeometryCache: ReferenceMapCameraGeometryCache;
 }>;
 
 const trustedReferenceMapCameraRenderPreparations =
   new WeakMap<ReferenceMapCameraRenderPreparation, TrustedReferenceMapCameraRenderPreparation>();
+
+type ReferenceMapCameraGeometry = Readonly<{
+  landPath: string;
+  graticulePath: string;
+}>;
+
+/** Renderer-invocation-only LRU for the expensive projected atlas geometry.
+ * Dynamic routes, subjects, opacity, canonical serialization and rasterization
+ * still execute per frame. The key binds the exact camera state, map/atlas
+ * bytes, canvas and algorithm; any uncertainty misses rather than reuses. */
+class ReferenceMapCameraGeometryCache {
+  private readonly entries = new Map<string, Readonly<{ geometry: ReferenceMapCameraGeometry; residentBytes: number }>>();
+  private residentBytes = 0;
+  private readonly maximumEntries = 64;
+  private readonly maximumResidentBytes = 67_108_864;
+
+  request(key: string, materialize: () => ReferenceMapCameraGeometry) {
+    const cached = this.entries.get(key);
+    if (cached) {
+      this.entries.delete(key);
+      this.entries.set(key, cached);
+      return cached.geometry;
+    }
+    const geometry = materialize();
+    // Projected path strings are ASCII. Charge their exact UTF-16 payload and
+    // key payload; object/Map overhead remains bounded by maximumEntries.
+    const residentBytes = (key.length + geometry.landPath.length + geometry.graticulePath.length) * 2;
+    if (!Number.isSafeInteger(residentBytes) || residentBytes < 0 || residentBytes > this.maximumResidentBytes) return geometry;
+    while (this.entries.size >= this.maximumEntries || this.residentBytes + residentBytes > this.maximumResidentBytes) {
+      const oldest = this.entries.entries().next().value as [string, Readonly<{ geometry: ReferenceMapCameraGeometry; residentBytes: number }>] | undefined;
+      if (!oldest) break;
+      this.entries.delete(oldest[0]);
+      this.residentBytes -= oldest[1].residentBytes;
+    }
+    if (this.entries.size < this.maximumEntries && this.residentBytes + residentBytes <= this.maximumResidentBytes) {
+      this.entries.set(key, Object.freeze({ geometry, residentBytes }));
+      this.residentBytes += residentBytes;
+    }
+    return geometry;
+  }
+}
 
 export type ReferenceMapCameraPublishedFrameEvidence = Omit<ReferenceMapCameraRenderedFrameEvidence, "surface"> & Readonly<{
   surface: Omit<ReferenceMapCameraRenderedFrameEvidence["surface"], "data">;
@@ -1068,6 +1111,10 @@ function mapFragment(
   projection: ReferenceGeoMapCameraProjection,
   atlas: VerifiedAtlas,
   time: Rational,
+  state: ReferenceMapCameraState,
+  width: number,
+  height: number,
+  geometryCache?: ReferenceMapCameraGeometryCache,
 ) {
   const background = color(node, "background", mapDefaults.background);
   const land = color(node, "land", mapDefaults.land);
@@ -1075,9 +1122,34 @@ function mapFragment(
   const borderWidth = length(node, "borderWidth", mapDefaults.borderWidth);
   const graticule = color(node, "graticule", mapDefaults.graticule);
   const graticuleWidth = length(node, "graticuleWidth", mapDefaults.graticuleWidth);
-  const path = geoPath(projection).digits(6);
-  const landPath = path(atlas.world) ?? "";
-  const graticulePath = alphaColor(graticule) === 0 ? "" : path(geoGraticule10()) ?? "";
+  const exact = state.exact;
+  const cameraKey = [
+    exact.latitude,
+    exact.longitude,
+    exact.scale,
+    exact.effectiveBearing,
+    exact.pitch,
+  ].map((value) => `${value.numerator}/${value.denominator}`).join(":");
+  const mapIdentity = node.contentHash ?? hash({ op: node.op, inputs: node.inputs, properties: node.properties });
+  const geometryKey = [
+    referenceMapCameraRenderAlgorithmVersion,
+    `${width}x${height}`,
+    cameraKey,
+    mapIdentity,
+    atlas.evidence.detail,
+    atlas.evidence.sha256,
+    alphaColor(graticule) === 0 ? "no-graticule" : "graticule",
+  ].join("|");
+  const materializeGeometry = () => {
+    const path = geoPath(projection).digits(6);
+    return Object.freeze({
+      landPath: path(atlas.world) ?? "",
+      graticulePath: alphaColor(graticule) === 0 ? "" : path(geoGraticule10()) ?? "",
+    });
+  };
+  const { landPath, graticulePath } = geometryCache
+    ? geometryCache.request(geometryKey, materializeGeometry)
+    : materializeGeometry();
   const opacity = ratioAt(ir, node, "opacity", time);
   const svg = `<g opacity="${formatNumber(opacity)}"><rect x="0" y="0" width="100%" height="100%" fill="${background}"/>${landPath ? `<path d="${landPath}" fill="${land}" stroke="${border}" stroke-width="${formatNumber(borderWidth)}" vector-effect="non-scaling-stroke"/>` : ""}${graticulePath ? `<path d="${graticulePath}" fill="none" stroke="${graticule}" stroke-width="${formatNumber(graticuleWidth)}" vector-effect="non-scaling-stroke"/>` : ""}</g>`;
   return fragment(
@@ -1310,10 +1382,6 @@ function withoutSignalEntry(signal: IRSignal, entry: ReturnType<typeof signalCol
   return signal;
 }
 
-function signalValueIdentity(value: IRValue) {
-  return stableJsonStringify(value);
-}
-
 function validateSampleRelevantSignals(ir: CutAVIR, composition: IRComposition, camera: IRNode, config: ReferenceMapCameraConfig) {
   const cameraTimes = referenceMapCameraValidationTimes(composition, camera);
   const consumers: SignalConsumer[] = [];
@@ -1370,7 +1438,7 @@ function validateSampleRelevantSignals(ir: CutAVIR, composition: IRComposition, 
       let affects = false;
       for (const consumer of signalConsumers) for (const time of consumer.times) {
         const original = evaluateSignal(ir, signalId, time), candidate = evaluateSignal(reducedIr, signalId, time);
-        if (signalValueIdentity(original) !== signalValueIdentity(candidate)) { affects = true; break; }
+        if (!canonicalIrValuesEqual(original, candidate)) { affects = true; break; }
       }
       if (!affects) {
         fail(signalConsumers[0].node, "CUT_MAP_CAMERA_RENDER_NOOP", `signal ${signalId} ${entry.kind}[${entry.index}] cannot affect any bounded output-frame sample of its MapCamera consumers.`);
@@ -1467,6 +1535,7 @@ export function prepareReferenceMapCameraRenderInvocation(
     frameTimeKeys,
     ...(backend ? { backend } : {}),
     atlasByCamera,
+    mapGeometryCache: new ReferenceMapCameraGeometryCache(),
   }));
   return receipt;
 }
@@ -1489,6 +1558,8 @@ function renderFragment(
   atlases: ReadonlyMap<string, VerifiedAtlas>,
   time: Rational,
   camera: IRNode,
+  state: ReferenceMapCameraState,
+  mapGeometryCache?: ReferenceMapCameraGeometryCache,
 ) {
   const node = ir.nodes[child.nodeId];
   if (!node) fail(camera, "CUT_MAP_CAMERA_RENDER_GRAPH", `validated child ${child.nodeId} is missing.`);
@@ -1496,7 +1567,18 @@ function renderFragment(
   if (child.kind === "map") {
     const atlas = atlases.get(child.nodeId);
     if (!atlas) fail(node, "CUT_MAP_CAMERA_RENDER_RESOURCE", "Map has no verified selected atlas.");
-    return mapFragment(ir, node, child, projection, atlas, time);
+    return mapFragment(
+      ir,
+      node,
+      child,
+      projection,
+      atlas,
+      time,
+      state,
+      composition.width,
+      composition.height,
+      mapGeometryCache,
+    );
   }
   if (child.kind === "route") return routeFragment(ir, node, child, projection, time);
   if (child.kind === "route-subject") return routeSubjectFragment(ir, node, child, projection, composition.width, composition.height, time);
@@ -1622,7 +1704,17 @@ export async function renderReferenceMapCameraFrame(
     fragments = Object.freeze(config.children
       .filter((child) => active.has(child.nodeId))
       .filter((child) => child.kind !== "annotation")
-      .map((child) => renderFragment(ir, composition, child, projection, atlasByNode, exactTime, camera)));
+      .map((child) => renderFragment(
+        ir,
+        composition,
+        child,
+        projection,
+        atlasByNode,
+        exactTime,
+        camera,
+        state,
+        prepared?.mapGeometryCache,
+      )));
   } catch (error) {
     if (error instanceof ReferenceMapCameraRenderError) throw error;
     if (error instanceof ReferenceMapCameraProjectivePitchError || error instanceof ReferenceGeoProjectionError) {

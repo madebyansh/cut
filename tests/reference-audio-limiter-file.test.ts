@@ -109,6 +109,63 @@ test("phase-specialized file FIR remains exact at programme and chunk boundaries
   }
 });
 
+test("static file release authority preserves exact PCM and rejects a contradictory callback", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-limiter-file-static-release-"));
+  try {
+    const frames = referenceAudioLimiterFileLimits.chunkFrames + 17;
+    const input = new Float32Array(frames * 2);
+    for (let frame = 0; frame < frames; frame += 1) {
+      input[frame * 2] = Math.fround(Math.sin(frame / 37) * 0.83);
+      input[frame * 2 + 1] = Math.fround(Math.cos(frame / 29) * 0.79);
+    }
+    const inputPath = resolve(root, "input.f32le");
+    const dynamicPath = resolve(root, "dynamic.f32le");
+    const staticPath = resolve(root, "static.f32le");
+    await writeFile(inputPath, encode(input));
+    const controls = {
+      expectedFrames: frames,
+      sampleRate,
+      lookaheadSamples: 240,
+      ceilingDbtp: () => -1,
+      releaseSeconds: () => 0.075,
+      source,
+    };
+    const dynamic = await processReferenceAudioLimiterFile(inputPath, dynamicPath, controls);
+    const staticallyAuthorized = await processReferenceAudioLimiterFile(inputPath, staticPath, {
+      ...controls,
+      staticReleaseSeconds: 0.075,
+      staticCeilingDbtp: -1,
+    });
+    assert.deepEqual(await readFile(staticPath), await readFile(dynamicPath));
+    assert.deepEqual(staticallyAuthorized, dynamic);
+
+    await assert.rejects(
+      processReferenceAudioLimiterFile(inputPath, resolve(root, "mismatch.f32le"), {
+        ...controls,
+        staticReleaseSeconds: 0.075,
+        releaseSeconds: (frame) => frame === frames - 1 ? 0.08 : 0.075,
+      }),
+      (error: unknown) => error instanceof ReferenceAudioLimiterError
+        && error.code === "CUT_AUDIO_LIMITER_CONTROL"
+        && error.detail?.reason === "static-release-mismatch"
+        && error.detail?.frame === frames - 1,
+    );
+    await assert.rejects(
+      processReferenceAudioLimiterFile(inputPath, resolve(root, "ceiling-mismatch.f32le"), {
+        ...controls,
+        staticCeilingDbtp: -1,
+        ceilingDbtp: (frame) => frame === frames - 1 ? -2 : -1,
+      }),
+      (error: unknown) => error instanceof ReferenceAudioLimiterError
+        && error.code === "CUT_AUDIO_LIMITER_CONTROL"
+        && error.detail?.reason === "static-ceiling-mismatch"
+        && error.detail?.frame === frames - 1,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("chunk-backed limiter is byte-identical to the frozen in-memory law across FIR, lookahead, control, and release boundaries", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-limiter-file-parity-"));
   try {

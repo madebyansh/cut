@@ -148,6 +148,7 @@ type LimiterPlan = Readonly<{
   lookaheadSamples: number;
   authoredCeilingMode: "static" | "dynamic";
   staticCeilingDbtp?: number;
+  staticReleaseSeconds?: number;
   ceilingDbtp: (frame: number) => number;
   releaseSeconds: (frame: number) => number;
 }>;
@@ -344,6 +345,7 @@ function limiterPlan(ir: CutAVIR, composition: IRComposition, node: IRNode): Lim
     lookaheadSamples: config.lookaheadSamples,
     authoredCeilingMode: automation.ceiling ? "dynamic" : "static",
     ...(automation.ceiling ? {} : { staticCeilingDbtp: config.ceilingDbtp }),
+    ...(automation.release ? {} : { staticReleaseSeconds: config.releaseSeconds }),
     ceilingDbtp: automation.ceiling?.valueAtSample ?? (() => config.ceilingDbtp),
     releaseSeconds: automation.release?.valueAtSample ?? (() => config.releaseSeconds),
   });
@@ -736,6 +738,12 @@ export async function prepareReferenceAudioLimiterSources(
         lookaheadSamples: plan.lookaheadSamples,
         ceilingDbtp: plan.ceilingDbtp,
         releaseSeconds: plan.releaseSeconds,
+        ...(plan.staticReleaseSeconds === undefined
+          ? {}
+          : { staticReleaseSeconds: plan.staticReleaseSeconds }),
+        ...(plan.staticCeilingDbtp === undefined
+          ? {}
+          : { staticCeilingDbtp: plan.staticCeilingDbtp }),
         source: planSource(plan),
       };
       const inMemoryResult = longForm

@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
 import { referenceRetainedSurfaceAlphaSupport } from "./retained-surface";
-import { executeReferenceNativeSourceOver } from "./native-source-over";
+import {
+  executeReferenceNativeRgbaAlphaBounds,
+  executeReferenceNativeSourceOver,
+} from "./native-source-over";
 
 export const rgbaBlendModes = [
   "normal",
@@ -532,6 +535,27 @@ export function deriveReferencePrivateRgbaSourceAlphaBounds(
       bottom: retainedSupport.bottom,
       nonzeroAlphaPixels: retainedSupport.nonzeroAlphaPixels,
       pixelsScanned: 0,
+    });
+    privateSourceBoundsAuthority.set(receipt, Object.freeze({
+      source,
+      data: source.data,
+      width: source.width,
+      height: source.height,
+    }));
+    return receipt;
+  }
+
+  const native = executeReferenceNativeRgbaAlphaBounds({
+    source: source.data,
+    width: source.width,
+    height: source.height,
+  });
+  if (native) {
+    const receipt: ReferencePrivateRgbaSourceAlphaBounds = Object.freeze({
+      format: "cut-reference-private-rgba-source-alpha-bounds",
+      version: 1,
+      ...native,
+      pixelsScanned: source.width * source.height,
     });
     privateSourceBoundsAuthority.set(receipt, Object.freeze({
       source,

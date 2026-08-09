@@ -950,7 +950,15 @@ function referenceVectorPathStrokeFragments(
 ): ReferenceVectorPathStrokeFragment[] {
   const start = trace.totalLength * trimStart, end = trace.totalLength * trimEnd;
   const fullClosed = closed && trimStart === 0 && trimEnd === 1;
-  if (!dash) return [{ points: referenceVectorPathSlice(trace, start, end), closed: fullClosed }];
+  if (!dash) return [{
+    // A complete undashed stroke is exactly the immutable prepared trace.
+    // Share it instead of cloning every point on every frame; partial trims
+    // still own their interpolated slice and all published state stays frozen.
+    points: start === 0 && end === trace.totalLength
+      ? trace.points
+      : referenceVectorPathSlice(trace, start, end),
+    closed: fullClosed,
+  }];
   const period = dash.reduce((sum, amount) => sum + amount, 0);
   let phase = positiveModulo(start + canonicalDashOffset(dashOffset, period), period), patternIndex = 0;
   while (phase >= dash[patternIndex]!) {
@@ -996,7 +1004,13 @@ export function referenceVectorPathDashPolylines(
   return referenceVectorPathStrokeFragments(node, trace, trimStart, trimEnd, dash, dashOffset, closed).map((fragment) => fragment.points);
 }
 
-function computeReferenceVectorPathFrame(ir: CutAVIR, node: IRNode, plan: ReferenceVectorPathPlan, time: Rational): ReferenceVectorPathFrame {
+function computeReferenceVectorPathFrame(
+  ir: CutAVIR,
+  node: IRNode,
+  plan: ReferenceVectorPathPlan,
+  time: Rational,
+  immutable: boolean,
+): ReferenceVectorPathFrame {
   const morph = frameRatio(ir, node, "morph", time, 0);
   const trimStart = frameRatio(ir, node, "trimStart", time, 0);
   const trimEnd = frameRatio(ir, node, "trimEnd", time, 1);
@@ -1033,18 +1047,30 @@ function computeReferenceVectorPathFrame(ir: CutAVIR, node: IRNode, plan: Refere
   }
   const fillPoints = plan.source.closed ? geometry.points.slice(0, -1) : geometry.points;
   const visibility = plan.fill || strokeFragments.length ? "visible" : "transparent-trim";
-  return Object.freeze({
+  // Stroke-fragment construction owns these arrays and points exclusively.
+  // Published frame state freezes one representation and lets the legacy
+  // projection share it. Bounded preflight consumes only counts, so it keeps
+  // the same exact geometry/dash checks without freezing throwaway objects.
+  const finalStrokeFragments: readonly ReferenceVectorPathStrokeFragment[] = immutable
+    ? Object.freeze(strokeFragments.map((fragment) => {
+      for (const point of fragment.points) Object.freeze(point);
+      return Object.freeze({
+        points: Object.freeze(fragment.points),
+        closed: fragment.closed,
+      });
+    }))
+    : strokeFragments;
+  const frameState: ReferenceVectorPathFrame = {
     geometry,
     morph,
     trimStart,
     trimEnd,
     dashOffset,
-    strokeFragments: Object.freeze(strokeFragments.map((fragment) => Object.freeze({
-      points: Object.freeze(fragment.points.map((point) => Object.freeze({ ...point }))),
-      closed: fragment.closed,
-    }))),
-    strokePolylines: Object.freeze(strokeFragments.map((fragment) => Object.freeze(fragment.points.map((point) => Object.freeze({ ...point }))))),
-    fillPoints: Object.freeze(fillPoints),
+    strokeFragments: finalStrokeFragments,
+    strokePolylines: immutable
+      ? Object.freeze(finalStrokeFragments.map((fragment) => fragment.points))
+      : finalStrokeFragments.map((fragment) => fragment.points),
+    fillPoints: immutable ? Object.freeze(fillPoints) : fillPoints,
     ...(plan.stroke ? { stroke: plan.stroke } : {}),
     ...(plan.fill ? { fill: plan.fill } : {}),
     strokeWidth: plan.strokeWidth,
@@ -1052,7 +1078,26 @@ function computeReferenceVectorPathFrame(ir: CutAVIR, node: IRNode, plan: Refere
     lineJoin: plan.lineJoin,
     fillRule: plan.fillRule,
     visibility,
-  });
+  };
+  return immutable ? Object.freeze(frameState) : frameState;
+}
+
+function referenceVectorPathFrameAtMode(
+  ir: CutAVIR,
+  node: IRNode,
+  plan: ReferenceVectorPathPlan,
+  time: Rational,
+  frame: bigint | undefined,
+  immutable: boolean,
+): ReferenceVectorPathFrame {
+  try {
+    return computeReferenceVectorPathFrame(ir, node, plan, time, immutable);
+  } catch (error) {
+    if (error instanceof ReferenceVectorPathError && !error.execution) {
+      throw new ReferenceVectorPathError(error.code, node, error.detail, { time, ...(frame === undefined ? {} : { frame }) });
+    }
+    throw error;
+  }
 }
 
 export function referenceVectorPathFrameAt(
@@ -1062,14 +1107,20 @@ export function referenceVectorPathFrameAt(
   time: Rational,
   frame?: bigint,
 ): ReferenceVectorPathFrame {
-  try {
-    return computeReferenceVectorPathFrame(ir, node, plan, time);
-  } catch (error) {
-    if (error instanceof ReferenceVectorPathError && !error.execution) {
-      throw new ReferenceVectorPathError(error.code, node, error.detail, { time, ...(frame === undefined ? {} : { frame }) });
-    }
-    throw error;
-  }
+  return referenceVectorPathFrameAtMode(ir, node, plan, time, frame, true);
+}
+
+/** Renderer-internal evaluation of the same exact frame law without publishing
+ * or recursively freezing its short-lived arrays. The returned state is owned
+ * by one render call and must never be cached, exposed as evidence, or mutated. */
+export function referenceVectorPathRenderFrameAt(
+  ir: CutAVIR,
+  node: IRNode,
+  plan: ReferenceVectorPathPlan,
+  time: Rational,
+  frame?: bigint,
+): ReferenceVectorPathFrame {
+  return referenceVectorPathFrameAtMode(ir, node, plan, time, frame, false);
 }
 
 /** Resolve symbolic owner-local points first, then execute the established
@@ -1134,7 +1185,8 @@ function svgPoints(points: readonly ReferenceTracePoint[]) {
 function pointBounds(points: readonly ReferenceTracePoint[]): ReferenceRect {
   if (!points.length) throw new Error("CUT retained Path visible bounds require at least one emitted point.");
   let minX = points[0]!.x, minY = points[0]!.y, maxX = minX, maxY = minY;
-  for (const point of points.slice(1)) {
+  for (let index = 1; index < points.length; index += 1) {
+    const point = points[index]!;
     minX = Math.min(minX, point.x); minY = Math.min(minY, point.y);
     maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y);
   }
@@ -1248,11 +1300,18 @@ export function validateReferenceVectorPathFrameStates(ir: CutAVIR, composition:
   // tracks must be sampled at every actual output frame because morph
   // flattening and dash fragmentation can vary non-monotonically.
   if (!plan.frameDynamic) {
-    charge(referenceVectorPathFrameAt(ir, node, plan, divideRational(rational(span.first), composition.fps), span.first), frames);
+    charge(referenceVectorPathFrameAtMode(
+      ir,
+      node,
+      plan,
+      divideRational(rational(span.first), composition.fps),
+      span.first,
+      false,
+    ), frames);
   } else {
     for (let frame = span.first; frame < span.end; frame += 1n) {
       const time = divideRational(rational(frame), composition.fps);
-      charge(referenceVectorPathFrameAt(ir, node, plan, time, frame), 1n);
+      charge(referenceVectorPathFrameAtMode(ir, node, plan, time, frame, false), 1n);
     }
   }
   if (visiblePaintFrames === 0n) {
