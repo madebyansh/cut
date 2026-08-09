@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -412,6 +413,51 @@ test("locked npm runner kills and drains output overflow and cancellation", asyn
   await assert.rejects(readFile(join(earlyStage, "unexpected-spawn")), { code: "ENOENT" });
 });
 
+test("a TERM-responsive failed npm install settles on close and never signals its stale process group", { timeout: 10_000, skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "cut-footage-npm-responsive-"));
+  const stagingRoot = join(root, "stage"), npmCacheRoot = join(root, "cache"), npmCliPath = join(root, "npm.mjs");
+  const pidPath = join(stagingRoot, "responsive.pid");
+  await mkdir(stagingRoot);
+  await writeFile(npmCliPath, [
+    'import { writeFile } from "node:fs/promises";',
+    'await writeFile("responsive.pid", String(process.pid));',
+    'process.on("SIGTERM", () => process.exit(23));',
+    'setInterval(() => {}, 1000);',
+  ].join("\n"));
+  const environment = Object.freeze({
+    PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".npm-home"), TMPDIR: join(stagingRoot, ".npm-tmp"),
+    CI: "1", npm_config_cache: npmCacheRoot,
+  });
+  const controller = new AbortController();
+  const running = installCutFootageLocalRuntime({
+    stagingRoot, nodeExecutable: process.execPath, npmCliPath, npmCacheRoot, environment, signal: controller.signal,
+  });
+  let pid: number | undefined;
+  for (let attempt = 0; attempt < 200 && pid === undefined; attempt += 1) {
+    try { pid = Number(await readFile(pidPath, "utf8")); }
+    catch { await new Promise((accept) => setTimeout(accept, 5)); }
+  }
+  assert.ok(pid);
+  const originalKill = process.kill.bind(process), groupSignals: NodeJS.Signals[] = [];
+  process.kill = ((target: number, signal?: NodeJS.Signals | number) => {
+    if (target === -pid! && typeof signal === "string") groupSignals.push(signal);
+    return originalKill(target, signal);
+  }) as typeof process.kill;
+  let elapsed = Number.POSITIVE_INFINITY;
+  try {
+    const started = Date.now();
+    controller.abort();
+    await assert.rejects(running, footageError("CUT_FOOTAGE_PUBLISH"));
+    elapsed = Date.now() - started;
+    await new Promise((accept) => setTimeout(accept, 1_200));
+  } finally {
+    process.kill = originalKill as typeof process.kill;
+    try { originalKill(-pid!, "SIGKILL"); } catch { /* already gone */ }
+  }
+  assert.ok(elapsed < 750, `responsive npm close took ${elapsed}ms`);
+  assert.deepEqual(groupSignals, ["SIGTERM"]);
+});
+
 test("locked npm runner refuses a cache symlink before spawning", async () => {
   const root = await mkdtemp(join(tmpdir(), "cut-footage-npm-cache-link-"));
   const stagingRoot = join(root, "stage"), npmCacheRoot = join(root, "cache"), outside = join(root, "outside"), npmCliPath = join(root, "npm.mjs");
@@ -451,6 +497,41 @@ test("setup cleanup never deletes a payload pathname whose inode was replaced", 
   const replacement = (await readdir(home)).find((name) => name.startsWith(".local-clip-v1.payload-") && !name.endsWith(".moved"));
   assert.ok(replacement);
   assert.equal(await readFile(join(home, replacement, "preserve-me"), "utf8"), "replacement inode\n");
+});
+
+test("setup cleanup preserves leaf and directory replacements introduced after its first commit validation", async () => {
+  const home = join(await mkdtemp(join(tmpdir(), "cut-footage-cleanup-entry-race-")), "footage");
+  const recipe = await fakeRecipe();
+  let stagingRoot = "";
+  const operations = {
+    async installRuntime(request: CutFootageLocalInstallRuntimeRequest) {
+      stagingRoot = request.stagingRoot;
+      await mkdir(join(stagingRoot, "node_modules/victim-directory"), { recursive: true });
+      await Promise.all([
+        writeFile(join(stagingRoot, "node_modules/victim-leaf"), "owned leaf\n"),
+        writeFile(join(stagingRoot, "node_modules/victim-directory/owned"), "owned directory leaf\n"),
+      ]);
+      throw new Error("injected failure");
+    },
+    async startSidecar() { throw new Error("unreachable"); },
+    beforeCleanupEntryRemoval(request: Readonly<{ path: string; kind: "directory" | "leaf" }>) {
+      if (request.path === join(stagingRoot, "node_modules/victim-leaf")) {
+        renameSync(request.path, `${request.path}.owned`);
+        writeFileSync(request.path, "foreign leaf\n");
+      }
+      if (request.path === join(stagingRoot, "node_modules/victim-directory")) {
+        renameSync(request.path, `${request.path}.owned`);
+        mkdirSync(request.path);
+        writeFileSync(join(request.path, "foreign"), "foreign directory leaf\n");
+      }
+    },
+  } as unknown as CutFootageLocalOperations;
+  await assert.rejects(setupCutFootageLocalBackend({
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+    platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations,
+  }), footageError("CUT_FOOTAGE_PUBLISH"));
+  assert.equal(await readFile(join(stagingRoot, "node_modules/victim-leaf"), "utf8"), "foreign leaf\n");
+  assert.equal(await readFile(join(stagingRoot, "node_modules/victim-directory/foreign"), "utf8"), "foreign directory leaf\n");
 });
 
 test("setup relies on create-only publication, preserves legacy locks, and refuses an invalid immutable install", async () => {

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, lstatSync, rmdirSync, unlinkSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -9,10 +9,8 @@ import {
   readdir,
   readlink,
   realpath,
-  rmdir,
   stat,
   symlink,
-  unlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -146,6 +144,8 @@ export type CutFootageLocalOperations = Readonly<{
   startSidecar(launch: CutFootageLocalSidecarLaunch): Promise<CutFootageSidecarSession>;
   /** @internal Deterministic create-only publication race seam. */
   beforePublish?(request: Readonly<{ stagingRoot: string; target: string }>): Promise<void>;
+  /** @internal Deterministic unpublished-payload cleanup race seam. */
+  beforeCleanupEntryRemoval?(request: Readonly<{ path: string; kind: "directory" | "leaf" }>): void;
 }>;
 
 export type CutFootageLocalSetupOptions = Readonly<{
@@ -753,7 +753,8 @@ export async function installCutFootageLocalRuntime(request: CutFootageLocalInst
       else postExitTimer = setTimeout(fail, npmTerminateGraceMs);
     });
     child.on("close", (code, signal) => {
-      if (!failure && code === 0 && signal === null) finish();
+      if (failure) finish(installerError());
+      else if (code === 0 && signal === null) finish();
     });
   });
 }
@@ -845,13 +846,24 @@ async function cleanupSnapshot(root: string, rootSnapshot: EntrySnapshot): Promi
   } catch { return undefined; }
 }
 
-async function cleanupAncestorsUnchanged(ancestors: readonly CleanupDirectorySnapshot[]) {
+function cleanupAncestorsUnchanged(ancestors: readonly CleanupDirectorySnapshot[]) {
   try {
     for (const ancestor of ancestors) {
-      const current = await lstat(ancestor.path);
+      const current = lstatSync(ancestor.path);
       if (!current.isDirectory() || current.isSymbolicLink() || !sameEntrySnapshot(current, ancestor)) return false;
     }
     return true;
+  } catch { return false; }
+}
+
+function cleanupEntryUnchanged(entry: CleanupEntrySnapshot) {
+  if (!cleanupAncestorsUnchanged(entry.ancestors)) return false;
+  try {
+    const current = lstatSync(entry.path);
+    if (!sameEntrySnapshot(current, entry)) return false;
+    return entry.kind === "leaf"
+      ? current.isFile() || current.isSymbolicLink()
+      : current.isDirectory() && !current.isSymbolicLink();
   } catch { return false; }
 }
 
@@ -870,22 +882,26 @@ async function cleanupUnpublishedPayload(
   stagingRoot: string,
   stagingSnapshot: EntrySnapshot | undefined,
   target: string,
+  beforeEntryRemoval?: CutFootageLocalOperations["beforeCleanupEntryRemoval"],
 ) {
   if (!stagingSnapshot || await targetPublishesPayload(target, basename(stagingRoot))) return;
   const entries = await cleanupSnapshot(stagingRoot, stagingSnapshot);
   if (!entries) return;
   for (const entry of entries) {
     try {
-      if (!await cleanupAncestorsUnchanged(entry.ancestors)) continue;
-      const current = await lstat(entry.path);
-      if (!sameEntrySnapshot(current, entry)) continue;
-      if (entry.kind === "leaf" && (current.isFile() || current.isSymbolicLink())) await unlink(entry.path);
-      else if (entry.kind === "directory" && current.isDirectory() && !current.isSymbolicLink()) await rmdir(entry.path);
+      if (!cleanupEntryUnchanged(entry)) continue;
+      beforeEntryRemoval?.({ path: entry.path, kind: entry.kind });
+      // The final lineage/inode validation and removal are one no-await critical section.
+      // An actively hostile same-user process can still swap a pathname between OS syscalls;
+      // every replacement or uncertainty we can observe is preserved instead of followed.
+      if (!cleanupEntryUnchanged(entry)) continue;
+      if (entry.kind === "leaf") unlinkSync(entry.path);
+      else rmdirSync(entry.path);
     } catch { /* An uncertain or replaced entry is preserved. */ }
   }
   try {
-    const current = await lstat(stagingRoot);
-    if (current.isDirectory() && !current.isSymbolicLink() && sameEntrySnapshot(current, stagingSnapshot)) await rmdir(stagingRoot);
+    const current = lstatSync(stagingRoot);
+    if (current.isDirectory() && !current.isSymbolicLink() && sameEntrySnapshot(current, stagingSnapshot)) rmdirSync(stagingRoot);
   } catch { /* An uncertain, replaced, or non-empty payload is preserved. */ }
 }
 
@@ -1314,7 +1330,7 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     const install = await inspectCutFootageLocalInstall({ ...options, home });
     return setupReport("installed", install);
   } catch (error) {
-    await cleanupUnpublishedPayload(stagingRoot, stagingSnapshot, target);
+    await cleanupUnpublishedPayload(stagingRoot, stagingSnapshot, target, operations.beforeCleanupEntryRemoval);
     abortSetupIfRequested(options.signal);
     if (error instanceof CutFootageError) throw error;
     publishFailure("the local footage backend could not be installed.");
