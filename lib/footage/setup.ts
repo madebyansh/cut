@@ -9,6 +9,7 @@ import {
   readlink,
   realpath,
   rename,
+  rmdir,
   rm,
   stat,
   unlink,
@@ -38,6 +39,11 @@ const maximumManifestBytes = 4 * 1024 * 1024;
 const maximumTreeFiles = 100_000;
 const maximumTreeBytes = 2 * 1024 * 1024 * 1024;
 const maximumTreeFileBytes = 512 * 1024 * 1024;
+const maximumTreeDepth = 64;
+const pinnedModel = "Xenova/clip-vit-base-patch32";
+const pinnedRevision = "d15189d7028b43f1d3e65039190477f6af591c2a";
+const pinnedTextGraph = Object.freeze({ locator: "onnx/text_model_quantized.onnx", bytes: 64_504_507, sha256: "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a" });
+const pinnedVisionGraph = Object.freeze({ locator: "onnx/vision_model_quantized.onnx", bytes: 89_117_001, sha256: "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299" });
 
 export type ResolveCutFootageHomeOptions = Readonly<{
   explicitHome?: string;
@@ -116,6 +122,8 @@ export type CutFootageLocalInstallRuntimeRequest = Readonly<{
 export type CutFootageLocalOperations = Readonly<{
   installRuntime(request: CutFootageLocalInstallRuntimeRequest): Promise<void>;
   startSidecar(launch: CutFootageLocalSidecarLaunch): Promise<CutFootageSidecarSession>;
+  /** @internal Deterministic create-only publication race seam. */
+  beforePublish?(request: Readonly<{ stagingRoot: string; target: string }>): Promise<void>;
 }>;
 
 export type CutFootageLocalSetupOptions = Readonly<{
@@ -154,7 +162,7 @@ export type CutFootageLocalSetupReport = Readonly<{
 
 type TreeEntry = Readonly<{
   locator: string;
-  kind: "file" | "symlink";
+  kind: "directory" | "file" | "symlink";
   bytes: number;
   sha256?: string;
   target?: string;
@@ -228,6 +236,12 @@ function safeModelPathPart(value: unknown) {
   return result;
 }
 
+function safeModelSegment(value: unknown) {
+  const result = safeModelPathPart(value);
+  if (result.includes("/")) mismatch();
+  return result;
+}
+
 function same(left: unknown, right: unknown) {
   return stableJsonStringify(left) === stableJsonStringify(right);
 }
@@ -245,7 +259,7 @@ export function resolveCutFootageHome(options: ResolveCutFootageHomeOptions = {}
   const explicit = options.explicitHome ?? (options.environment ?? process.env).CUT_FOOTAGE_HOME;
   const base = explicit ?? join(options.homeDirectory ?? homedir(), ".cut", "footage");
   if (typeof base !== "string" || !base.length || Buffer.byteLength(base, "utf8") > 16_384 || !isAbsolute(base)
-    || normalize(base) !== base || parse(base).root === base || base.includes("\0")) unsafeHome();
+    || normalize(base) !== base || parse(base).root === base || /[\u0000-\u001f\u007f]/u.test(base)) unsafeHome();
   return base;
 }
 
@@ -307,7 +321,8 @@ async function treeEntries(root: string, excluded = new Set<string>()) {
   try { canonicalRoot = await realpath(root); } catch { mismatch(); }
   const entries: TreeEntry[] = [];
   let totalBytes = 0;
-  const walk = async (directory: string, prefix: string): Promise<void> => {
+  const walk = async (directory: string, prefix: string, depth: number): Promise<void> => {
+    if (depth > maximumTreeDepth) mismatch();
     let names: string[];
     try { names = (await readdir(directory)).sort(compareText); } catch { mismatch(); }
     for (const name of names) {
@@ -318,7 +333,9 @@ async function treeEntries(root: string, excluded = new Set<string>()) {
       let metadata;
       try { metadata = await lstat(physical); } catch { mismatch(); }
       if (metadata.isDirectory() && !metadata.isSymbolicLink()) {
-        await walk(physical, local);
+        if (entries.length >= maximumTreeFiles) mismatch();
+        entries.push(Object.freeze({ locator: local, kind: "directory", bytes: 0 }));
+        await walk(physical, local, depth + 1);
         continue;
       }
       if (entries.length >= maximumTreeFiles) mismatch();
@@ -351,7 +368,7 @@ async function treeEntries(root: string, excluded = new Set<string>()) {
       mismatch();
     }
   };
-  await walk(root, "");
+  await walk(root, "", 0);
   if (!entries.length) mismatch();
   return Object.freeze(entries);
 }
@@ -359,7 +376,7 @@ async function treeEntries(root: string, excluded = new Set<string>()) {
 function identityFromEntries(entries: readonly TreeEntry[]): CutFootageTreeIdentity {
   return Object.freeze({
     bytes: entries.reduce((total, entry) => total + entry.bytes, 0),
-    fileCount: entries.length,
+    fileCount: entries.filter((entry) => entry.kind !== "directory").length,
     sha256: createHash("sha256").update(stableJsonStringify(entries)).digest("hex"),
   });
 }
@@ -395,13 +412,22 @@ function parseModel(input: string | Uint8Array): CutFootageLocalModel {
     version: 1 as const,
     provider: safeModelPathPart(root.provider),
     model: safeModelPathPart(root.model),
-    revision: safeModelPathPart(root.revision),
+    revision: safeModelSegment(root.revision),
     dtype: "q8" as const,
     device: "cpu" as const,
     dimensions: positive(root.dimensions, 65_536),
     selfTestSha256: sha(root.selfTestSha256),
     files: Object.freeze(files),
   });
+}
+
+function requirePinnedModel(model: CutFootageLocalModel) {
+  const byRole = new Map(model.files.map((file) => [file.role, file]));
+  if (model.model !== pinnedModel || model.revision !== pinnedRevision || model.dtype !== "q8" || model.device !== "cpu" || model.dimensions !== 512
+    || !same(byRole.get("text"), { ...pinnedTextGraph, role: "text" })
+    || !same(byRole.get("vision"), { ...pinnedVisionGraph, role: "vision" })) {
+    mismatch("the bundled local footage model recipe is not the pinned CLIP backend.");
+  }
 }
 
 function modelRevisionPath(installationRoot: string, model: CutFootageLocalModel) {
@@ -531,8 +557,15 @@ function parseInstallManifest(input: string | Uint8Array): CutFootageLocalInstal
   return deepFreeze({ ...body, identitySha256 });
 }
 
-async function loadRecipe(recipeRoot: string, stagingRoot: string) {
+async function loadRecipe(recipeRoot: string, stagingRoot: string, enforcePinned: boolean) {
   if (!isAbsolute(recipeRoot) || normalize(recipeRoot) !== recipeRoot) mismatch("the local footage adapter recipe is invalid.");
+  try {
+    const metadata = await lstat(recipeRoot);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) mismatch("the local footage adapter recipe is invalid.");
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    mismatch("the local footage adapter recipe is invalid.");
+  }
   let names: string[];
   try { names = (await readdir(recipeRoot)).sort(compareText); } catch { mismatch("the local footage adapter recipe is invalid."); }
   if (!same(names, recipeFiles)) mismatch("the local footage adapter recipe is invalid.");
@@ -542,17 +575,83 @@ async function loadRecipe(recipeRoot: string, stagingRoot: string) {
   }
   const packageJson = parseStrictPackageJson(await readFile(join(stagingRoot, "package.json")));
   const packageLock = parseStrictPackageJson(await readFile(join(stagingRoot, "package-lock.json")));
-  const packageRecord = packageJson && typeof packageJson === "object" && !Array.isArray(packageJson) ? packageJson as Record<string, unknown> : {};
-  const dependencies = packageRecord.dependencies && typeof packageRecord.dependencies === "object" && !Array.isArray(packageRecord.dependencies) ? packageRecord.dependencies as Record<string, unknown> : {};
-  const lockRecord = packageLock && typeof packageLock === "object" && !Array.isArray(packageLock) ? packageLock as Record<string, unknown> : {};
-  const packages = lockRecord.packages && typeof lockRecord.packages === "object" && !Array.isArray(lockRecord.packages) ? lockRecord.packages as Record<string, unknown> : {};
-  const transformers = packages["node_modules/@huggingface/transformers"] as Record<string, unknown> | undefined;
-  const ort = packages["node_modules/onnxruntime-node"] as Record<string, unknown> | undefined;
-  if (dependencies["@huggingface/transformers"] !== "4.2.0" || transformers?.version !== "4.2.0" || ort?.version !== "1.24.3") mismatch("the local footage adapter recipe is not pinned to its verified runtime.");
+  validateRecipePackages(packageJson, packageLock);
+  const model = parseModel(await readFile(join(stagingRoot, "model.json")));
+  if (enforcePinned) requirePinnedModel(model);
   return Object.freeze({
-    model: parseModel(await readFile(join(stagingRoot, "model.json"))),
+    model,
     adapterSha256: (await hashRegular(join(stagingRoot, "local-clip-sidecar.mjs"))).sha256,
   });
+}
+
+function validateRecipePackages(packageJson: unknown, packageLock: unknown) {
+  const packageRecord = record(packageJson, ["name", "version", "private", "type", "engines", "dependencies"]);
+  const engines = record(packageRecord.engines, ["node"]), dependencies = record(packageRecord.dependencies, ["@huggingface/transformers"]);
+  if (packageRecord.name !== "@cut-lang/footage-local" || packageRecord.version !== "1.0.0" || packageRecord.private !== true || packageRecord.type !== "module"
+    || engines.node !== cutFootageNodeCompatibility || dependencies["@huggingface/transformers"] !== "4.2.0") mismatch("the local footage adapter package recipe is invalid.");
+
+  const lockRecord = record(packageLock, ["name", "version", "lockfileVersion", "requires", "packages"]);
+  if (lockRecord.name !== packageRecord.name || lockRecord.version !== packageRecord.version || lockRecord.lockfileVersion !== 3 || lockRecord.requires !== true
+    || !lockRecord.packages || typeof lockRecord.packages !== "object" || Array.isArray(lockRecord.packages)) mismatch("the local footage adapter lock is invalid.");
+  const packages = lockRecord.packages as Record<string, unknown>;
+  if (!Object.keys(packages).length || Object.keys(packages).length > 1_024) mismatch("the local footage adapter lock is invalid.");
+  for (const [path, value] of Object.entries(packages)) {
+    if (path && (!path.startsWith("node_modules/") || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === ".."))) mismatch("the local footage adapter lock is invalid.");
+    if (!value || typeof value !== "object" || Array.isArray(value)) mismatch("the local footage adapter lock is invalid.");
+    const item = value as Record<string, unknown>;
+    if (item.link === true || (item.resolved !== undefined && (typeof item.resolved !== "string" || !item.resolved.startsWith("https://registry.npmjs.org/")))
+      || (item.integrity !== undefined && (typeof item.integrity !== "string" || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(item.integrity)))) mismatch("the local footage adapter lock is invalid.");
+  }
+  const root = packages[""] as Record<string, unknown>, rootKeys = Object.keys(root);
+  if (rootKeys.some((key) => !["name", "version", "engines", "dependencies"].includes(key))
+    || (root.name !== undefined && root.name !== packageRecord.name) || (root.version !== undefined && root.version !== packageRecord.version)
+    || !same(root.dependencies, dependencies) || (root.engines !== undefined && !same(root.engines, engines))) mismatch("the local footage adapter lock root is invalid.");
+  const transformers = packages["node_modules/@huggingface/transformers"] as Record<string, unknown> | undefined;
+  const ort = packages["node_modules/onnxruntime-node"] as Record<string, unknown> | undefined;
+  const transformerDependencies = transformers?.dependencies && typeof transformers.dependencies === "object" && !Array.isArray(transformers.dependencies)
+    ? transformers.dependencies as Record<string, unknown> : {};
+  if (transformers?.version !== "4.2.0" || ort?.version !== "1.24.3" || transformerDependencies["onnxruntime-node"] !== "1.24.3") mismatch("the local footage adapter lock is not pinned to its verified runtime.");
+}
+
+/** Publishes a logically atomic installation: the verified manifest is the final create-only commit marker. */
+async function publishVerifiedInstall(
+  stagingRoot: string,
+  target: string,
+  beforePublish?: CutFootageLocalOperations["beforePublish"],
+) {
+  try { await beforePublish?.({ stagingRoot, target }); } catch { publishFailure("the verified local footage backend could not enter its create-only publication boundary."); }
+  let targetSnapshot: Readonly<{ dev: number | bigint; ino: number | bigint }>;
+  try {
+    await mkdir(target, { mode: 0o700 });
+    const metadata = await lstat(target);
+    targetSnapshot = Object.freeze({ dev: metadata.dev, ino: metadata.ino });
+  } catch { publishFailure("the verified local footage backend destination already exists."); }
+
+  const moved: string[] = [];
+  try {
+    const names = (await readdir(stagingRoot)).sort(compareText);
+    if (!names.includes(manifestName)) publishFailure("the verified local footage backend has no commit marker.");
+    for (const name of names) {
+      if (name === manifestName) continue;
+      await rename(join(stagingRoot, name), join(target, name));
+      moved.push(name);
+    }
+    const observed = (await readdir(target)).sort(compareText);
+    if (!same(observed, [...moved].sort(compareText))) publishFailure("the verified local footage backend destination changed during publication.");
+    await rename(join(stagingRoot, manifestName), join(target, manifestName));
+    await rmdir(stagingRoot).catch(() => undefined);
+    return;
+  } catch (error) {
+    for (const name of moved.reverse()) {
+      await rename(join(target, name), join(stagingRoot, name)).catch(() => undefined);
+    }
+    try {
+      const metadata = await lstat(target), names = await readdir(target);
+      if (metadata.dev === targetSnapshot.dev && metadata.ino === targetSnapshot.ino && names.length === 0) await rmdir(target);
+    } catch { /* Preserve a destination that changed or is no longer ours. */ }
+    if (error instanceof CutFootageError) throw error;
+    publishFailure("the verified local footage backend could not be published without replacing another entry.");
+  }
 }
 
 function setupReport(status: "installed" | "ready", install: CutFootageLocalInstall): CutFootageLocalSetupReport {
@@ -660,8 +759,10 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     }
 
     const recipeRoot = options.recipeRoot ?? resolve(__dirname, "../../../adapters/footage-local");
+    const fixtureRecipe = options.recipeRoot !== undefined;
+    if (fixtureRecipe && options.operations === undefined) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$recipe", "a custom footage recipe is permitted only with injected test operations.");
     await mkdir(stagingRoot, { mode: 0o700 }); stagingCreated = true;
-    const recipe = await loadRecipe(recipeRoot, stagingRoot);
+    const recipe = await loadRecipe(recipeRoot, stagingRoot, !fixtureRecipe);
     const npmExecutable = options.npmExecutable ?? process.execPath;
     if (!isAbsolute(npmExecutable) || normalize(npmExecutable) !== npmExecutable) publishFailure("the npm executable is invalid.");
     await operations.installRuntime({
@@ -698,7 +799,7 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     });
     const manifest = deepFreeze({ ...body, identitySha256: createHash("sha256").update(manifestBody(body)).digest("hex") });
     await writeFile(join(stagingRoot, manifestName), `${stableJsonStringify(manifest)}\n`, { flag: "wx", mode: 0o600 });
-    try { await rename(stagingRoot, target); published = true; } catch { publishFailure("the verified local footage backend could not be published without replacing another entry."); }
+    await publishVerifiedInstall(stagingRoot, target, operations.beforePublish); published = true;
     const install = await inspectCutFootageLocalInstall({ ...options, home });
     return setupReport("installed", install);
   } catch (error) {

@@ -118,7 +118,7 @@ test("footage setup rejects unsupported backends and unsafe explicit homes befor
     setupCutFootageLocalBackend({ backend: "hosted", home: join(root, "unused") }),
     footageError("CUT_FOOTAGE_BACKEND_PROTOCOL"),
   );
-  for (const home of ["relative/footage", "/"]) {
+  for (const home of ["relative/footage", "/", "/tmp/unsafe\nfootage"]) {
     assert.throws(() => resolveCutFootageHome({ explicitHome: home }), footageError("CUT_FOOTAGE_BACKEND_PROTOCOL"));
   }
 });
@@ -219,6 +219,39 @@ test("setup lock contention and an invalid immutable install fail without deleti
   assert.equal(await readFile(join(home, "local-clip-v1/preserve-me"), "utf8"), "do not delete\n");
 });
 
+test("setup never replaces a destination created at the publication boundary", async () => {
+  const home = join(await mkdtemp(join(tmpdir(), "cut-footage-publish-race-")), "footage");
+  const recipe = await fakeRecipe();
+  const operations = fakeOperations(recipe.model);
+  await assert.rejects(setupCutFootageLocalBackend({
+    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+    operations: {
+      ...operations,
+      async beforePublish({ target }) {
+        await mkdir(target);
+        await writeFile(join(target, "preserve-me"), "external entry\n");
+      },
+    },
+  }), footageError("CUT_FOOTAGE_PUBLISH"));
+  assert.equal(await readFile(join(home, "local-clip-v1/preserve-me"), "utf8"), "external entry\n");
+  assert.equal((await readdir(home)).some((name) => name.includes("staging") || name.endsWith(".lock")), false);
+});
+
+test("setup refuses package scripts and cleans its owned stage and lock", async () => {
+  const home = join(await mkdtemp(join(tmpdir(), "cut-footage-hostile-recipe-")), "footage");
+  const recipe = await fakeRecipe();
+  const packagePath = join(recipe.root, "package.json");
+  const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
+  packageJson.scripts = { preinstall: "steal-secrets" };
+  await writeFile(packagePath, `${JSON.stringify(packageJson)}\n`);
+  await assert.rejects(setupCutFootageLocalBackend({
+    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations: fakeOperations(recipe.model),
+  }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
+  assert.deepEqual(await readdir(home), []);
+});
+
 test("doctor rehashes the complete runtime, model, and adapter trees before launching inference", async () => {
   for (const locator of [
     "node_modules/@huggingface/transformers/package.json",
@@ -286,6 +319,14 @@ test("doctor accepts the locked in-tree npm bin symlink and refuses a replacemen
   await rm(link);
   await writeFile(join(fixture.home, "escape"), "outside runtime\n");
   await symlink("../../../escape", link);
+  await assert.rejects(inspectCutFootageLocalInstall({
+    home: fixture.home, platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+  }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
+});
+
+test("doctor binds empty directories as part of the complete immutable runtime tree", async () => {
+  const fixture = await installedFixture();
+  await mkdir(join(fixture.installationRoot, "node_modules/unexpected-empty-directory"));
   await assert.rejects(inspectCutFootageLocalInstall({
     home: fixture.home, platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
   }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
