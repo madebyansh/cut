@@ -112,6 +112,7 @@ function sourceSelection(value: unknown, path: string): CutFootageSourceSelectio
   return Object.freeze({ locator: locator(record.locator, `${path}.locator`), sha256: sha256(record.sha256, `${path}.sha256`), streamIndex: nonNegativeInteger(record.streamIndex, `${path}.streamIndex`, 1024), range: rangeWire(record.range, `${path}.range`) });
 }
 function isSorted<T>(values: readonly T[], compare: (left: T, right: T) => number) { return values.every((value, index) => index === 0 || compare(values[index - 1]!, value) <= 0); }
+function bytewise(left: string, right: string) { return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")); }
 function digestWithout(value: Record<string, unknown>, identityField: string) {
   const { [identityField]: _identity, ...body } = value;
   return createHash("sha256").update(stableJsonStringify(body)).digest("hex");
@@ -146,7 +147,7 @@ export function parseCutFootageIndex(input: string | Uint8Array): CutFootageInde
     if (new Set(streams.map((stream) => stream.index)).size !== streams.length) protocol(`${path}.streams`, "must not contain duplicate stream indices.");
     return Object.freeze({ locator: locator(source.locator, `${path}.locator`), bytes: positiveInteger(source.bytes, `${path}.bytes`), sha256: sha256(source.sha256, `${path}.sha256`), duration: nonNegative(rationalWire(source.duration, `${path}.duration`), `${path}.duration`), probeSha256: sha256(source.probeSha256, `${path}.probeSha256`), streams: Object.freeze(streams) });
   });
-  if (!isSorted(sources, (left, right) => left.locator.localeCompare(right.locator)) || new Set(sources.map((source) => source.locator)).size !== sources.length) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.sources", "must be canonical-locator sorted without duplicates.");
+  if (!isSorted(sources, (left, right) => bytewise(left.locator, right.locator)) || new Set(sources.map((source) => source.locator)).size !== sources.length) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.sources", "must be canonical-locator sorted without duplicates.");
   const policy = closed(root.chunkPolicy, "$.chunkPolicy", ["duration", "overlap"]), duration = rationalWire(policy.duration, "$.chunkPolicy.duration"), overlap = nonNegative(rationalWire(policy.overlap, "$.chunkPolicy.overlap"), "$.chunkPolicy.overlap");
   if (compareRational(duration, zeroRational) <= 0 || compareRational(overlap, duration) >= 0) footageFail("CUT_FOOTAGE_RANGE", "$.chunkPolicy", "must have positive duration and shorter non-negative overlap.");
   if (!Array.isArray(root.chunks) || root.chunks.length > cutFootageLimits.maximumChunks) protocol("$.chunks", "must be one bounded chunk array.");
@@ -159,7 +160,7 @@ export function parseCutFootageIndex(input: string | Uint8Array): CutFootageInde
     if (!grid || divideRational(sourceRange.start, grid).denominator !== "1" || divideRational(sourceRange.end, grid).denominator !== "1") footageFail("CUT_FOOTAGE_RANGE", `${path}.range`, "must align to the selected source stream frame or sample grid.");
     return Object.freeze({ id: identifier(chunk.id, `${path}.id`), sourceLocator, sourceSha256, streamIndex, range: sourceRange });
   });
-  if (new Set(chunks.map((chunk) => chunk.id)).size !== chunks.length || !isSorted(chunks, (left, right) => left.sourceLocator.localeCompare(right.sourceLocator) || compareRational(left.range.start, right.range.start) || compareRational(left.range.end, right.range.end) || left.id.localeCompare(right.id))) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.chunks", "must be stable sorted without duplicate IDs.");
+  if (new Set(chunks.map((chunk) => chunk.id)).size !== chunks.length || !isSorted(chunks, (left, right) => bytewise(left.sourceLocator, right.sourceLocator) || compareRational(left.range.start, right.range.start) || compareRational(left.range.end, right.range.end) || bytewise(left.id, right.id))) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.chunks", "must be stable sorted without duplicate IDs.");
   const backend = closed(root.backend, "$.backend", ["protocolVersion", "provider", "model", "dimensions", "normalization"]);
   if (backend.protocolVersion !== 1 || backend.normalization !== "l2") protocol("$.backend", "must declare local protocol version 1 and l2 normalization.");
   const artifact = closed(root.vectorArtifact, "$.vectorArtifact", ["locator", "bytes", "sha256"]), creation = closed(root.creation, "$.creation", ["cutVersion", "backendProtocolVersion"]);
@@ -182,7 +183,7 @@ export function parseCutFootageSearch(input: string | Uint8Array): CutFootageSea
     if (new Set(chunkIds).size !== chunkIds.length) protocol(`${path}.chunkIds`, "must not contain duplicate chunk IDs.");
     return Object.freeze({ id: identifier(match.id, `${path}.id`), scorePpm: Number(match.scorePpm), chunkIds: Object.freeze(chunkIds), sourceSelection: sourceSelection(match.sourceSelection, `${path}.sourceSelection`), ...(match.handles === undefined ? {} : { handles: handles(match.handles, `${path}.handles`) }) });
   });
-  if (new Set(matches.map((match) => match.id)).size !== matches.length || !isSorted(matches, (left, right) => right.scorePpm - left.scorePpm || left.sourceSelection.locator.localeCompare(right.sourceSelection.locator) || compareRational(left.sourceSelection.range.start, right.sourceSelection.range.start) || compareRational(left.sourceSelection.range.end, right.sourceSelection.range.end) || left.id.localeCompare(right.id))) footageFail("CUT_FOOTAGE_MATCH", "$.matches", "must be deterministically ranked without duplicate IDs.");
+  if (new Set(matches.map((match) => match.id)).size !== matches.length || !isSorted(matches, (left, right) => right.scorePpm - left.scorePpm || bytewise(left.sourceSelection.locator, right.sourceSelection.locator) || compareRational(left.sourceSelection.range.start, right.sourceSelection.range.start) || compareRational(left.sourceSelection.range.end, right.sourceSelection.range.end) || bytewise(left.id, right.id))) footageFail("CUT_FOOTAGE_MATCH", "$.matches", "must be deterministically ranked without duplicate IDs.");
   const searchSha256 = verifiedIdentity(root, "searchSha256", "$");
   return Object.freeze({ format: "cut-footage-search", version: 1, indexLocator: locator(root.indexLocator, "$.indexLocator"), indexSha256: sha256(root.indexSha256, "$.indexSha256"), query: Object.freeze({ text: queryText, thresholdPpm: Number(query.thresholdPpm) }), matches: Object.freeze(matches), searchSha256 });
 }

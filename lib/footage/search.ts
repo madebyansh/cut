@@ -4,7 +4,11 @@ import { dirname, resolve } from "node:path";
 import { stableJsonStringify } from "../core/stable";
 import { compareRational } from "../language/rational";
 import { resolveProjectFile, validateProjectLocator } from "../project/manifest";
-import { writeProjectArtifacts } from "../project/write-boundary";
+import {
+  snapshotStagedFileDestination,
+  writeProjectArtifacts,
+  type StagedFileDestinationSnapshot,
+} from "../project/write-boundary";
 import {
   cutFootageLimits,
   loadCutFootageIndexFile,
@@ -33,6 +37,10 @@ function protocol(path: string, reason: string): never {
 
 function foldedLocator(value: string) {
   return value.normalize("NFC").toLowerCase().normalize("NFC");
+}
+
+function bytewise(left: string, right: string) {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 /** Canonical v1 query admission: bounded raw UTF-8 followed by exact NFKC and trim. */
@@ -80,10 +88,10 @@ function rankingOrder(
   right: Readonly<{ chunk: CutFootageIndex["chunks"][number]; scorePpm: number }>,
 ) {
   return right.scorePpm - left.scorePpm
-    || left.chunk.sourceLocator.localeCompare(right.chunk.sourceLocator)
+    || bytewise(left.chunk.sourceLocator, right.chunk.sourceLocator)
     || compareRational(left.chunk.range.start, right.chunk.range.start)
     || compareRational(left.chunk.range.end, right.chunk.range.end)
-    || left.chunk.id.localeCompare(right.chunk.id);
+    || bytewise(left.chunk.id, right.chunk.id);
 }
 
 function searchBounds(options: Readonly<{ thresholdPpm: number; limit: number }>) {
@@ -134,10 +142,10 @@ export function rankCutFootageCandidates(
     }),
   }));
   matches.sort((left, right) => right.scorePpm - left.scorePpm
-    || left.sourceSelection.locator.localeCompare(right.sourceSelection.locator)
+    || bytewise(left.sourceSelection.locator, right.sourceSelection.locator)
     || compareRational(left.sourceSelection.range.start, right.sourceSelection.range.start)
     || compareRational(left.sourceSelection.range.end, right.sourceSelection.range.end)
-    || left.id.localeCompare(right.id));
+    || bytewise(left.id, right.id));
   return Object.freeze(matches);
 }
 
@@ -176,6 +184,7 @@ export type SearchProjectFootageOptions = Readonly<{
   __testHooks?: Readonly<{
     startSidecar?: (install: CutFootageLocalInstall) => Promise<CutFootageSidecarSession>;
     afterInference?: () => void | Promise<void>;
+    afterFinalRevalidation?: () => void | Promise<void>;
   }>;
 }>;
 
@@ -222,6 +231,25 @@ async function revalidateSearchIndex(projectRoot: string, index: CutFootageIndex
   }
 }
 
+async function loadSearchIndex(projectRoot: string, indexLocator: string) {
+  try {
+    const path = await resolveProjectFile(projectRoot, indexLocator);
+    return Object.freeze({ path, index: await loadCutFootageIndexFile(path) });
+  } catch {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index could not be loaded as one current bounded report.");
+  }
+}
+
+function assertCurrentSearchIndex(
+  admitted: Readonly<{ path: string; index: CutFootageIndex }>,
+  current: Readonly<{ path: string; index: CutFootageIndex }>,
+) {
+  if (current.path !== admitted.path || current.index.indexSha256 !== admitted.index.indexSha256
+    || stableJsonStringify(current.index) !== stableJsonStringify(admitted.index)) {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the admitted footage index changed after inference.");
+  }
+}
+
 /** Revalidates an index, queries the verified offline sidecar, and atomically publishes one search report. */
 export async function searchProjectFootage(options: SearchProjectFootageOptions): Promise<SearchProjectFootageResult> {
   if (!options || typeof options !== "object" || Array.isArray(options)) protocol("$", "must be one footage search request.");
@@ -234,14 +262,17 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
   const projectRoot = await realpath(resolve(options.projectRoot));
   const indexLocator = validateProjectLocator(options.indexLocator, "footage index locator");
   const outputLocator = validateProjectLocator(options.outputLocator, "footage search output locator");
-  const indexPath = await resolveProjectFile(projectRoot, indexLocator);
-  const index = await loadCutFootageIndexFile(indexPath);
+  const admittedIndex = await loadSearchIndex(projectRoot, indexLocator);
+  const index = admittedIndex.index;
   const foldedOutput = foldedLocator(outputLocator);
   if ([indexLocator, index.vectorArtifact.locator, ...index.sources.map((source) => source.locator)]
     .some((locator) => foldedLocator(locator) === foldedOutput)) {
     protocol("$.outputLocator", "must not collide with the index, vector artifact, or one indexed source.");
   }
   const outputPath = resolve(projectRoot, outputLocator);
+  let expectedOutput: StagedFileDestinationSnapshot;
+  try { expectedOutput = await snapshotStagedFileDestination(outputPath); }
+  catch { footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search output could not be admitted safely."); }
   const install = options.backendInstall ?? await inspectCutFootageLocalInstall();
   const installIdentity = cutFootageBackendIdentityFromInstall(install);
   if (stableJsonStringify(installIdentity) !== stableJsonStringify(index.backend)) {
@@ -278,10 +309,19 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
 
   await options.__testHooks?.afterInference?.();
   abortIfRequested(options.signal);
-  await revalidateSearchIndex(projectRoot, index);
+  const currentIndex = await loadSearchIndex(projectRoot, indexLocator);
+  assertCurrentSearchIndex(admittedIndex, currentIndex);
+  await revalidateSearchIndex(projectRoot, currentIndex.index);
+  await options.__testHooks?.afterFinalRevalidation?.();
   const built = buildCutFootageSearchReport(index, indexLocator, query, candidates, bounds);
+  abortIfRequested(options.signal);
   try {
-    await writeProjectArtifacts([projectRoot], [Object.freeze({ destination: outputPath, contents: built.bytes, role: "footage-search" })]);
+    await writeProjectArtifacts([projectRoot], [Object.freeze({
+      destination: outputPath,
+      contents: built.bytes,
+      role: "footage-search",
+      expectedDestinationSnapshot: expectedOutput,
+    })]);
   } catch { footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search report could not be published."); }
   return Object.freeze({ report: built.report, outputPath, bytes: built.bytes });
 }

@@ -12,6 +12,7 @@ import {
   publishStagedFileTransactionForTest,
   snapshotStagedFileDestination,
   StagedFileTransactionError,
+  writeProjectArtifacts,
   type StagedFilePublication,
   type StagedFileTransactionFaultPoint,
 } from "../lib/project/write-boundary";
@@ -471,6 +472,19 @@ test("replacement publication accepts optional absent or prior destination CAS s
       staged: priorStage, destination: priorDestination, expectedDestinationSnapshot: current,
     }]);
     assert.equal(await readFile(priorDestination, "utf8"), "replacement");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("project artifact writes propagate the caller's destination CAS snapshot", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-write-artifact-cas-"));
+  try {
+    const destination = resolve(root, "search.json"), admitted = await snapshotStagedFileDestination(destination);
+    await writeFile(destination, "foreign report");
+    await assert.rejects(writeProjectArtifacts([root], [{
+      destination, contents: "CUT report", expectedDestinationSnapshot: admitted,
+    }]), hasTransactionCode("CUT_PUBLISH_PREFLIGHT"));
+    assert.equal(await readFile(destination, "utf8"), "foreign report");
+    assert.equal((await readdir(root)).some((entry) => entry.includes(".cut-") && entry.endsWith(".tmp")), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

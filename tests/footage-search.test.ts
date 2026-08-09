@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { stableJsonStringify } from "../lib/core/stable";
 import { createCutProject } from "../lib/project";
 import { parseCutFootageIndex, type CutFootageIndex } from "../lib/footage/contracts";
@@ -16,6 +18,7 @@ import {
   quantizeCutFootageScorePpm,
   rankCutFootageCandidates,
   searchProjectFootage,
+  type SearchProjectFootageOptions,
 } from "../lib/footage/search";
 import type { CutFootageLocalInstall } from "../lib/footage/setup";
 import type { CutFootageSidecarHandshake, CutFootageSidecarSession } from "../lib/footage/sidecar";
@@ -108,6 +111,52 @@ test("search report bytes and identity do not depend on candidate enumeration", 
   assert.match(left.report.searchSha256, /^[a-f0-9]{64}$/u);
 });
 
+test("footage index and search canonical ordering is UTF-8 bytewise under Swedish and German locales", () => {
+  const contractsUrl = pathToFileURL(resolve("dist-cli/lib/footage/contracts.js")).href;
+  const searchUrl = pathToFileURL(resolve("dist-cli/lib/footage/search.js")).href;
+  const stableUrl = pathToFileURL(resolve("dist-cli/lib/core/stable.js")).href;
+  const script = `
+    import { createHash } from "node:crypto";
+    import { parseCutFootageIndex } from ${JSON.stringify(contractsUrl)};
+    import { rankCutFootageCandidates } from ${JSON.stringify(searchUrl)};
+    import { stableJsonStringify } from ${JSON.stringify(stableUrl)};
+    const sha = (digit) => digit.repeat(64);
+    const time = (numerator, denominator = "1") => ({ numerator, denominator });
+    const range = { semantics: "half-open", start: time("0"), end: time("1") };
+    const stream = [{ index: 0, type: "video", timeBase: time("1", "24"), frameRate: time("24") }];
+    const body = {
+      format: "cut-footage-index", version: 1, root: "media",
+      sources: [
+        { locator: "media/z.mp4", bytes: 1, sha256: sha("a"), duration: time("1"), probeSha256: sha("b"), streams: stream },
+        { locator: "media/ä.mp4", bytes: 1, sha256: sha("c"), duration: time("1"), probeSha256: sha("d"), streams: stream },
+      ],
+      chunkPolicy: { duration: time("1"), overlap: time("0") },
+      chunks: [
+        { id: "chunk-z", sourceLocator: "media/z.mp4", sourceSha256: sha("a"), streamIndex: 0, range },
+        { id: "chunk-umlaut", sourceLocator: "media/ä.mp4", sourceSha256: sha("c"), streamIndex: 0, range },
+      ],
+      backend: { protocolVersion: 1, provider: "fixture", model: "clip", dimensions: 2, normalization: "l2" },
+      vectorArtifact: { locator: ".cut/footage/index.vectors", bytes: 1, sha256: sha("e") },
+      creation: { cutVersion: "test", backendProtocolVersion: 1 },
+    };
+    const indexSha256 = createHash("sha256").update(stableJsonStringify(body)).digest("hex");
+    const index = parseCutFootageIndex(stableJsonStringify({ ...body, indexSha256 }));
+    const matches = rankCutFootageCandidates(index, [
+      { chunkId: "chunk-umlaut", score: 0.5 },
+      { chunkId: "chunk-z", score: 0.5 },
+    ], { thresholdPpm: 0, limit: 2 });
+    process.stdout.write(JSON.stringify(matches.map((match) => match.sourceSelection.locator)));
+  `;
+  for (const locale of ["sv_SE.UTF-8", "de_DE.UTF-8"]) {
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      env: { ...process.env, LANG: locale, LC_ALL: locale },
+    });
+    assert.equal(child.status, 0, `${locale}: ${child.stderr}`);
+    assert.equal(child.stdout, '["media/z.mp4","media/ä.mp4"]', locale);
+  }
+});
+
 async function workflowFixture() {
   const root = join(await mkdtemp(join(tmpdir(), "cut-footage-search-workflow-")), "project");
   await createCutProject(root, "Footage search");
@@ -151,6 +200,13 @@ async function workflowFixture() {
   ]);
   const install = { root: join(root, ".fake-footage-home/.payload"), manifest: { handshake } } as unknown as CutFootageLocalInstall;
   return { root, index, indexLocator, vectorLocator, handshake, install };
+}
+
+function changedIndexBytes(index: CutFootageIndex) {
+  const { indexSha256: _oldIdentity, ...body } = index;
+  const changed = { ...body, creation: { ...body.creation, cutVersion: "0.4.0-valid-replacement" } };
+  const indexSha256 = createHash("sha256").update(stableJsonStringify(changed)).digest("hex");
+  return Buffer.from(`${stableJsonStringify({ ...changed, indexSha256 })}\n`, "utf8");
 }
 
 function searchSession(handshake: CutFootageSidecarHandshake, candidates: readonly Readonly<{ chunkId: string; score: number }>[], onClose?: () => void): CutFootageSidecarSession {
@@ -202,4 +258,101 @@ test("search workflow rejects backend and post-inference source drift before pub
     },
   }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
   await assert.rejects(readFile(join(fixture.root, outputLocator)), { code: "ENOENT" });
+});
+
+test("search workflow reloads its index locator and rejects a changed valid index after inference", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture();
+  const outputLocator = ".cut/footage/search.json";
+  const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+  await assert.rejects(searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
+    __testHooks: {
+      async startSidecar() { return searchSession(fixture.handshake, candidates); },
+      async afterInference() { await writeFile(join(fixture.root, fixture.indexLocator), changedIndexBytes(fixture.index)); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
+  await assert.rejects(readFile(join(fixture.root, outputLocator)), { code: "ENOENT" });
+});
+
+test("search workflow preserves a foreign output that appears after admission", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture();
+  const outputLocator = ".cut/footage/search.json", outputPath = join(fixture.root, outputLocator);
+  const foreign = Buffer.from("foreign concurrent report\n", "utf8");
+  const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+  await assert.rejects(searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
+    __testHooks: {
+      async startSidecar() { return searchSession(fixture.handshake, candidates); },
+      async afterInference() { await writeFile(outputPath, foreign, { flag: "wx" }); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH");
+  assert.deepEqual(await readFile(outputPath), foreign);
+});
+
+test("search workflow replaces only the output inode admitted before inference", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture();
+  const outputLocator = ".cut/footage/search.json", outputPath = join(fixture.root, outputLocator);
+  const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+  await writeFile(outputPath, "previous CUT report\n");
+  const replaced = await searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
+    __testHooks: { async startSidecar() { return searchSession(fixture.handshake, candidates); } },
+  });
+  assert.deepEqual(await readFile(outputPath), replaced.bytes);
+
+  const foreign = Buffer.from("foreign replacement\n", "utf8"), stagedForeign = `${outputPath}.foreign`;
+  await assert.rejects(searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
+    __testHooks: {
+      async startSidecar() { return searchSession(fixture.handshake, candidates); },
+      async afterInference() {
+        await writeFile(stagedForeign, foreign, { flag: "wx" });
+        await rename(stagedForeign, outputPath);
+      },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH");
+  assert.deepEqual(await readFile(outputPath), foreign);
+});
+
+test("search workflow honors cancellation after final index revalidation and before commit", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture();
+  const controller = new AbortController();
+  const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+  const hooks = {
+    async startSidecar() { return searchSession(fixture.handshake, candidates); },
+    async afterFinalRevalidation() { controller.abort(); },
+  } as unknown as NonNullable<SearchProjectFootageOptions["__testHooks"]>;
+  await assert.rejects(searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator: ".cut/footage/search.json",
+    query: "dog", backendInstall: fixture.install, signal: controller.signal, __testHooks: hooks,
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL" && error.path === "$signal");
+  await assert.rejects(readFile(join(fixture.root, ".cut/footage/search.json")), { code: "ENOENT" });
+});
+
+test("search workflow maps missing and empty index files to one stable path-free boundary", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture();
+  const indexPath = join(fixture.root, fixture.indexLocator), errors: CutFootageError[] = [];
+  for (const state of ["missing", "empty"] as const) {
+    if (state === "missing") await rm(indexPath);
+    else await writeFile(indexPath, "", { flag: "wx" });
+    try {
+      await searchProjectFootage({
+        projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator: ".cut/footage/search.json",
+        query: "dog", backendInstall: fixture.install,
+      });
+      assert.fail(`${state} index unexpectedly searched`);
+    } catch (error) {
+      assert.ok(error instanceof CutFootageError);
+      errors.push(error);
+    }
+    if (state === "missing") continue;
+    await rm(indexPath);
+  }
+  assert.equal(errors.length, 2);
+  for (const error of errors) {
+    assert.equal(error.code, "CUT_FOOTAGE_INDEX_STALE");
+    assert.equal(error.path, "$.indexLocator");
+    assert.equal(error.message, "CUT_FOOTAGE_INDEX_STALE at $.indexLocator: the footage index could not be loaded as one current bounded report.");
+    assert.equal(error.message.includes(fixture.root), false);
+  }
 });

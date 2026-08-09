@@ -42,6 +42,8 @@ export type ProjectArtifactWrite = Readonly<{
   order?: number;
   /** Stable caller-owned evidence exposed only to deterministic test hooks. */
   role?: string;
+  /** Optional compare-and-swap admission snapshot for the destination leaf. */
+  expectedDestinationSnapshot?: StagedFileDestinationSnapshot;
 }>;
 
 export type StagedFileTransactionErrorCode =
@@ -773,6 +775,7 @@ export async function writeProjectArtifacts(
         destination,
         ...(artifact.order === undefined ? {} : { order: artifact.order }),
         ...(artifact.role === undefined ? {} : { role: artifact.role }),
+        ...(artifact.expectedDestinationSnapshot === undefined ? {} : { expectedDestinationSnapshot: artifact.expectedDestinationSnapshot }),
       });
     }
     await publishStagedFileTransaction(publications);
