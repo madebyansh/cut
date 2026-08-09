@@ -6,8 +6,11 @@ import { basename, dirname, resolve } from "node:path";
 import {
   atomicWriteFile,
   ensureProjectWriteDirectory,
+  publishCreateOnlyStagedFileTransaction,
+  publishCreateOnlyStagedFileTransactionForTest,
   publishStagedFileTransaction,
   publishStagedFileTransactionForTest,
+  snapshotStagedFileDestination,
   StagedFileTransactionError,
   type StagedFilePublication,
   type StagedFileTransactionFaultPoint,
@@ -99,6 +102,81 @@ test("atomic cache publication replaces a symlink without touching its target", 
   assert.equal(await readFile(target, "utf8"), "canonical source");
   assert.equal(await readFile(destination, "utf8"), "cache manifest");
   assert.equal((await lstat(destination)).isFile(), true);
+});
+
+test("create-only staged publication links in canonical order, removes stages, and never overwrites", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-write-create-only-"));
+  const clipStage = resolve(root, ".clip.stage"), manifestStage = resolve(root, ".manifest.stage");
+  const clip = resolve(root, "clip.mp4"), manifest = resolve(root, "clip.mp4.cut-footage.json");
+  await writeFile(clipStage, "clip bytes"); await writeFile(manifestStage, "manifest bytes");
+  const points: StagedFileTransactionFaultPoint[] = [];
+  await publishCreateOnlyStagedFileTransactionForTest([
+    { staged: manifestStage, destination: manifest, order: 200, role: "footage-manifest" },
+    { staged: clipStage, destination: clip, order: 100, role: "footage-output" },
+  ], { fault(point) { points.push(point); } });
+  assert.equal(await readFile(clip, "utf8"), "clip bytes");
+  assert.equal(await readFile(manifest, "utf8"), "manifest bytes");
+  await assert.rejects(lstat(clipStage), isMissing); await assert.rejects(lstat(manifestStage), isMissing);
+  assert.deepEqual(points.map((point) => `${point.phase}:${point.timing}:${point.role}`), [
+    "promotion:before:footage-output", "promotion:after:footage-output",
+    "promotion:before:footage-manifest", "promotion:after:footage-manifest",
+  ]);
+
+  const retryClip = resolve(root, ".retry-clip.stage"), retryManifest = resolve(root, ".retry-manifest.stage");
+  await writeFile(retryClip, "replacement"); await writeFile(retryManifest, "replacement manifest");
+  await assert.rejects(publishCreateOnlyStagedFileTransaction([
+    { staged: retryClip, destination: clip }, { staged: retryManifest, destination: manifest },
+  ]), hasTransactionCode("CUT_PUBLISH_EXISTS"));
+  assert.equal(await readFile(clip, "utf8"), "clip bytes");
+  assert.equal(await readFile(manifest, "utf8"), "manifest bytes");
+  assert.equal(await readFile(retryClip, "utf8"), "replacement");
+});
+
+test("create-only destination races and injected link faults roll back only transaction-owned inodes", async () => {
+  for (const faultRole of ["footage-output", "footage-manifest"] as const) {
+    const root = await mkdtemp(resolve(tmpdir(), "cut-write-create-race-"));
+    const clipStage = resolve(root, ".clip.stage"), manifestStage = resolve(root, ".manifest.stage");
+    const clip = resolve(root, "clip.mp4"), manifest = resolve(root, "clip.mp4.cut-footage.json");
+    await writeFile(clipStage, "clip bytes"); await writeFile(manifestStage, "manifest bytes");
+    const raced = faultRole === "footage-output" ? clip : manifest;
+    await assert.rejects(publishCreateOnlyStagedFileTransactionForTest([
+      { staged: clipStage, destination: clip, order: 100, role: "footage-output" },
+      { staged: manifestStage, destination: manifest, order: 200, role: "footage-manifest" },
+    ], { async fault(point) {
+      if (point.phase === "promotion" && point.timing === "before" && point.role === faultRole) await writeFile(raced, "raced bytes", { flag: "wx" });
+    } }), hasTransactionCode("CUT_PUBLISH_EXISTS"));
+    assert.equal(await readFile(raced, "utf8"), "raced bytes");
+    const other = raced === clip ? manifest : clip;
+    await assert.rejects(lstat(other), isMissing);
+    assert.equal(await readFile(clipStage, "utf8"), "clip bytes");
+    assert.equal(await readFile(manifestStage, "utf8"), "manifest bytes");
+  }
+
+  const root = await mkdtemp(resolve(tmpdir(), "cut-write-create-fault-"));
+  const firstStage = resolve(root, ".first.stage"), secondStage = resolve(root, ".second.stage");
+  const first = resolve(root, "first.mp4"), second = resolve(root, "second.json");
+  await writeFile(firstStage, "first"); await writeFile(secondStage, "second");
+  await assert.rejects(publishCreateOnlyStagedFileTransactionForTest([
+    { staged: firstStage, destination: first, order: 100 }, { staged: secondStage, destination: second, order: 200 },
+  ], { fault(point) { if (point.phase === "promotion" && point.timing === "after" && point.index === 1) throw new Error("fault after second link"); } }), hasTransactionCode("CUT_PUBLISH_COMMIT"));
+  await assert.rejects(lstat(first), isMissing); await assert.rejects(lstat(second), isMissing);
+  assert.equal(await readFile(firstStage, "utf8"), "first"); assert.equal(await readFile(secondStage, "utf8"), "second");
+});
+
+test("create-only rollback detects inode substitution and preserves the unrelated replacement", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-write-create-substitution-"));
+  const stage = resolve(root, ".clip.stage"), destination = resolve(root, "clip.mp4");
+  await writeFile(stage, "owned");
+  await assert.rejects(publishCreateOnlyStagedFileTransactionForTest([
+    { staged: stage, destination, role: "footage-output" },
+  ], { async fault(point) {
+    if (point.phase === "promotion" && point.timing === "after") {
+      await rm(destination); await writeFile(destination, "unrelated replacement");
+      throw new Error("force rollback after substitution");
+    }
+  } }), hasTransactionCode("CUT_PUBLISH_ROLLBACK"));
+  assert.equal(await readFile(destination, "utf8"), "unrelated replacement");
+  assert.equal(await readFile(stage, "utf8"), "owned");
 });
 
 test("staged-file transaction publishes in canonical order and replaces a leaf symlink without touching its target", async () => {
@@ -332,6 +410,68 @@ test("rollback failure is distinct and rollback continues best-effort for the ot
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("replacement rollback never moves or overwrites a foreign inode that raced into either rollback leg", async () => {
+  const promotedRoot = await mkdtemp(resolve(tmpdir(), "cut-write-rollback-promoted-race-"));
+  try {
+    const destination = resolve(promotedRoot, "movie.mp4"), stage = resolve(promotedRoot, ".movie.stage");
+    await writeFile(destination, "old movie"); await writeFile(stage, "new movie");
+    await assert.rejects(publishStagedFileTransactionForTest([{ staged: stage, destination }], {
+      async fault(point) {
+        if (point.phase === "promotion" && point.timing === "after") {
+          await rm(destination); await writeFile(destination, "foreign movie");
+          throw new Error("force rollback after destination substitution");
+        }
+      },
+    }), hasTransactionCode("CUT_PUBLISH_ROLLBACK"));
+    assert.equal(await readFile(destination, "utf8"), "foreign movie");
+    assert.ok((await readdir(promotedRoot)).some((entry) => entry.endsWith(".bak")), "uncertain old backup must remain recoverable");
+  } finally { await rm(promotedRoot, { recursive: true, force: true }); }
+
+  const backupRoot = await mkdtemp(resolve(tmpdir(), "cut-write-rollback-backup-race-"));
+  try {
+    const destination = resolve(backupRoot, "movie.mp4"), stage = resolve(backupRoot, ".movie.stage");
+    await writeFile(destination, "old movie"); await writeFile(stage, "new movie");
+    await assert.rejects(publishStagedFileTransactionForTest([{ staged: stage, destination }], {
+      async fault(point) {
+        if (point.phase === "promotion" && point.timing === "before") throw new Error("force rollback");
+        if (point.phase === "rollback-backup" && point.timing === "before") await writeFile(destination, "foreign movie", { flag: "wx" });
+      },
+    }), hasTransactionCode("CUT_PUBLISH_ROLLBACK"));
+    assert.equal(await readFile(destination, "utf8"), "foreign movie");
+    assert.ok((await readdir(backupRoot)).some((entry) => entry.endsWith(".bak")), "the verified old inode must not overwrite the foreign destination");
+  } finally { await rm(backupRoot, { recursive: true, force: true }); }
+});
+
+test("replacement publication accepts optional absent or prior destination CAS snapshots", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-write-destination-cas-"));
+  try {
+    const absentDestination = resolve(root, "absent.mp4"), absentStage = resolve(root, ".absent.stage");
+    const expectedAbsent = await snapshotStagedFileDestination(absentDestination);
+    await writeFile(absentStage, "candidate"); await writeFile(absentDestination, "raced");
+    await assert.rejects(publishStagedFileTransaction([{
+      staged: absentStage, destination: absentDestination, expectedDestinationSnapshot: expectedAbsent,
+    }]), hasTransactionCode("CUT_PUBLISH_PREFLIGHT"));
+    assert.equal(await readFile(absentDestination, "utf8"), "raced");
+    assert.equal(await readFile(absentStage, "utf8"), "candidate");
+
+    const priorDestination = resolve(root, "prior.mp4"), priorStage = resolve(root, ".prior.stage");
+    await writeFile(priorDestination, "prior"); await writeFile(priorStage, "replacement");
+    const expectedPrior = await snapshotStagedFileDestination(priorDestination);
+    await rm(priorDestination); await writeFile(priorDestination, "foreign");
+    await assert.rejects(publishStagedFileTransaction([{
+      staged: priorStage, destination: priorDestination, expectedDestinationSnapshot: expectedPrior,
+    }]), hasTransactionCode("CUT_PUBLISH_PREFLIGHT"));
+    assert.equal(await readFile(priorDestination, "utf8"), "foreign");
+    assert.equal(await readFile(priorStage, "utf8"), "replacement");
+
+    const current = await snapshotStagedFileDestination(priorDestination);
+    await publishStagedFileTransaction([{
+      staged: priorStage, destination: priorDestination, expectedDestinationSnapshot: current,
+    }]);
+    assert.equal(await readFile(priorDestination, "utf8"), "replacement");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("project write directory creation refuses an existing regular-file segment", async () => {

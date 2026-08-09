@@ -16,13 +16,14 @@ type EncoderChild = ChildProcessByStdio<Writable, null, Readable>;
 export type ReferenceMediaProcessErrorCode =
   | "CUT_MEDIA_PROCESS_CONTRACT"
   | "CUT_MEDIA_PROCESS_START"
+  | "CUT_MEDIA_PROCESS_ABORTED"
   | "CUT_MEDIA_PROCESS_TIMEOUT"
   | "CUT_MEDIA_PROCESS_OUTPUT_LIMIT"
   | "CUT_MEDIA_PROCESS_STREAM"
   | "CUT_MEDIA_PROCESS_EXIT";
 
 export type ReferenceMediaProcessErrorDetail = Readonly<{
-  kind: "contract" | "start" | "timeout" | "output" | "stream" | "exit";
+  kind: "contract" | "start" | "abort" | "timeout" | "output" | "stream" | "exit";
   reason: string;
   timeoutMs?: number;
   stream?: "stdout" | "stderr" | "combined";
@@ -59,6 +60,15 @@ export type ReferenceMediaProcessStderrLimits = Readonly<{
   totalBytes?: number;
 }>;
 
+export type ReferenceMediaProcessControl = Readonly<{
+  signal?: AbortSignal;
+  /** Read-only descriptors inherited at child descriptors 3..N in the authored order. */
+  inheritedFileDescriptors?: readonly number[];
+  /** Launch a private POSIX process group and terminate the complete group on failure. */
+  terminateProcessTree?: boolean;
+  terminationGraceMs?: number;
+}>;
+
 type ProcessTool = "ffmpeg" | "ffprobe";
 export type ReferenceMediaNativeProcessExecution = Readonly<{
   authority: BoundReferenceNativeMediaTool;
@@ -79,6 +89,50 @@ const maximumSingleArgumentBytes = 8 * 1_024 * 1_024;
 const maximumArgumentBytes = 16 * 1_024 * 1_024;
 const defaultRunLimits = Object.freeze({ stdoutBytes: 0, stderrBytes: 32_000, totalBytes: 32_000 });
 const defaultCaptureLimits = Object.freeze({ stdoutBytes: 128_000, stderrBytes: 128_000, totalBytes: 256_000 });
+const defaultTerminationGraceMs = 250;
+const maximumInheritedFileDescriptors = 16;
+
+function normalizeProcessControl(tool: ProcessTool, authored: unknown) {
+  let control: Record<string, unknown>;
+  try {
+    control = authored === undefined ? {} : authored as Record<string, unknown>;
+    if (!control || typeof control !== "object" || Array.isArray(control)
+      || Reflect.ownKeys(control).some((key) => typeof key !== "string" || !["signal", "inheritedFileDescriptors", "terminateProcessTree", "terminationGraceMs"].includes(key))) {
+      throw new Error("invalid process control");
+    }
+    for (const key of Object.keys(control)) {
+      const descriptor = Object.getOwnPropertyDescriptor(control, key);
+      if (!descriptor || !("value" in descriptor)) throw new Error("non-inert process control");
+    }
+  } catch {
+    throw processFailure("CUT_MEDIA_PROCESS_CONTRACT", tool, "process control is malformed.", { kind: "contract", reason: "invalid-process-control" });
+  }
+  const signal = control.signal;
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    throw processFailure("CUT_MEDIA_PROCESS_CONTRACT", tool, "process signal must be one AbortSignal.", { kind: "contract", reason: "invalid-signal" });
+  }
+  let descriptors: readonly number[] = Object.freeze([]);
+  if (control.inheritedFileDescriptors !== undefined) {
+    if (!Array.isArray(control.inheritedFileDescriptors) || control.inheritedFileDescriptors.length > maximumInheritedFileDescriptors
+      || control.inheritedFileDescriptors.some((fd) => !Number.isSafeInteger(fd) || fd < 0)
+      || new Set(control.inheritedFileDescriptors).size !== control.inheritedFileDescriptors.length) {
+      throw processFailure("CUT_MEDIA_PROCESS_CONTRACT", tool, "inherited file descriptors must be one bounded unique integer array.", { kind: "contract", reason: "invalid-inherited-file-descriptors" });
+    }
+    descriptors = Object.freeze([...control.inheritedFileDescriptors]);
+  }
+  if (control.terminateProcessTree !== undefined && typeof control.terminateProcessTree !== "boolean") {
+    throw processFailure("CUT_MEDIA_PROCESS_CONTRACT", tool, "terminateProcessTree must be boolean.", { kind: "contract", reason: "invalid-process-tree-control" });
+  }
+  const terminateProcessTree = control.terminateProcessTree === true;
+  if (terminateProcessTree && process.platform === "win32") {
+    throw processFailure("CUT_MEDIA_PROCESS_CONTRACT", tool, "private process-tree termination is unavailable on Windows.", { kind: "contract", reason: "unsupported-process-tree-control" });
+  }
+  const terminationGraceMs = control.terminationGraceMs ?? defaultTerminationGraceMs;
+  if (!Number.isSafeInteger(terminationGraceMs) || Number(terminationGraceMs) < 10 || Number(terminationGraceMs) > 5_000) {
+    throw processFailure("CUT_MEDIA_PROCESS_CONTRACT", tool, "terminationGraceMs must be an integer from 10 to 5000.", { kind: "contract", reason: "invalid-termination-grace" });
+  }
+  return Object.freeze({ signal: signal as AbortSignal | undefined, inheritedFileDescriptors: descriptors, terminateProcessTree, terminationGraceMs: Number(terminationGraceMs) });
+}
 
 function processFailure(
   code: ReferenceMediaProcessErrorCode,
@@ -213,10 +267,12 @@ async function runReferenceMediaProcess(
   captureStdout: boolean,
   executable: string = tool,
   execution?: ReferenceMediaNativeProcessExecution,
+  authoredControl?: ReferenceMediaProcessControl,
 ) {
   const args = normalizeArguments(tool, authoredArgs);
   const timeoutMs = normalizeTimeout(tool, authoredTimeout);
   const limits = normalizeOutputLimits(tool, authoredLimits, captureStdout, captureStdout ? defaultCaptureLimits : defaultRunLimits);
+  const control = normalizeProcessControl(tool, authoredControl);
   if (execution !== undefined && (execution.authority.tool !== tool
     || execution.collector.authority !== execution.authority
     || execution.authority.executablePath !== executable)) {
@@ -227,15 +283,23 @@ async function runReferenceMediaProcess(
       { kind: "contract", reason: "native-process-authority" },
     );
   }
+  const abortedFailure = () => processFailure(
+    "CUT_MEDIA_PROCESS_ABORTED",
+    tool,
+    `${tool} was cancelled through its bounded process control.`,
+    { kind: "abort", reason: "abort-signal" },
+  );
+  if (control.signal?.aborted) throw abortedFailure();
   return new Promise<{ stdout: string; stderr: string }>(async (accept, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
+      const stdio: Array<"ignore" | "pipe" | number> = ["ignore", captureStdout ? "pipe" : "ignore", "pipe", ...control.inheritedFileDescriptors];
       child = execution === undefined
-        ? spawn(executable, args, { shell: false, stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"] })
+        ? spawn(executable, args, { shell: false, detached: control.terminateProcessTree, stdio })
         : await spawnBoundReferenceNativeProcess(execution.collector, execution.context, args, {
           shell: false,
-          detached: false,
-          stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"],
+          detached: control.terminateProcessTree,
+          stdio,
         });
     } catch (error) {
       reject(processFailure(
@@ -253,21 +317,40 @@ async function runReferenceMediaProcess(
     let stderrBytes = 0;
     let settled = false;
     let terminationFailure: ReferenceMediaProcessError | undefined;
-    const timing: { timer?: NodeJS.Timeout } = {};
+    const timing: { timer?: NodeJS.Timeout; terminate?: NodeJS.Timeout; drain?: NodeJS.Timeout } = {};
     const finish = (error?: ReferenceMediaProcessError, result?: { stdout: string; stderr: string }) => {
       if (settled) return;
       settled = true;
       if (timing.timer) clearTimeout(timing.timer);
+      if (timing.terminate) clearTimeout(timing.terminate);
+      if (timing.drain) clearTimeout(timing.drain);
+      control.signal?.removeEventListener("abort", abort);
       if (error) reject(error);
       else accept(result!);
+    };
+    const signalProcess = (signal: NodeJS.Signals) => {
+      if (control.terminateProcessTree && child.pid !== undefined) {
+        try { process.kill(-child.pid, signal); return; }
+        catch { /* The direct child fallback still closes CUT's bound process. */ }
+      }
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
     };
     const terminate = (error: ReferenceMediaProcessError) => {
       if (settled || terminationFailure) return;
       terminationFailure = error;
       stdout.length = 0;
       stderr.length = 0;
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      signalProcess("SIGTERM");
+      timing.terminate = setTimeout(() => {
+        signalProcess("SIGKILL");
+        timing.drain = setTimeout(() => {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          finish(terminationFailure);
+        }, control.terminationGraceMs);
+      }, control.terminationGraceMs);
     };
+    const abort = () => terminate(abortedFailure());
     const outputFailure = (stream: "stdout" | "stderr" | "combined", observedBytes: number, limitBytes: number) => processFailure(
       "CUT_MEDIA_PROCESS_OUTPUT_LIMIT",
       tool,
@@ -305,12 +388,12 @@ async function runReferenceMediaProcess(
     child.stderr?.on("error", (error) => streamFailure("stderr", error));
     child.on("error", (error) => {
       if (terminationFailure) return;
-      terminationFailure = processFailure(
+      terminate(processFailure(
         "CUT_MEDIA_PROCESS_START",
         tool,
         `${tool} process failed (${systemErrorCode(error)}).`,
         { kind: "start", reason: "process-error", systemCode: systemErrorCode(error) },
-      );
+      ));
     });
     // `close`, unlike `exit`, proves that both bounded pipes have drained. CUT
     // never resumes caller cleanup while a timed-out/overproducing tool may
@@ -340,6 +423,8 @@ async function runReferenceMediaProcess(
       `${tool} exceeded CUT's bounded execution timeout.`,
       { kind: "timeout", reason: "timeout", timeoutMs, stdoutBytes, stderrBytes },
     )), timeoutMs);
+    control.signal?.addEventListener("abort", abort, { once: true });
+    if (control.signal?.aborted) abort();
   });
 }
 
@@ -363,6 +448,7 @@ export async function runBoundReferenceFfmpeg(
   timeout = 600_000,
   limits: ReferenceMediaProcessStderrLimits = {},
   execution?: ReferenceMediaNativeProcessExecution,
+  control?: ReferenceMediaProcessControl,
 ) {
   if (typeof executable !== "string" || !isAbsolute(executable) || executable.includes("\0") || Buffer.byteLength(executable, "utf8") > 32_768) {
     throw processFailure(
@@ -372,7 +458,27 @@ export async function runBoundReferenceFfmpeg(
       { kind: "contract", reason: "invalid-bound-executable" },
     );
   }
-  await runReferenceMediaProcess("ffmpeg", args, timeout, limits, false, executable, execution);
+  await runReferenceMediaProcess("ffmpeg", args, timeout, limits, false, executable, execution, control);
+}
+
+/** Run one already-bound absolute FFmpeg executable and capture bounded output. */
+export async function runBoundReferenceFfmpegCapture(
+  executable: string,
+  args: string[],
+  timeout = 60_000,
+  limits: ReferenceMediaProcessCaptureLimits = {},
+  execution?: ReferenceMediaNativeProcessExecution,
+  control?: ReferenceMediaProcessControl,
+) {
+  if (typeof executable !== "string" || !isAbsolute(executable) || executable.includes("\0") || Buffer.byteLength(executable, "utf8") > 32_768) {
+    throw processFailure(
+      "CUT_MEDIA_PROCESS_CONTRACT",
+      "ffmpeg",
+      "bound FFmpeg executable must be one bounded absolute path without NUL bytes.",
+      { kind: "contract", reason: "invalid-bound-executable" },
+    );
+  }
+  return runReferenceMediaProcess("ffmpeg", args, timeout, limits, true, executable, execution, control);
 }
 
 export async function runFfmpegCapture(
@@ -407,6 +513,7 @@ export async function runBoundReferenceFfprobeCapture(
   timeout = 60_000,
   limits: ReferenceMediaProcessCaptureLimits = {},
   execution?: ReferenceMediaNativeProcessExecution,
+  control?: ReferenceMediaProcessControl,
 ) {
   if (typeof executable !== "string" || !isAbsolute(executable) || executable.includes("\0") || Buffer.byteLength(executable, "utf8") > 32_768) {
     throw processFailure(
@@ -416,7 +523,7 @@ export async function runBoundReferenceFfprobeCapture(
       { kind: "contract", reason: "invalid-bound-executable" },
     );
   }
-  return runReferenceMediaProcess("ffprobe", args, timeout, limits, true, executable, execution);
+  return runReferenceMediaProcess("ffprobe", args, timeout, limits, true, executable, execution, control);
 }
 
 export async function writeFrame(child: EncoderChild, frame: Buffer) {
