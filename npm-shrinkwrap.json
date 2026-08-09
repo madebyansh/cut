@@ -1,12 +1,12 @@
 {
   "name": "cut-lang",
-  "version": "0.4.0-alpha.3",
+  "version": "0.4.0-alpha.4",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "cut-lang",
-      "version": "0.4.0-alpha.3",
+      "version": "0.4.0-alpha.4",
       "license": "MIT",
       "dependencies": {
         "ajv": "6.15.0",

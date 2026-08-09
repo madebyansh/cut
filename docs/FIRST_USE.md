@@ -14,7 +14,7 @@ version—is the authority for `CUT_TARBALL`.
 ```sh
 mkdir cut-consumer && cd cut-consumer
 export CONSUMER_ROOT="$PWD"
-export CUT_TARBALL=/absolute/path/to/cut-lang-0.4.0-alpha.3.tgz
+export CUT_TARBALL=/absolute/path/to/cut-lang-0.4.0-alpha.4.tgz
 
 npm init -y
 npm install --ignore-scripts --omit=dev --save-exact "$CUT_TARBALL"
@@ -89,7 +89,10 @@ Inspect `.cut/footage/search.json` before extraction when editorial judgement
 matters. Search results are candidates, not timeline edits. Extraction writes a
 new clip plus `selects/dog.mp4.cut-footage.json`; it refuses to replace either
 leaf. Run `cut footage index` again after source bytes change, and rerun setup
-only when doctor says the immutable backend is missing or invalid.
+when doctor says the immutable backend is missing. If doctor reports an invalid
+or identity-mismatched immutable backend, point `CUT_FOOTAGE_HOME` at a new
+empty absolute directory, then run setup again; CUT deliberately does not
+delete or overwrite an existing backend tree automatically.
 
 ## Transparent cold-to-warm cache workflow
 
@@ -266,4 +269,4 @@ your project policy; do not convert a no-clobber failure into overwrite.
 This path proves installed CLI authoring, not an installed VSIX, a language
 server, registry packages, automatic acquisition, rights approval, Windows
 media execution, independent-user usability, or human playback. Those remain
-separate gates while the package is `0.4.0-alpha.3`.
+separate gates while the package is `0.4.0-alpha.4`.

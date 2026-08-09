@@ -1,6 +1,6 @@
 # CUT local packages
 
-Status: executable local/file vertical slice in CUT `0.4.0-alpha.3`. Local/file
+Status: executable local/file vertical slice in CUT `0.4.0-alpha.4`. Local/file
 distribution is the only supported distribution boundary. Registry, Git,
 native, WASM, shader-plugin, and network installation are not implemented.
 The separate bounded zero-host-import executable ABI is documented in
@@ -182,11 +182,11 @@ retain the package module path and exact source span in both human and JSON
 
 ## Current limitations
 
-The npm release artifact is produced with `npm run pack:release`. That command
-copies npm's allowlisted payload to an ephemeral staging directory, removes only
-source-maintainer scripts from the staged `package.json`, records the omitted
-script names under `cutArtifact`, and packs without mutating the checkout. The
-exact packed-install verifier requires this runtime-profile manifest.
+The npm release artifact is produced with `npm pack --json`. The `prepack`
+boundary rebuilds the CLI, audits compiled-source closure, and copies the
+authenticated native runtime before npm applies the `files` allowlist. Run
+`npm run audit:package-footprint` before release, then install and verify the
+exact tarball reported by `npm pack`; a dry-run is not release evidence.
 
 - Only local `file:` sources exist; there is no invented registry.
 - Library entry modules cannot yet export functions, values, assets, timelines,

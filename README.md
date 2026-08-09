@@ -57,16 +57,16 @@ Install the published package into a project:
 ```sh
 mkdir my-cut-project && cd my-cut-project
 npm init -y
-npm install --save-exact cut-lang@0.4.0-alpha.3
+npm install --save-exact cut-lang@0.4.0-alpha.4
 npx cut doctor
 npx cut init film --name "My first CUT film"
 ```
 
 For an audited offline install, download the tarball and checksum from the
 [latest GitHub release](https://github.com/madebyansh/cut/releases/latest).
-On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`;
-on Linux, use `sha256sum -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`, then install the
-verified tarball with `npm install --save-exact /path/to/cut-lang-0.4.0-alpha.3.tgz`.
+On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.4-SHA256SUMS.txt`;
+on Linux, use `sha256sum -c CUT-0.4.0-alpha.4-SHA256SUMS.txt`, then install the
+verified tarball with `npm install --save-exact /path/to/cut-lang-0.4.0-alpha.4.tgz`.
 
 Continue with the [five-minute quickstart](docs/FIRST_USE.md), jump straight to
 [local semantic footage search](docs/FIRST_USE.md#optional-local-semantic-footage-search),
@@ -174,7 +174,7 @@ See [SECURITY.md](SECURITY.md) for reporting and trust boundaries.
 
 ## Status
 
-This repository is `0.4.0-alpha.3`. The core compiler and renderer have broad
+This repository is `0.4.0-alpha.4`. The core compiler and renderer have broad
 automated coverage, but CUT is **not 1.0**: complex preview rendering can be slow,
 Linux source and package execution is experimental, Windows descriptor-bound
 media execution is unsupported, and independent-user usability feedback is still

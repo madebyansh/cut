@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0-alpha.4
+
+- Added optional local semantic footage setup, doctor, indexing, search, and exact candidate extraction commands.
+- Kept the main package lightweight by installing the pinned CPU q8 CLIP runtime and model only after explicit setup; normal inference is offline.
+- Bound indexes, vectors, searches, sources, ranges, and extracted clips with deterministic identities, stale-input checks, and no-clobber publication.
+- Added real installed-package CLIP coverage on macOS and Linux, including Node.js 20 and 24 compatibility, cancellation, process-tree cleanup, and package-footprint gates.
+
 ## 0.4.0-alpha.3
 
 - Accelerated deterministic preview rendering with a bounded three-worker path for stateless picture ranges.

@@ -1,6 +1,6 @@
 # Generic retained Callout layout
 
-Status: **pre-1.0 executable vertical** in `0.4.0-alpha.3`.
+Status: **pre-1.0 executable vertical** in `0.4.0-alpha.4`.
 
 `CalloutLayer` and `Callout` are public `cut:visual` primitives for attaching
 one bounded retained visual tile to an explicit composition-space point and
@@ -412,5 +412,5 @@ This vertical does not yet provide:
   evidence that the hero-film gate passes.
 
 Callout is one real public language-to-runtime capability needed by visual
-journalism and explanatory motion. CUT remains `0.4.0-alpha.3` until the whole
+journalism and explanatory motion. CUT remains `0.4.0-alpha.4` until the whole
 1.0 engineering and creative contract passes.

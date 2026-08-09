@@ -51,7 +51,7 @@ test("version line reports product, language, IR, package ABI, and runtime ident
   assert.match(cutVersionLine(), /language 0\.4/);
   assert.match(cutVersionLine(), /CutAVIR 3/);
   assert.match(cutVersionLine(), /package ABI 1/);
-  assert.match(cutVersionLine(), /cut-reference\/0\.4\.0-alpha\.3/);
+  assert.match(cutVersionLine(), /cut-reference\/0\.4\.0-alpha\.4/);
 });
 
 test("CLI product identity matches the installable package version", async () => {

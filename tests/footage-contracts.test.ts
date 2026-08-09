@@ -37,7 +37,7 @@ function indexFixture() {
     ],
     backend: { protocolVersion: 1, provider: "local", model: "Xenova/clip-vit-base-patch32", dimensions: 512, normalization: "l2" },
     vectorArtifact: { locator: ".cut/footage/harbour.vectors", bytes: 8192, sha256: sha("3") },
-    creation: { cutVersion: "0.4.0-alpha.3", backendProtocolVersion: 1 },
+    creation: { cutVersion: "0.4.0-alpha.4", backendProtocolVersion: 1 },
     indexSha256: "ignored",
   }, "indexSha256");
 }
