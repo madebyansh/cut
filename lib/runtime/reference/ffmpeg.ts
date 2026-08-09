@@ -362,6 +362,7 @@ export async function runBoundReferenceFfmpeg(
   args: string[],
   timeout = 600_000,
   limits: ReferenceMediaProcessStderrLimits = {},
+  execution?: ReferenceMediaNativeProcessExecution,
 ) {
   if (typeof executable !== "string" || !isAbsolute(executable) || executable.includes("\0") || Buffer.byteLength(executable, "utf8") > 32_768) {
     throw processFailure(
@@ -371,7 +372,7 @@ export async function runBoundReferenceFfmpeg(
       { kind: "contract", reason: "invalid-bound-executable" },
     );
   }
-  await runReferenceMediaProcess("ffmpeg", args, timeout, limits, false, executable);
+  await runReferenceMediaProcess("ffmpeg", args, timeout, limits, false, executable, execution);
 }
 
 export async function runFfmpegCapture(

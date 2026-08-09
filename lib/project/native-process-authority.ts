@@ -83,7 +83,8 @@ export type ReferenceNativeProcessContext = Readonly<{
     | "toolchain-version"
     | "picture-encode"
     | "picture-artifact-probe"
-    | "picture-rgba-decode";
+    | "picture-rgba-decode"
+    | "footage-frame-sample";
   resourceId: string;
   resourceSha256: string;
   resourceBytes: number;
@@ -397,6 +398,7 @@ function normalizedContext(value: ReferenceNativeProcessContext) {
       "picture-encode",
       "picture-artifact-probe",
       "picture-rgba-decode",
+      "footage-frame-sample",
     ].includes(value.operation)
     || typeof value.resourceId !== "string" || value.resourceId.length < 1 || value.resourceId.length > 1_024
     || typeof value.resourceSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(value.resourceSha256)

@@ -234,6 +234,7 @@ test("bound native process context enforces operation-specific stream-index pres
       "decoded-audio-samples",
       "audio-proxy-alignment",
       "video-proxy-alignment",
+      "footage-frame-sample",
     ].entries()) {
       await assert.rejects(
         spawnBoundReferenceNativeProcess(collector, { ...context(ordinal + 1), operation } as ReferenceNativeProcessContext, [], { shell: false, stdio: "ignore" }),
@@ -242,11 +243,13 @@ test("bound native process context enforces operation-specific stream-index pres
     }
     const child = await spawnBoundReferenceNativeProcess(
       collector,
-      { ...context(9), operation: "decoded-audio-samples", streamIndex: 0 },
+      { ...context(9), operation: "footage-frame-sample", streamIndex: 0 },
       [],
       { shell: false, stdio: "ignore" },
     );
     await waitForClose(child);
-    assert.equal((await collector.seal()).receipts[0].context.streamIndex, 0);
+    const evidence = await collector.seal();
+    assert.equal(evidence.receipts[0].context.operation, "footage-frame-sample");
+    assert.equal(evidence.receipts[0].context.streamIndex, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
