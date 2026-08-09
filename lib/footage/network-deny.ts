@@ -39,6 +39,14 @@ function replaceWithBlock(target: object, property: PropertyKey) {
   });
 }
 
+function blockOwnDnsQueryMethods(target: object) {
+  for (const name of Object.getOwnPropertyNames(target)) {
+    const isQuery = name === "reverse" || name.startsWith("lookup") || name.startsWith("resolve");
+    if (!isQuery || typeof Object.getOwnPropertyDescriptor(target, name)?.value !== "function") continue;
+    replaceWithBlock(target, name);
+  }
+}
+
 replaceWithBlock(globalThis, "fetch");
 
 replaceWithBlock(net, "connect");
@@ -59,12 +67,10 @@ replaceWithBlock(dgram.Socket.prototype, "bind");
 replaceWithBlock(dgram.Socket.prototype, "connect");
 replaceWithBlock(dgram.Socket.prototype, "send");
 
-for (const name of ["lookup", "lookupService", "resolve", "resolve4", "resolve6", "resolveAny", "resolveCaa", "resolveCname", "resolveMx", "resolveNaptr", "resolveNs", "resolvePtr", "resolveSoa", "resolveSrv", "resolveTxt", "reverse"] as const) {
-  replaceWithBlock(dns, name);
-}
-for (const name of ["lookup", "lookupService", "resolve", "resolve4", "resolve6", "resolveAny", "resolveCaa", "resolveCname", "resolveMx", "resolveNaptr", "resolveNs", "resolvePtr", "resolveSoa", "resolveSrv", "resolveTxt", "reverse"] as const) {
-  replaceWithBlock(dnsPromises, name);
-}
+blockOwnDnsQueryMethods(dns);
+blockOwnDnsQueryMethods(dnsPromises);
+blockOwnDnsQueryMethods(dns.Resolver.prototype);
+blockOwnDnsQueryMethods(dnsPromises.Resolver.prototype);
 
 // Built-in ESM named imports are snapshots of the CommonJS module exports.
 // Synchronize only after every replacement so later adapter imports see blocks.
