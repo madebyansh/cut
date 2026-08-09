@@ -31,6 +31,12 @@ function hasTransactionCode(code: StagedFileTransactionError["code"]) {
 
 type TransactionFixture = Awaited<ReturnType<typeof transactionFixture>>;
 
+const publishStagedFileTransactionForTestWithVerifier = publishStagedFileTransactionForTest as unknown as (
+  publications: Parameters<typeof publishStagedFileTransactionForTest>[0],
+  hooks: Parameters<typeof publishStagedFileTransactionForTest>[1],
+  verifier: (phase: "before-promotion" | "before-finalize") => void | Promise<void>,
+) => ReturnType<typeof publishStagedFileTransactionForTest>;
+
 async function transactionFixture() {
   const root = await mkdtemp(resolve(tmpdir(), "cut-write-transaction-"));
   const regularDirectory = resolve(root, "a-delivery");
@@ -83,6 +89,26 @@ async function assertTransactionRestored(fixture: TransactionFixture) {
     assert.equal((await readdir(directory)).some((entry) => entry.startsWith(".") && entry.endsWith(".bak")), false);
   }
 }
+
+test("the fault-injection transaction entry point runs the production verifier inside rollback", async () => {
+  const fixture = await transactionFixture();
+  try {
+    const failure = new Error("verifier refused final publication");
+    const phases: string[] = [];
+    await assert.rejects(publishStagedFileTransactionForTestWithVerifier(
+      fixture.publications,
+      {},
+      (phase) => {
+        phases.push(phase);
+        if (phase === "before-finalize") throw failure;
+      },
+    ), (error: unknown) => error === failure);
+    assert.deepEqual(phases, ["before-promotion", "before-finalize"]);
+    await assertTransactionRestored(fixture);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test("project write directories reject pre-existing symlink escapes", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "cut-write-root-"));

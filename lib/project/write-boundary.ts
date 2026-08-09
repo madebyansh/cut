@@ -570,8 +570,9 @@ export async function publishStagedFileTransaction(
 export async function publishStagedFileTransactionForTest(
   publications: readonly StagedFilePublication[],
   hooks: StagedFileTransactionTestHooks,
+  verifier?: StagedFileTransactionVerifier,
 ) {
-  await executeStagedFileTransaction(publications, hooks);
+  await executeStagedFileTransaction(publications, hooks, verifier);
 }
 
 type PreparedCreateOnlyPublication = Readonly<{

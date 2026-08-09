@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, type BigIntStats } from "node:fs";
+import { constants as fsConstants, lstatSync, realpathSync, type BigIntStats } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve, sep } from "node:path";
 import { stableJsonStringify } from "../core/stable";
@@ -260,6 +260,63 @@ async function verifyPlannedSourceMetadata(snapshots: ReadonlyMap<string, Planne
   for (const snapshot of snapshots.values()) await verifySourcePath(snapshot);
 }
 
+function sealPlannedSourceAuthority(
+  snapshots: ReadonlyMap<string, PlannedSourceSnapshot>,
+  signal?: AbortSignal,
+) {
+  try {
+    abortIfRequested(signal);
+    for (const snapshot of snapshots.values()) {
+      abortIfRequested(signal);
+      const requested = resolve(snapshot.projectRoot, snapshot.locator);
+      const metadata = lstatSync(requested, { bigint: true });
+      if (realpathSync(requested) !== snapshot.path || !sameSourceMetadata(metadata, snapshot.evidence)) {
+        footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "changed at the final reuse source seal.");
+      }
+    }
+    abortIfRequested(signal);
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$sources", "the final planned-source authority seal could not be verified.");
+  }
+}
+
+function sealFullReuseAuthority(
+  prior: PriorPair,
+  indexPath: string,
+  vectorPath: string,
+  snapshots: ReadonlyMap<string, PlannedSourceSnapshot>,
+  signal?: AbortSignal,
+) {
+  try {
+    abortIfRequested(signal);
+    const indexMetadata = lstatSync(indexPath, { bigint: true }), vectorMetadata = lstatSync(vectorPath, { bigint: true });
+    if (!sameSourceMetadata(indexMetadata, prior.indexEvidence) || !sameSourceMetadata(vectorMetadata, prior.vectorEvidence)
+      || realpathSync(indexPath) !== indexPath || realpathSync(vectorPath) !== vectorPath) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the verified prior footage pair changed at the final reuse seal.");
+    }
+    sealPlannedSourceAuthority(snapshots, signal);
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$reuse", "the final full-reuse authority seal could not be verified.");
+  }
+}
+
+async function verifyFullReuseAuthority(
+  prior: PriorPair,
+  indexPath: string,
+  vectorPath: string,
+  snapshots: ReadonlyMap<string, PlannedSourceSnapshot>,
+  signal?: AbortSignal,
+) {
+  abortIfRequested(signal);
+  await recheckPriorPair(prior, indexPath, vectorPath);
+  abortIfRequested(signal);
+  await verifyPlannedSourceMetadata(snapshots);
+  abortIfRequested(signal);
+  sealFullReuseAuthority(prior, indexPath, vectorPath, snapshots, signal);
+}
+
 function modelIdentity(handshake: CutFootageSidecarStart["expectedHandshake"]): FootageBackendIdentity {
   const required = ["format", "version", "protocolVersion", "provider", "model", "revision", "dimensions", "normalization", "modalities", "hardware", "adapterSha256", "selfTestSha256"];
   if (!handshake || typeof handshake !== "object" || Array.isArray(handshake)
@@ -518,7 +575,8 @@ async function recheckPriorPair(prior: PriorPair | undefined, indexPath: string,
 
 function matchesPriorDestination(snapshot: StagedFileDestinationSnapshot, evidence: FileEvidence) {
   return snapshot.state === "present" && snapshot.kind === "file"
-    && BigInt(snapshot.dev) === evidence.dev && BigInt(snapshot.ino) === evidence.ino;
+    && snapshot.dev === evidence.dev && snapshot.ino === evidence.ino
+    && snapshot.size === evidence.size && snapshot.mtimeNs === evidence.mtimeNs && snapshot.ctimeNs === evidence.ctimeNs;
 }
 
 async function publicationDestinationSnapshots(prior: PriorPair | undefined, indexPath: string, vectorPath: string) {
@@ -815,9 +873,20 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
   const outputParent = parentLocator === "." ? canonicalProjectRoot : await ensureProjectWriteDirectory(canonicalProjectRoot, parentLocator);
   const indexPath = resolve(outputParent, basename(indexLocator)), vectorPath = resolve(outputParent, basename(vectorLocator));
   const prior = await loadPriorPair(rootLocator, vectorLocator, indexPath, vectorPath);
-  const locators = await discoverProjectFootage(canonicalProjectRoot, rootLocator, options.discoveryLimits ?? {});
+  const locators = await discoverProjectFootage(
+    canonicalProjectRoot,
+    rootLocator,
+    options.discoveryLimits ?? {},
+    options.signal === undefined ? {} : { signal: options.signal },
+  );
   if (!locators.length) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", rootLocator, "contains no MP4 or MOV footage.");
-  const plan = await planFootageSources({ projectRoot: canonicalProjectRoot, locators, backend, priorIndex: prior?.index });
+  const plan = await planFootageSources({
+    projectRoot: canonicalProjectRoot,
+    locators,
+    backend,
+    priorIndex: prior?.index,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
   const sourceSnapshots = await capturePlannedSourceSnapshots(canonicalProjectRoot, plan);
   const reusable = new Set(plan.reusableChunkIds);
   const reusedChunkIds = plan.chunks.map((chunk) => chunk.id).filter((id) => reusable.has(id)).sort(bytewise);
@@ -870,14 +939,15 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
     abortIfRequested(options.signal);
     await verifyPlannedSourceHashes(sourceSnapshots, options.signal);
     await options.__testHooks?.afterSourceRecheck?.(plan);
+    if (prior && prior.indexBytes.equals(indexBytes) && prior.vectorBytes.equals(vectorBytes)) {
+      await verifyFullReuseAuthority(prior, indexPath, vectorPath, sourceSnapshots, options.signal);
+      return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);
+    }
     abortIfRequested(options.signal);
     await recheckPriorPair(prior, indexPath, vectorPath);
     abortIfRequested(options.signal);
     await verifyPlannedSourceMetadata(sourceSnapshots);
     abortIfRequested(options.signal);
-    if (prior && prior.indexBytes.equals(indexBytes) && prior.vectorBytes.equals(vectorBytes)) {
-      return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);
-    }
     await options.__testHooks?.beforePublication?.(plan);
     abortIfRequested(options.signal);
     await verifyPlannedSourceMetadata(sourceSnapshots);
@@ -887,10 +957,18 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
       Object.freeze({ staged: stagedVector, destination: vectorPath, order: 100, role: "footage-vector", expectedDestinationSnapshot: expectedDestinations.vector }),
       Object.freeze({ staged: stagedIndex, destination: indexPath, order: 200, role: "footage-index", expectedDestinationSnapshot: expectedDestinations.index }),
     ]);
+    const verifyPublicationAuthority = async () => {
+      abortIfRequested(options.signal);
+      await verifyPlannedSourceMetadata(sourceSnapshots);
+      abortIfRequested(options.signal);
+      sealPlannedSourceAuthority(sourceSnapshots, options.signal);
+    };
     try {
-      if (options.__testHooks?.publication) await publishStagedFileTransactionForTest(publications, options.__testHooks.publication);
-      else await publishStagedFileTransaction(publications);
-    } catch {
+      if (options.__testHooks?.publication) {
+        await publishStagedFileTransactionForTest(publications, options.__testHooks.publication, verifyPublicationAuthority);
+      } else await publishStagedFileTransaction(publications, verifyPublicationAuthority);
+    } catch (error) {
+      if (error instanceof CutFootageError) throw error;
       footageFail("CUT_FOOTAGE_PUBLISH", "$output", "could not publish the staged footage index/vector rollback group.");
     }
     return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);

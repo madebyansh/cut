@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -46,4 +46,24 @@ test("footage discovery refuses project escapes and bounded file count depth and
   await assert.rejects(discoverProjectFootage(root, "media", { maximumFiles: 1 }), /maximumFiles/u);
   await assert.rejects(discoverProjectFootage(root, "media", { maximumDepth: 0 }), /maximumDepth/u);
   await assert.rejects(discoverProjectFootage(root, "media", { maximumFileBytes: 1 }), /maximumFileBytes/u);
+});
+
+test("footage discovery stops a large active walk at the separate cancellation boundary", { timeout: 30_000 }, async () => {
+  const root = await project();
+  try {
+    await Promise.all(Array.from({ length: 512 }, (_unused, index) => writeFile(
+      join(root, "media", `${String(index).padStart(4, "0")}.mp4`),
+      "x",
+    )));
+    const controller = new AbortController();
+    const operation = discoverProjectFootage(root, "media", {}, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 1);
+    await assert.rejects(operation, (error: unknown) => error instanceof Error
+      && "code" in error
+      && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL"
+      && "path" in error
+      && error.path === "$signal");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

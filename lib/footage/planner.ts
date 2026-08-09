@@ -7,7 +7,13 @@ import { footageFail } from "./diagnostics";
 import { floorFootageTimeToGrid, planFootageChunkRanges, type CutFootageRange } from "./range";
 import { resolveProjectFile, validateProjectLocator } from "../project/manifest";
 import { probeProjectBytes, probeProjectMedia, type CutByteProbe, type CutMediaProbe } from "../project/probe";
-import { bindReferenceNativeMediaTool, createReferenceNativeProcessCollector } from "../project/native-process-authority";
+import {
+  bindReferenceNativeMediaTool,
+  createReferenceNativeProcessCollector,
+  type BoundReferenceNativeMediaTool,
+  type ReferenceNativeProcessCollector,
+  type ReferenceNativeProcessLifecycleObserver,
+} from "../project/native-process-authority";
 
 export type FootageBackendIdentity = CutFootageIndex["backend"];
 export type FootageChunkPolicy = CutFootageIndex["chunkPolicy"];
@@ -33,7 +39,27 @@ export type FootagePlan = Readonly<{
   reusableChunkIds: readonly string[];
 }>;
 
+export type FootagePlannerProbeEvent = Readonly<{
+  phase: "start" | "settled";
+  ordinal: number;
+  locator: string;
+  status?: "fulfilled" | "rejected";
+}>;
+
+/** @internal Deterministic scheduling and native-lifecycle observation for focused tests. */
+export type FootagePlannerTestHooks = Readonly<{
+  probeConcurrency?: number;
+  probeEvent?: (event: FootagePlannerProbeEvent) => void | Promise<void>;
+  ffprobeExecutable?: string;
+  lifecycleEvent?: ReferenceNativeProcessLifecycleObserver;
+}>;
+
 export const defaultFootageChunkPolicy: FootageChunkPolicy = Object.freeze({ duration: rational(8), overlap: rational(2) });
+const footagePlannerProbeConcurrency = 4;
+
+function abortIfRequested(signal: AbortSignal | undefined) {
+  if (signal?.aborted) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$signal", "the footage source-planning operation was cancelled.");
+}
 
 function digest(value: unknown) { return createHash("sha256").update(stableJsonStringify(value)).digest("hex"); }
 function same(left: unknown, right: unknown) { return stableJsonStringify(left) === stableJsonStringify(right); }
@@ -129,20 +155,59 @@ export function reusableFootageChunkIds(
   return Object.freeze(chunks.map((chunk) => chunk.id));
 }
 
-async function probeFootageSource(projectRoot: string, locator: string, ordinal: number): Promise<FootageNormalizedSource> {
+async function probeFootageSource(
+  projectRoot: string,
+  locator: string,
+  ordinal: number,
+  authority: BoundReferenceNativeMediaTool,
+  collector: ReferenceNativeProcessCollector,
+  signal?: AbortSignal,
+): Promise<FootageNormalizedSource> {
+  abortIfRequested(signal);
   const safeLocator = validateProjectLocator(locator, "footage source locator");
   await resolveProjectFile(projectRoot, safeLocator);
-  const byteProbe = await probeProjectBytes(projectRoot, safeLocator);
-  const authority = await bindReferenceNativeMediaTool("ffprobe");
-  const collector = createReferenceNativeProcessCollector(authority);
+  abortIfRequested(signal);
+  const byteProbe = await probeProjectBytes(projectRoot, safeLocator, signal === undefined ? {} : { signal });
+  abortIfRequested(signal);
   const context = Object.freeze({
     ordinal, operation: "media-metadata" as const, resourceId: safeLocator, resourceSha256: byteProbe.file.sha256,
     resourceBytes: byteProbe.file.bytes, variant: "master" as const,
   });
-  const mediaProbe = await probeProjectMedia(projectRoot, safeLocator, {}, { ffprobe: authority.executablePath }, { authority, collector, context });
-  await collector.seal();
-  await authority.verify();
+  const mediaProbe = await probeProjectMedia(
+    projectRoot,
+    safeLocator,
+    {},
+    { ffprobe: authority.executablePath },
+    { authority, collector, context, terminateProcessTree: true, ...(signal === undefined ? {} : { signal }) },
+  );
+  abortIfRequested(signal);
   return normalizeFootageSourceProbe(byteProbe, mediaProbe);
+}
+
+async function probeFootageSourceWithEvent(
+  projectRoot: string,
+  locator: string,
+  ordinal: number,
+  authority: BoundReferenceNativeMediaTool,
+  collector: ReferenceNativeProcessCollector,
+  hooks: FootagePlannerTestHooks | undefined,
+  signal?: AbortSignal,
+) {
+  let source: FootageNormalizedSource | undefined, primaryError: unknown;
+  try {
+    await hooks?.probeEvent?.(Object.freeze({ phase: "start", ordinal, locator }));
+    source = await probeFootageSource(projectRoot, locator, ordinal, authority, collector, signal);
+  } catch (error) { primaryError = error; }
+  try {
+    await hooks?.probeEvent?.(Object.freeze({
+      phase: "settled", ordinal, locator,
+      status: primaryError === undefined ? "fulfilled" : "rejected",
+    }));
+  } catch (error) {
+    if (primaryError === undefined) primaryError = error;
+  }
+  if (primaryError !== undefined) throw primaryError;
+  return source!;
 }
 
 export async function planFootageSources(options: Readonly<{
@@ -151,13 +216,56 @@ export async function planFootageSources(options: Readonly<{
   backend: FootageBackendIdentity;
   priorIndex?: CutFootageIndex;
   chunkPolicy?: FootageChunkPolicy;
+  signal?: AbortSignal;
+  __testHooks?: FootagePlannerTestHooks;
 }>): Promise<FootagePlan> {
   if (!options || typeof options !== "object" || Array.isArray(options)) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$", "must be one source planning request.");
+  abortIfRequested(options.signal);
   const locators = options.locators.map((locator) => validateProjectLocator(locator, "footage source locator")).sort(bytewise);
   if (!locators.length || new Set(locators).size !== locators.length) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$.locators", "must be one non-empty duplicate-free locator list.");
+  if (locators.length > cutFootageLimits.maximumSources) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$.locators", "exceeds the bounded source count.");
   if (locators.some((locator) => !mediaLocator(locator))) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.locators", "must contain MP4 or MOV source locators only.");
   const policy = options.chunkPolicy ?? defaultFootageChunkPolicy;
-  const sources = await Promise.all(locators.map((locator, ordinal) => probeFootageSource(options.projectRoot, locator, ordinal)));
+  const width = options.__testHooks?.probeConcurrency ?? footagePlannerProbeConcurrency;
+  if (!Number.isSafeInteger(width) || width < 1 || width > footagePlannerProbeConcurrency) {
+    footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$.__testHooks.probeConcurrency", "must be one bounded planner probe width.");
+  }
+  const authority = await bindReferenceNativeMediaTool("ffprobe", options.__testHooks?.ffprobeExecutable);
+  abortIfRequested(options.signal);
+  const collector = createReferenceNativeProcessCollector(authority, options.__testHooks?.lifecycleEvent === undefined
+    ? {}
+    : { lifecycleEvent: options.__testHooks.lifecycleEvent });
+  const sources: FootageNormalizedSource[] = [];
+  let primaryError: unknown;
+  try {
+    for (let waveStart = 0; waveStart < locators.length; waveStart += width) {
+      abortIfRequested(options.signal);
+      const wave = locators.slice(waveStart, waveStart + width);
+      const outcomes = await Promise.allSettled(wave.map((locator, localIndex) => probeFootageSourceWithEvent(
+        options.projectRoot,
+        locator,
+        waveStart + localIndex,
+        authority,
+        collector,
+        options.__testHooks,
+        options.signal,
+      )));
+      abortIfRequested(options.signal);
+      const rejected = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+      if (rejected) throw rejected.reason;
+      sources.push(...(outcomes as PromiseFulfilledResult<FootageNormalizedSource>[]).map((outcome) => outcome.value));
+    }
+  } catch (error) { primaryError = error; }
+  let sealError: unknown, verifyError: unknown;
+  try { await collector.seal(); }
+  catch (error) { sealError = error; }
+  try { await authority.verify(); }
+  catch (error) { verifyError = error; }
+  if (primaryError !== undefined) throw primaryError;
+  abortIfRequested(options.signal);
+  if (sealError !== undefined || verifyError !== undefined) {
+    footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.locators", "the bound FFprobe source-planning lifecycle could not be verified.");
+  }
   const chunks = sources.flatMap((source) => planFootageChunks(source, policy));
   if (chunks.length > cutFootageLimits.maximumChunks) footageFail("CUT_FOOTAGE_RANGE", "$chunks", "exceeds the bounded footage chunk count.");
   const reusableChunkIds = sources.flatMap((source) => reusableFootageChunkIds(source, chunks.filter((chunk) => chunk.sourceLocator === source.source.locator), options.priorIndex, options.backend, policy));

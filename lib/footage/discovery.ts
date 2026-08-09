@@ -15,6 +15,12 @@ export const defaultFootageDiscoveryLimits: FootageDiscoveryLimits = Object.free
   maximumFileBytes: 100 * 1024 * 1024 * 1024,
 });
 
+export type FootageDiscoveryControl = Readonly<{ signal?: AbortSignal }>;
+
+function abortIfRequested(signal: AbortSignal | undefined) {
+  if (signal?.aborted) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$signal", "the footage discovery operation was cancelled.");
+}
+
 function bytewise(left: string, right: string) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
@@ -41,32 +47,42 @@ export async function discoverProjectFootage(
   projectRoot: string,
   rootLocator: string,
   requestedLimits: Partial<FootageDiscoveryLimits> = {},
+  control: FootageDiscoveryControl = {},
 ): Promise<readonly string[]> {
+  abortIfRequested(control.signal);
   const safeRoot = validateProjectLocator(rootLocator, "footage root locator");
   const bounded = limits(requestedLimits);
   const canonicalProjectRoot = await realpath(projectRoot);
+  abortIfRequested(control.signal);
   const requestedRoot = resolve(canonicalProjectRoot, safeRoot);
   // This is the project boundary authority. lstat below separately rejects
   // a same-project symlink rather than quietly accepting its real path.
   const canonicalRoot = await resolveProjectFile(projectRoot, safeRoot);
+  abortIfRequested(control.signal);
   const rootStat = await lstat(requestedRoot);
+  abortIfRequested(control.signal);
   if (rootStat.isSymbolicLink()) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", safeRoot, "symlinks are not accepted during footage discovery.");
   if (!rootStat.isDirectory()) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", safeRoot, "footage root must be one regular directory.");
 
   const found: string[] = [];
   const visit = async (directory: string, locator: string, depth: number): Promise<void> => {
+    abortIfRequested(control.signal);
     const entries = await readdir(directory, { withFileTypes: true });
+    abortIfRequested(control.signal);
     entries.sort((left, right) => bytewise(left.name, right.name));
     for (const entry of entries) {
+      abortIfRequested(control.signal);
       const childLocator = `${locator}/${entry.name}`;
       const childPath = resolve(directory, entry.name);
       const child = await lstat(childPath);
+      abortIfRequested(control.signal);
       if (entry.isSymbolicLink() || child.isSymbolicLink()) {
         footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", childLocator, "symlinks are not accepted during footage discovery.");
       }
       if (child.isDirectory()) {
         if (depth >= bounded.maximumDepth) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", childLocator, "maximumDepth would be exceeded.");
         await visit(childPath, childLocator, depth + 1);
+        abortIfRequested(control.signal);
         continue;
       }
       if (!child.isFile() || !mediaName(entry.name)) continue;
@@ -76,6 +92,7 @@ export async function discoverProjectFootage(
     }
   };
   await visit(canonicalRoot, safeRoot, 0);
+  abortIfRequested(control.signal);
   found.sort(bytewise);
   return Object.freeze(found);
 }
