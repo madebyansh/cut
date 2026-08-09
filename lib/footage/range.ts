@@ -12,6 +12,7 @@ import { footageFail } from "./diagnostics";
 
 export type CutFootageRange = Readonly<{ semantics: "half-open"; start: Rational; end: Rational }>;
 export type CutFootageHandles = Readonly<{ head: Rational; tail: Rational }>;
+const maximumFootageChunkRanges = 100_000;
 
 function nonNegative(value: Rational, path: string) {
   if (compareRational(value, zeroRational) < 0) footageFail("CUT_FOOTAGE_RANGE", path, "must be non-negative.");
@@ -53,12 +54,23 @@ export function planFootageChunkRanges(options: Readonly<{
   chunkDuration: Rational;
   overlap: Rational;
   grid: Rational;
-}>): readonly CutFootageRange[] {
+}>, maximumRanges = maximumFootageChunkRanges): readonly CutFootageRange[] {
   if (!options || typeof options !== "object" || Array.isArray(options)) footageFail("CUT_FOOTAGE_RANGE", "$", "must be one chunk-planning object.");
+  if (!Number.isSafeInteger(maximumRanges) || maximumRanges < 0 || maximumRanges > maximumFootageChunkRanges) {
+    footageFail("CUT_FOOTAGE_RANGE", "$maximumRanges", "must be one safe integer inside the hard footage range bound.");
+  }
   const duration = positive(options.duration, "$.duration"), chunkDuration = positive(options.chunkDuration, "$.chunkDuration");
   const overlap = nonNegative(options.overlap, "$.overlap"), grid = positive(options.grid, "$.grid");
   if (compareRational(overlap, chunkDuration) >= 0) footageFail("CUT_FOOTAGE_RANGE", "$.overlap", "must be shorter than chunkDuration.");
   const hop = subtractRational(chunkDuration, overlap), ranges: CutFootageRange[] = [];
+  const iterations = compareRational(duration, chunkDuration) <= 0
+    ? 1n
+    : (() => {
+      const ratio = divideRational(subtractRational(duration, chunkDuration), hop);
+      const numerator = BigInt(ratio.numerator), denominator = BigInt(ratio.denominator);
+      return (numerator + denominator - 1n) / denominator + 1n;
+    })();
+  if (iterations > BigInt(maximumRanges)) footageFail("CUT_FOOTAGE_RANGE", "$ranges", "exceeds the bounded footage range count.");
   let requestedStart = zeroRational;
   while (compareRational(requestedStart, duration) < 0) {
     const start = floorFootageTimeToGrid(requestedStart, grid);

@@ -28,6 +28,25 @@ test("footage chunk planning creates sorted exact half-open source ranges withou
   );
 });
 
+test("footage chunk planning rejects an exact iteration overflow before range generation", () => {
+  const options = { chunkDuration: rational(8), overlap: rational(2), grid: rational(1, 30) };
+  assert.equal(planFootageChunkRanges({ ...options, duration: rational(14) }, 2).length, 2);
+  assert.throws(
+    () => planFootageChunkRanges({ ...options, duration: rational(15) }, 2),
+    (error: unknown) => error instanceof Error
+      && "code" in error
+      && error.code === "CUT_FOOTAGE_RANGE"
+      && "path" in error
+      && error.path === "$ranges",
+  );
+  assert.throws(() => planFootageChunkRanges({ ...options, duration: rational(1) }, 0), /bounded footage range count/u);
+  assert.throws(() => planFootageChunkRanges({ ...options, duration: rational(1) }, 100_001), /hard footage range bound/u);
+  assert.throws(
+    () => planFootageChunkRanges({ ...options, duration: rational(`1${"0".repeat(200)}`) }),
+    /bounded footage range count/u,
+  );
+});
+
 test("footage handles clamp at source bounds and report the effective exact handles", () => {
   assert.deepEqual(
     clampFootageHandles({
