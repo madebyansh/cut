@@ -25,6 +25,7 @@ import {
   createCutProject,
   CutProjectError,
   loadCutProject,
+  probeProjectBytes,
   probeProjectMedia,
   validateCutProjectManifest,
 } from "../lib/project";
@@ -127,6 +128,22 @@ test("missing media is a structured project-resource error", async () => {
       && error.code === "CUTP1015"
       && error.path === join(canonicalRoot, "media/missing.mp4"),
   );
+});
+
+test("byte probe budgets reject unknown keys and malformed cancellation signals", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "cut-byte-probe-budget-"));
+  const root = join(parent, "project");
+  await createCutProject(root, "Byte probe budget proof");
+  await writeFile(join(root, "media/source.bin"), "bounded bytes\n");
+  for (const options of [
+    { maxFileBytes: 1024, unknownBudget: 1 },
+    { maxFileBytes: 1024, signal: { aborted: false } },
+  ]) {
+    await assert.rejects(
+      probeProjectBytes(root, "media/source.bin", options as never),
+      (error) => error instanceof CutProjectError && error.code === "CUTP2007" && !error.message.includes(root),
+    );
+  }
 });
 
 test("formal media probe locks one stable snapshot and the exact bounded ffprobe identity", { timeout: 30_000 }, async () => {

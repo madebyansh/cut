@@ -550,6 +550,53 @@ test("cancellation during a slow multi-chunk source byte probe stops hashing at 
   await assert.rejects(lstat(join(fixture.root, "selects/cancel-byte-hash.mp4")), { code: "ENOENT" });
 });
 
+test("cancellation during the initial held-source digest stops at one read and leaves no output", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await workflowFixture({ async writeSource(path) {
+    await copyFile(resolve("examples/media/demo.mp4"), path);
+    await truncate(path, 8 * 1024 * 1024);
+  } });
+  const sourceMetadata = await lstat(fixture.sourcePath, { bigint: true });
+  const controller = new AbortController(), probeHandle = await open(fixture.sourcePath, "r");
+  const prototype = Object.getPrototypeOf(probeHandle) as object;
+  const originalRead = Reflect.get(prototype, "read") as unknown;
+  await probeHandle.close();
+  assert.equal(typeof originalRead, "function");
+  let interceptedReads = 0;
+  try {
+    Reflect.set(prototype, "read", async function(this: unknown, ...args: unknown[]) {
+      let isSourceHandle = false;
+      if (typeof this === "object" && this !== null) {
+        const statMethod = Reflect.get(this, "stat") as unknown;
+        if (typeof statMethod === "function") {
+          const metadata = await Reflect.apply(statMethod as (...values: unknown[]) => unknown, this, [{ bigint: true }]) as typeof sourceMetadata;
+          isSourceHandle = metadata.dev === sourceMetadata.dev && metadata.ino === sourceMetadata.ino;
+        }
+      }
+      if (isSourceHandle) {
+        interceptedReads += 1;
+        if (interceptedReads === 1) {
+          await new Promise((accept) => setTimeout(accept, 25));
+          controller.abort();
+        }
+      }
+      return Reflect.apply(originalRead as (...values: unknown[]) => unknown, this, args);
+    });
+    await assert.rejects(extractProjectFootage({
+      projectRoot: fixture.root,
+      searchLocator: ".cut/footage/search.json",
+      outputLocator: "selects/cancel-held-hash.mp4",
+      selector: { rank: 1 },
+      signal: controller.signal,
+    }), (error: unknown) => error instanceof CutFootageError
+      && error.code === "CUT_FOOTAGE_PUBLISH" && error.path === "$signal"
+      && !error.message.includes(fixture.root) && !error.message.includes(fixture.sourcePath));
+  } finally {
+    Reflect.set(prototype, "read", originalRead);
+  }
+  assert.equal(interceptedReads, 1, "the cancelled held-source digest continued reading chunks");
+  await assert.rejects(lstat(join(fixture.root, "selects/cancel-held-hash.mp4")), { code: "ENOENT" });
+});
+
 test("destination parent replacement is rejected before staging, at each promotion, and after publication without touching foreign sentinels", { timeout: 180_000, skip: process.platform === "win32" }, async () => {
   for (const phase of ["before-stage", "before-output", "before-manifest", "after-publication"] as const) {
     const fixture = await workflowFixture(), outputLocator = `selects/parent-${phase}.mp4`;

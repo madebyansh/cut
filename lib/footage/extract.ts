@@ -202,7 +202,8 @@ async function assertHeldPath(held: HeldFile) {
   }
 }
 
-async function digestHeldBytes(held: HeldFile) {
+async function digestHeldBytes(held: HeldFile, signal?: AbortSignal) {
+  abortIfRequested(signal);
   const expectedBytes = Number(held.snapshot.size);
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) {
     footageFail("CUT_FOOTAGE_PUBLISH", "$.output.bytes", "one held extraction file exceeds the safe hashing bound.");
@@ -210,23 +211,28 @@ async function digestHeldBytes(held: HeldFile) {
   const digest = createHash("sha256"), buffer = Buffer.allocUnsafe(Math.min(heldHashBufferBytes, Math.max(1, expectedBytes)));
   let position = 0;
   while (position < expectedBytes) {
+    abortIfRequested(signal);
     const length = Math.min(buffer.byteLength, expectedBytes - position);
     const { bytesRead } = await held.handle.read(buffer, 0, length, position);
+    abortIfRequested(signal);
     if (bytesRead < 1) break;
     digest.update(buffer.subarray(0, bytesRead));
     position += bytesRead;
   }
+  abortIfRequested(signal);
   return digest.digest("hex");
 }
 
-async function hashHeldFile(held: HeldFile) {
+async function hashHeldFile(held: HeldFile, signal?: AbortSignal) {
+  abortIfRequested(signal);
   await assertHeldPath(held);
-  const digest = await digestHeldBytes(held);
+  const digest = await digestHeldBytes(held, signal);
   await assertHeldPath(held);
+  abortIfRequested(signal);
   return digest;
 }
 
-async function assertLinkedHeldBytes(held: HeldFile, expectedSha256: string, linkedPath = held.path) {
+async function assertLinkedHeldBytes(held: HeldFile, expectedSha256: string, linkedPath = held.path, signal?: AbortSignal) {
   const assertLinkedIdentity = async () => {
     const [handleMetadata, pathMetadata] = await Promise.all([held.handle.stat({ bigint: true }), lstat(linkedPath, { bigint: true })]);
     if (!handleMetadata.isFile() || !pathMetadata.isFile()
@@ -237,16 +243,18 @@ async function assertLinkedHeldBytes(held: HeldFile, expectedSha256: string, lin
       footageFail("CUT_FOOTAGE_PUBLISH", "$.output", "a staged extraction inode or its bytes changed during publication.");
     }
   };
+  abortIfRequested(signal);
   await assertLinkedIdentity();
-  const digest = await digestHeldBytes(held);
+  const digest = await digestHeldBytes(held, signal);
   await assertLinkedIdentity();
+  abortIfRequested(signal);
   if (digest !== expectedSha256) {
     footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "a staged extraction byte hash changed during publication.");
   }
 }
 
-async function assertHeldSourceIdentity(held: HeldFile, source: CutFootageIndex["sources"][number]) {
-  if (held.snapshot.size !== BigInt(source.bytes) || await hashHeldFile(held) !== source.sha256) {
+async function assertHeldSourceIdentity(held: HeldFile, source: CutFootageIndex["sources"][number], signal?: AbortSignal) {
+  if (held.snapshot.size !== BigInt(source.bytes) || await hashHeldFile(held, signal) !== source.sha256) {
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$.sourceSelection.sha256", "the held indexed source bytes no longer match the index.");
   }
 }
@@ -439,7 +447,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
   const source = await openHeldSource(projectRoot, match.sourceSelection.locator);
   let stageDirectory: HeldDirectory | undefined, heldOutput: HeldFile | undefined, heldManifest: HeldFile | undefined;
   try {
-    await assertHeldSourceIdentity(source, indexedSource);
+    await assertHeldSourceIdentity(source, indexedSource, options.signal);
     await recheckReports(projectRoot, searchLocator, search, index);
     const grid = divideRational(rational(1), indexedStream.frameRate);
     const clamped = clampFootageHandles({
@@ -476,7 +484,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       });
       abortIfRequested(options.signal);
       normalizeSourceProbe(initialBytes, initialMedia, indexedSource);
-      await assertHeldSourceIdentity(source, indexedSource);
+      await assertHeldSourceIdentity(source, indexedSource, options.signal);
       const currentStream = initialMedia.streams.find((stream) => stream.index === match.sourceSelection.streamIndex && stream.type === "video");
       if (!currentStream?.frameRate || !currentStream.duration || compareRational(currentStream.frameRate, indexedStream.frameRate) !== 0
         || compareRational(currentStream.duration, indexedSource.duration) !== 0) {
@@ -542,7 +550,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       }, { signal: options.signal, inheritedFileDescriptors: [source.handle.fd], terminateProcessTree: true });
       await runExtractionHook(options.signal, options.__testHooks?.afterEncode, { path: stageOutput, arguments: Object.freeze([...ffmpegArguments]) });
       heldOutput = await openHeldRegular(stageOutput);
-      const heldStageSha = await hashHeldFile(heldOutput);
+      const heldStageSha = await hashHeldFile(heldOutput, options.signal);
       const heldStageBytes = Number(heldOutput.snapshot.size);
       if (!Number.isSafeInteger(heldStageBytes) || heldStageBytes < 1 || heldStageBytes > maximumExtractBytes) {
         footageFail("CUT_FOOTAGE_PUBLISH", "$.output.bytes", "the staged extraction is empty or exceeds its byte bound.");
@@ -578,7 +586,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       });
       normalizeSourceProbe(postBytes, postMedia, indexedSource);
       if (!same(postBytes, initialBytes) || !same(postMedia, initialMedia)) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.sourceSelection", "the source probe changed during extraction.");
-      await assertHeldSourceIdentity(source, indexedSource);
+      await assertHeldSourceIdentity(source, indexedSource, options.signal);
       abortIfRequested(options.signal);
       await ffmpeg.verify(); abortIfRequested(options.signal);
       await ffprobe.verify(); abortIfRequested(options.signal);
@@ -595,10 +603,10 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       footageFail("CUT_FOOTAGE_PUBLISH", "$.output", "the extraction did not produce complete verification evidence.");
     }
     await runExtractionHook(options.signal, options.__testHooks?.afterVerification, { path: stageOutput });
-    await assertHeldSourceIdentity(source, indexedSource);
+    await assertHeldSourceIdentity(source, indexedSource, options.signal);
     abortIfRequested(options.signal);
     await assertHeldPath(heldOutput);
-    if (await hashHeldFile(heldOutput) !== outputBytes.file.sha256) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed after verification.");
+    if (await hashHeldFile(heldOutput, options.signal) !== outputBytes.file.sha256) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed after verification.");
     await recheckReports(projectRoot, searchLocator, search, index);
     abortIfRequested(options.signal);
 
@@ -624,7 +632,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
     abortIfRequested(options.signal);
     heldManifest = await openHeldRegular(stageManifest);
     const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
-    if (await hashHeldFile(heldManifest) !== manifestSha256) {
+    if (await hashHeldFile(heldManifest, options.signal) !== manifestSha256) {
       footageFail("CUT_FOOTAGE_PUBLISH", "$.extractSha256", "the staged extraction manifest changed before publication.");
     }
     abortIfRequested(options.signal);
@@ -632,8 +640,8 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
     const assertPublicationInputs = async () => {
       abortIfRequested(options.signal);
       await Promise.all([
-        assertHeldPath(source), assertLinkedHeldBytes(verifiedOutput, outputBytes.file.sha256),
-        assertLinkedHeldBytes(verifiedManifest, manifestSha256),
+        assertHeldPath(source), assertLinkedHeldBytes(verifiedOutput, outputBytes.file.sha256, verifiedOutput.path, options.signal),
+        assertLinkedHeldBytes(verifiedManifest, manifestSha256, verifiedManifest.path, options.signal),
         recheckReports(projectRoot, searchLocator, search, index), assertDestinationParent(destination),
       ]);
       abortIfRequested(options.signal);
@@ -674,10 +682,10 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       });
       await assertDestinationParent(destination);
       await Promise.all([
-        assertLinkedHeldBytes(heldOutput, outputBytes.file.sha256, destination.outputPath),
-        assertLinkedHeldBytes(heldManifest, manifestSha256, destination.manifestPath),
+        assertLinkedHeldBytes(heldOutput, outputBytes.file.sha256, destination.outputPath, options.signal),
+        assertLinkedHeldBytes(heldManifest, manifestSha256, destination.manifestPath, options.signal),
       ]);
-      await assertHeldSourceIdentity(source, indexedSource);
+      await assertHeldSourceIdentity(source, indexedSource, options.signal);
       await recheckReports(projectRoot, searchLocator, search, index);
       abortIfRequested(options.signal);
     } catch (error) {

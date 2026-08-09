@@ -215,6 +215,22 @@ async function spawnProbeNativeProcess(
 type ResolvedProbeBudget = Required<Omit<ProbeBudget, "signal">>;
 
 function probeBudget(options: ProbeBudget): ResolvedProbeBudget {
+  const allowedKeys = new Set<PropertyKey>(["maxFileBytes", "maxOutputBytes", "timeoutMs", "signal"]);
+  if (!options || typeof options !== "object" || Array.isArray(options)
+    || Reflect.ownKeys(options).some((key) => !allowedKeys.has(key))) {
+    throw new CutProjectError("CUTP2007", "Probe budget must contain only maxFileBytes, maxOutputBytes, timeoutMs, and signal.");
+  }
+  if (options.signal !== undefined) {
+    let validSignal = false;
+    try {
+      validSignal = typeof options.signal === "object" && options.signal !== null
+        && typeof options.signal.aborted === "boolean"
+        && typeof options.signal.addEventListener === "function"
+        && typeof options.signal.removeEventListener === "function"
+        && typeof options.signal.throwIfAborted === "function";
+    } catch { /* Accessor-bearing signal lookalikes are invalid. */ }
+    if (!validSignal) throw new CutProjectError("CUTP2007", "signal must be one AbortSignal.");
+  }
   const result: ResolvedProbeBudget = {
     maxFileBytes: options.maxFileBytes ?? DEFAULT_BUDGET.maxFileBytes,
     maxOutputBytes: options.maxOutputBytes ?? DEFAULT_BUDGET.maxOutputBytes,
