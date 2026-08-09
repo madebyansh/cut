@@ -131,23 +131,32 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
   const limits = boundedLimits(start.limits), environment = validateStart(start, limits);
   const expected = freezeHandshake(start.expectedHandshake as unknown as Record<string, unknown>);
   let child: ChildProcessWithoutNullStreams;
+  const terminateProcessGroup = process.platform !== "win32";
   try {
-    child = spawn(start.executable, [...start.arguments], { shell: false, detached: false, stdio: ["pipe", "pipe", "pipe"], env: environment });
+    child = spawn(start.executable, [...start.arguments], { shell: false, detached: terminateProcessGroup, stdio: ["pipe", "pipe", "pipe"], env: environment });
   } catch { protocol("sidecar could not start"); }
   let pid: number | undefined = child!.pid;
   let stdout = Buffer.alloc(0), stdoutBytes = 0, stderrBytes = 0, handshaken = false, closeRequested = false, closeSent = false, closeAcknowledged = false;
   let fatal: CutFootageError | undefined, pending: Pending | undefined, settled: Readonly<{ pending: Pending; result: unknown }> | undefined, closePromise: Promise<void> | undefined;
-  let terminateTimer: NodeJS.Timeout | undefined, closeTimer: NodeJS.Timeout | undefined;
+  let terminateTimer: NodeJS.Timeout | undefined, drainTimer: NodeJS.Timeout | undefined, closeTimer: NodeJS.Timeout | undefined;
   let resolveDead!: () => void;
   const dead = new Promise<void>((resolve) => { resolveDead = resolve; });
   let resolveHandshake!: (value: CutFootageSidecarSession) => void, rejectHandshake!: (error: Error) => void;
   const handshakeReady = new Promise<CutFootageSidecarSession>((resolve, reject) => { resolveHandshake = resolve; rejectHandshake = reject; });
 
   const error = (reason: string) => new CutFootageError("CUT_FOOTAGE_BACKEND_PROTOCOL", "$sidecar", reason);
+  const signalTree = (signal: NodeJS.Signals) => {
+    if (pid === undefined) return;
+    if (terminateProcessGroup) {
+      try { process.kill(-pid, signal); return; } catch { /* fall through to the direct child */ }
+    }
+    try { child!.kill(signal); } catch { /* the process already ended */ }
+  };
   const finish = (reason: string) => {
     if (fatal) return;
     fatal = error(reason);
     clearTimeout(terminateTimer);
+    clearTimeout(drainTimer);
     clearTimeout(closeTimer);
     if (pending) {
       clearTimeout(pending.timer);
@@ -157,8 +166,15 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
     void dead.then(() => rejectHandshake(fatal!));
     child!.stdin.end();
     if (pid !== undefined) {
-      child!.kill("SIGTERM");
-      terminateTimer = setTimeout(() => { if (pid !== undefined) child!.kill("SIGKILL"); }, limits.terminateGraceMs);
+      signalTree("SIGTERM");
+      terminateTimer = setTimeout(() => {
+        signalTree("SIGKILL");
+        drainTimer = setTimeout(() => {
+          child!.stdin.destroy();
+          child!.stdout.destroy();
+          child!.stderr.destroy();
+        }, 50);
+      }, limits.terminateGraceMs);
     }
   };
   const finishSoon = (reason: string) => queueMicrotask(() => finish(reason));
@@ -237,15 +253,17 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
   child!.stderr.on("data", (chunk: Buffer) => { stderrBytes += chunk.byteLength; if (stderrBytes > limits.maximumStderrBytes) finish("stderr exceeds its byte limit"); });
   child!.on("error", () => finish("sidecar could not start"));
   child!.on("close", (code) => {
-    clearTimeout(terminateTimer); clearTimeout(closeTimer); pid = undefined;
+    clearTimeout(terminateTimer); clearTimeout(drainTimer); clearTimeout(closeTimer); pid = undefined;
+    start.signal?.removeEventListener("abort", abort);
     if (stdout.byteLength) finish("sidecar ended with a partial response line");
     else if (!fatal && (!closeRequested || !closeSent || !closeAcknowledged || code !== 0)) finish("sidecar exited before a valid close");
     resolveDead();
   });
   const handshakeTimer = setTimeout(() => finish("handshake timed out"), limits.handshakeMs);
   handshakeReady.finally(() => clearTimeout(handshakeTimer)).catch(() => undefined);
+  const abort = () => finish("sidecar operation was cancelled");
   if (start.signal?.aborted) finish("sidecar operation was cancelled");
-  else start.signal?.addEventListener("abort", () => finish("sidecar operation was cancelled"), { once: true });
+  else start.signal?.addEventListener("abort", abort, { once: true });
 
   let requestOrdinal = 0;
   let tail: Promise<unknown> = Promise.resolve();

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { CutFootageError } from "../lib/footage/diagnostics";
 import { cutFootageSidecarLimits, startCutFootageSidecar, type CutFootageSidecarHandshake } from "../lib/footage/sidecar";
@@ -217,6 +219,56 @@ test("sidecar times out, handles crash and abort, and leaves no child process", 
   await protocol(() => session.index({ plan: { path: "/tmp/cut-plan.json", bytes: 8, sha256: digest("d") }, artifactPath: "/tmp/cut-vectors.bin" }));
   assert.equal(session.pid, undefined);
   assert.throws(() => process.kill(pid!, 0), { code: "ESRCH" });
+});
+
+test("sidecar abort terminates a SIGTERM-resistant pipe-owning process group", { timeout: 10_000, skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "cut-footage-sidecar-tree-"));
+  const script = join(root, "sidecar-tree.mjs"), marker = join(root, "pids.json");
+  await writeFile(script, `
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const handshake = ${JSON.stringify(handshake)};
+process.stdout.write(JSON.stringify(handshake) + "\\n");
+const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "inherit"] });
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ sidecar: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+`);
+  const controller = new AbortController();
+  const session = await startCutFootageSidecar({
+    executable: process.execPath,
+    arguments: Object.freeze([script]),
+    expectedHandshake: handshake,
+    limits: { handshakeMs: 1_000, searchMs: 5_000, terminateGraceMs: 100 },
+    signal: controller.signal,
+  });
+  const deadline = Date.now() + 3_000;
+  let pids: { sidecar: number; grandchild: number } | undefined;
+  while (Date.now() <= deadline && pids === undefined) {
+    pids = await readFile(marker, "utf8").then((value) => JSON.parse(value), () => undefined);
+    if (pids === undefined) await new Promise((accept) => setTimeout(accept, 10));
+  }
+  assert.ok(pids);
+  const operation = session.searchText({ artifact: { path: join(root, "vectors"), bytes: 1, sha256: digest("c") }, query: "dog" });
+  void operation.catch(() => undefined);
+  controller.abort();
+  try {
+    await Promise.race([
+      protocol(() => operation),
+      new Promise<never>((_accept, reject) => {
+        const timer = setTimeout(() => reject(new Error("sidecar process group did not drain after abort")), 2_000);
+        timer.unref();
+      }),
+    ]);
+    assert.equal(session.pid, undefined);
+    assert.throws(() => process.kill(pids!.sidecar, 0), { code: "ESRCH" });
+    assert.throws(() => process.kill(pids!.grandchild, 0), { code: "ESRCH" });
+  } finally {
+    for (const pid of [pids!.sidecar, pids!.grandchild]) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await operation.catch(() => undefined);
+  }
 });
 
 test("sidecar rejects unknown environment keys before spawning", async () => {

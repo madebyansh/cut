@@ -129,18 +129,27 @@ jobs:
           node "$GITHUB_WORKSPACE/scripts/assert-linux-package-smoke.mjs" "$consumer/film" "$reports"
 
   semantic-footage-real:
-    name: semantic-footage-real (${{ matrix.os }}, node 24.15.0)
+    name: semantic-footage-real (${{ matrix.os }}, node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-24.04]
+        include:
+          - os: macos-14
+            node-version: '24.15.0'
+            evidence-name: macos-node24
+          - os: ubuntu-24.04
+            node-version: '20.19.0'
+            evidence-name: linux-node20
+          - os: ubuntu-24.04
+            node-version: '24.15.0'
+            evidence-name: linux-node24
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24.15.0'
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - name: Install macOS FFmpeg baseline
         if: runner.os == 'macOS'
@@ -198,7 +207,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: semantic-footage-real-${{ runner.os }}
+          name: semantic-footage-real-${{ matrix.evidence-name }}
           if-no-files-found: ignore
           retention-days: 7
           path: |

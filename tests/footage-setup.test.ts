@@ -166,6 +166,33 @@ test("footage doctor returns one stable missing-backend report without leaking i
   assert.equal(JSON.stringify(report).includes(home), false);
 });
 
+test("inspection rejects a pre-aborted verification before rehashing the installed payload", async () => {
+  const fixture = await installedFixture(), controller = new AbortController();
+  controller.abort();
+  const options = {
+    home: fixture.home, platform: "linux" as const, architecture: "x64", nodeVersion: "24.15.0", signal: controller.signal,
+  };
+  await assert.rejects(inspectCutFootageLocalInstall(options), (error: unknown) => error instanceof CutFootageError
+    && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL" && error.path === "$signal" && !error.message.includes(fixture.home));
+});
+
+test("doctor forwards one abort signal through verified offline sidecar startup", async () => {
+  const fixture = await installedFixture(), controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  const report = await collectCutFootageLocalDoctorReport({
+    home: fixture.home, platform: "linux", architecture: "x64", nodeVersion: "24.15.0", signal: controller.signal,
+    operations: {
+      ...fixture.operations,
+      async startSidecar(launch) {
+        receivedSignal = launch.signal;
+        return fakeSession(launch.expectedHandshake);
+      },
+    },
+  });
+  assert.equal(report.status, "pass");
+  assert.equal(receivedSignal, controller.signal);
+});
+
 test("footage setup stages, verifies online and offline, atomically publishes, and is idempotent", async () => {
   const fixture = await installedFixture();
   const guardPath = join(process.cwd(), "dist-cli", "lib", "footage", "network-deny.js");
@@ -229,7 +256,7 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
   ]);
 });
 
-test("setup failure preserves its unpublished payload, creates no shared lock, and does not leak child diagnostics", async () => {
+test("installer failure removes its owned unpublished payload, creates no shared lock, and does not leak child diagnostics", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-failed-")), "secret-home");
   const recipe = await fakeRecipe();
   await assert.rejects(
@@ -247,7 +274,53 @@ test("setup failure preserves its unpublished payload, creates no shared lock, a
   const names = await readdir(home);
   assert.equal(names.includes("local-clip-v1"), false);
   assert.equal(names.some((name) => name.endsWith(".lock")), false);
-  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 1);
+  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 0);
+});
+
+test("setup and offline verification failures remove their owned unpublished payloads", async () => {
+  for (const failedMode of ["setup", "offline"] as const) {
+    const home = join(await mkdtemp(join(tmpdir(), `cut-footage-failed-${failedMode}-`)), "footage");
+    const recipe = await fakeRecipe(), base = fakeOperations(recipe.model);
+    await assert.rejects(setupCutFootageLocalBackend({
+      backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+      platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+      operations: {
+        ...base,
+        async startSidecar(launch) {
+          if (launch.mode === failedMode) throw new Error(`injected ${failedMode} failure`);
+          return base.startSidecar(launch);
+        },
+      },
+    }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
+    const names = await readdir(home);
+    assert.equal(names.includes("local-clip-v1"), false);
+    assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 0);
+  }
+});
+
+test("setup cancellation removes a nested owned payload without following symlinks", async () => {
+  const base = await mkdtemp(join(tmpdir(), "cut-footage-aborted-"));
+  const home = join(base, "footage"), outside = join(base, "outside"), recipe = await fakeRecipe();
+  await mkdir(outside);
+  await writeFile(join(outside, "preserve-me"), "outside\n");
+  const controller = new AbortController();
+  await assert.rejects(setupCutFootageLocalBackend({
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+    platform: "linux", architecture: "x64", nodeVersion: "24.15.0", signal: controller.signal,
+    operations: {
+      async installRuntime({ stagingRoot }) {
+        await mkdir(join(stagingRoot, "node_modules/deep/tree"), { recursive: true });
+        await writeFile(join(stagingRoot, "node_modules/deep/tree/owned.txt"), "owned\n");
+        await symlink(outside, join(stagingRoot, "node_modules/deep/outside"), "dir");
+        controller.abort();
+      },
+      async startSidecar() { throw new Error("must not start after cancellation"); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH" && error.path === "$signal");
+  assert.equal(await readFile(join(outside, "preserve-me"), "utf8"), "outside\n");
+  const names = await readdir(home);
+  assert.equal(names.includes("local-clip-v1"), false);
+  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 0);
 });
 
 test("locked npm runner uses node plus exact argv and fails without leaking child output", async () => {
@@ -422,7 +495,7 @@ test("setup never replaces a destination created at the publication boundary", a
   assert.equal((await readdir(home)).some((name) => name.includes("staging") || name.endsWith(".lock")), false);
 });
 
-test("setup refuses package scripts, creates no shared lock, and never guesses at recursive payload cleanup", async () => {
+test("setup refuses package scripts and removes the bounded recipe payload without a shared lock", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-hostile-recipe-")), "footage");
   const recipe = await fakeRecipe();
   const packagePath = join(recipe.root, "package.json");
@@ -436,7 +509,7 @@ test("setup refuses package scripts, creates no shared lock, and never guesses a
   const names = await readdir(home);
   assert.equal(names.includes("local-clip-v1"), false);
   assert.equal(names.some((name) => name.endsWith(".lock")), false);
-  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 1);
+  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 0);
 });
 
 test("doctor rehashes the complete runtime, model, and adapter trees before launching inference", async () => {

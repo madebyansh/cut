@@ -52,23 +52,25 @@ FFmpeg version; `cut doctor` is the installability gate because CUT depends on
 specific codecs, filters, and probe behavior rather than a version string alone.
 Windows descriptor-bound media execution is not supported.
 
-Download the package and checksum from the
-[latest GitHub release](https://github.com/madebyansh/cut/releases/latest), verify
-them, then install CUT into a project:
-
-On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`.
-On Linux, use `sha256sum -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`. Then install:
+Install the published package into a project:
 
 ```sh
 mkdir my-cut-project && cd my-cut-project
 npm init -y
-npm install --save-exact /path/to/cut-lang-0.4.0-alpha.3.tgz
+npm install --save-exact cut-lang@0.4.0-alpha.3
 npx cut doctor
 npx cut init film --name "My first CUT film"
 ```
 
-Continue with the [five-minute quickstart](docs/FIRST_USE.md), or open the
-[documentation index](docs/README.md) for guides by task.
+For an audited offline install, download the tarball and checksum from the
+[latest GitHub release](https://github.com/madebyansh/cut/releases/latest).
+On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`;
+on Linux, use `sha256sum -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`, then install the
+verified tarball with `npm install --save-exact /path/to/cut-lang-0.4.0-alpha.3.tgz`.
+
+Continue with the [five-minute quickstart](docs/FIRST_USE.md), jump straight to
+[local semantic footage search](docs/FIRST_USE.md#optional-local-semantic-footage-search),
+or open the [documentation index](docs/README.md) for guides by task.
 
 The npm package is called `cut-lang` because the unscoped name `cut` is already
 owned by another project. The language, CLI command, and repository are simply

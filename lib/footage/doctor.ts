@@ -1,4 +1,4 @@
-import { CutFootageError } from "./diagnostics";
+import { CutFootageError, footageFail } from "./diagnostics";
 import {
   inspectCutFootageLocalInstall,
   startCutFootageLocalSidecar,
@@ -43,6 +43,9 @@ export async function collectCutFootageLocalDoctorReport(options: CutFootageLoca
       detail: "The pinned local footage backend is verified and ready for offline use.",
     });
   } catch (error) {
+    if ((error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL" && error.path === "$signal") || options.signal?.aborted) {
+      footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$signal", "the local footage backend doctor operation was cancelled.");
+    }
     if (error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_MISSING") {
       return report("fail", {
         code: "CUTFD1001", name: "Local footage backend", status: "fail",

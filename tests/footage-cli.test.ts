@@ -8,6 +8,7 @@ import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import { stableJsonStringify } from "../lib/core/stable";
 import { parseCutFootageIndex } from "../lib/footage/contracts";
+import { encodeCutFootageVectorArtifact } from "../lib/footage/indexer";
 import { buildCutFootageSearchReport } from "../lib/footage/search";
 import { defaultFootageChunkPolicy, planFootageSources } from "../lib/footage/planner";
 import { rational } from "../lib/language/rational";
@@ -292,6 +293,306 @@ async function waitForDead(pid: number) {
   while (pidAlive(pid) && Date.now() <= deadline) await new Promise((accept) => setTimeout(accept, 20));
   return !pidAlive(pid);
 }
+
+const cliFixtureHandshake = Object.freeze({
+  format: "cut-footage-sidecar-handshake" as const, version: 1 as const, protocolVersion: 1 as const,
+  provider: "fixture", model: "deterministic-clip", revision: "r1", dimensions: 512,
+  normalization: "l2" as const, modalities: Object.freeze(["image", "text"] as const), hardware: "cpu" as const,
+  adapterSha256: "a".repeat(64), selfTestSha256: "b".repeat(64),
+});
+
+async function writeCliFixtureBackendPreload(root: string, sidecarScript = resolve("tests/fixtures/footage-deterministic-sidecar.mjs")) {
+  const preload = join(root, "footage-authority.cjs");
+  const setupModule = resolve("dist-cli/lib/footage/setup.js");
+  const sidecarModule = resolve("dist-cli/lib/footage/sidecar.js");
+  await writeFile(preload, `
+const setup = require(${JSON.stringify(setupModule)});
+const sidecar = require(${JSON.stringify(sidecarModule)});
+const handshake = Object.freeze(${JSON.stringify(cliFixtureHandshake)});
+const install = Object.freeze({ root:${JSON.stringify(join(root, "fixture-install/local-clip-v1"))}, modelRevisionRoot:${JSON.stringify(join(root, "fixture-install/model"))}, sidecarPath:${JSON.stringify(sidecarScript)}, manifest:Object.freeze({ handshake }) });
+setup.createCutFootageLocalIndexBackend = async function createFixtureBackend() {
+  return Object.freeze({
+    identity: Object.freeze({ protocolVersion:1, provider:handshake.provider, model:handshake.model + "@" + handshake.revision + "+adapter." + handshake.adapterSha256, dimensions:handshake.dimensions, normalization:"l2" }),
+    sidecar: Object.freeze({ executable:process.execPath, arguments:Object.freeze([${JSON.stringify(sidecarScript)}, "valid"]), expectedHandshake:handshake, limits:Object.freeze({ handshakeMs:1000, indexMs:5000, closeMs:1000, terminateGraceMs:100 }) }),
+  });
+};
+setup.inspectCutFootageLocalInstall = async function inspectFixtureBackend() { return install; };
+setup.startCutFootageLocalSidecar = async function startFixtureSidecar(options = {}) {
+  return sidecar.startCutFootageSidecar({ executable:process.execPath, arguments:Object.freeze([${JSON.stringify(sidecarScript)}]), expectedHandshake:handshake, limits:{ handshakeMs:1000, indexMs:5000, searchMs:5000, closeMs:5000, terminateGraceMs:100 }, signal:options.signal });
+};
+`);
+  return preload;
+}
+
+test("footage index maps cli signals to cancellation, kills its ffmpeg tree, and leaves no pair", { timeout: 40_000, skip: process.platform === "win32" }, async () => {
+  const reports: unknown[] = [];
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const root = join(await mkdtemp(join(tmpdir(), `cut-footage-cli-index-${signal.toLowerCase()}-`)), "project");
+    await createCutProject(root, "CLI index signal");
+    await copyFile(resolve("examples/media/demo.mp4"), join(root, "media/source.mp4"));
+    const tools = join(root, "fake-tools"), ffmpeg = join(tools, "ffmpeg"), marker = join(root, ".cut/index-pids.json");
+    await mkdir(tools);
+    await writeFile(ffmpeg, `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000)"], { stdio:["ignore","inherit","inherit"] });
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ ffmpeg:process.pid, grandchild:grandchild.pid }) + "\\n", { flag:"wx" });
+process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setInterval(() => {}, 1000);
+`);
+    await chmod(ffmpeg, 0o755);
+    const preload = await writeCliFixtureBackendPreload(root);
+    const child = spawn(process.execPath, ["--require", preload, cli, "footage", "index", "media", "--out", ".cut/footage/index.json", "--json"], {
+      cwd: root,
+      env: { PATH: `${tools}${delimiter}${process.env.PATH ?? ""}`, CUT_FOOTAGE_HOME: join(root, "unused-home"), NO_COLOR: "1", FORCE_COLOR: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    child.stdout.on("data", (value: Buffer) => stdout.push(value));
+    child.stderr.on("data", (value: Buffer) => stderr.push(value));
+    const closed = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>((accept) => child.once("close", (code, terminalSignal) => accept({ code, signal: terminalSignal })));
+    const markerDeadline = Date.now() + 10_000;
+    while (!await lstat(marker).then(() => true, () => false)) {
+      if (Date.now() > markerDeadline) throw new Error("footage index did not launch ffmpeg");
+      await new Promise((accept) => setTimeout(accept, 10));
+    }
+    const pids = JSON.parse(await readFile(marker, "utf8")) as { ffmpeg: number; grandchild: number };
+    try {
+      assert.equal(child.kill(signal), true);
+      const terminal = await Promise.race([
+        closed,
+        new Promise<never>((_accept, reject) => { const timer = setTimeout(() => reject(new Error(`index ignored ${signal}`)), 5_000); timer.unref(); }),
+      ]);
+      assert.deepEqual(terminal, { code: 1, signal: null });
+      assert.equal(Buffer.concat(stderr).toString("utf8"), "");
+      const report = JSON.parse(Buffer.concat(stdout).toString("utf8"));
+      reports.push(report);
+      assert.equal(report.command, "footage index");
+      assert.equal(report.diagnostics[0].code, "CUT_FOOTAGE_BACKEND_PROTOCOL");
+      assert.match(report.diagnostics[0].message, /cancelled/u);
+      assert.equal(JSON.stringify(report).includes(root), false);
+      assert.equal(await waitForDead(pids.ffmpeg), true, "index ffmpeg process survived cancellation");
+      assert.equal(await waitForDead(pids.grandchild), true, "index ffmpeg grandchild survived cancellation");
+      const outputNames = await readdir(join(root, ".cut/footage"));
+      assert.equal(outputNames.some((name) => name === "index.json" || name === "index.vectors" || name.includes("staging")), false);
+    } finally {
+      for (const pid of [pids.ffmpeg, pids.grandchild]) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+      child.kill("SIGKILL");
+      await closed;
+    }
+  }
+  assert.deepEqual(reports[0], reports[1]);
+});
+
+async function cliSearchSignalFixture() {
+  const root = join(await mkdtemp(join(tmpdir(), "cut-footage-cli-search-signal-")), "project");
+  await createCutProject(root, "CLI search signal");
+  await copyFile(resolve("examples/media/demo.mp4"), join(root, "media/source.mp4"));
+  const backend = Object.freeze({
+    protocolVersion: 1 as const,
+    provider: cliFixtureHandshake.provider,
+    model: `${cliFixtureHandshake.model}@${cliFixtureHandshake.revision}+adapter.${cliFixtureHandshake.adapterSha256}`,
+    dimensions: cliFixtureHandshake.dimensions,
+    normalization: "l2" as const,
+  });
+  const plan = await planFootageSources({ projectRoot: root, locators: ["media/source.mp4"], backend });
+  const vectorBytes = Buffer.from(encodeCutFootageVectorArtifact({
+    dimensions: cliFixtureHandshake.dimensions,
+    planSha256: "c".repeat(64),
+    records: plan.chunks.map((chunk, ordinal) => {
+      const vector = new Float32Array(cliFixtureHandshake.dimensions);
+      vector[ordinal % vector.length] = 1;
+      return Object.freeze({ chunkId: chunk.id, vector });
+    }),
+  }));
+  const vectorLocator = ".cut/footage/index.vectors";
+  const body = Object.freeze({
+    format: "cut-footage-index" as const,
+    version: 1 as const,
+    root: "media",
+    sources: Object.freeze(plan.sources.map((source) => source.source)),
+    chunkPolicy: defaultFootageChunkPolicy,
+    chunks: Object.freeze(plan.chunks.map((chunk) => Object.freeze({
+      id: chunk.id, sourceLocator: chunk.sourceLocator, sourceSha256: chunk.sourceSha256, streamIndex: chunk.streamIndex, range: chunk.range,
+    }))),
+    backend,
+    vectorArtifact: Object.freeze({ locator: vectorLocator, bytes: vectorBytes.byteLength, sha256: createHash("sha256").update(vectorBytes).digest("hex") }),
+    creation: Object.freeze({ cutVersion: "0.4.0-test", backendProtocolVersion: 1 as const }),
+  });
+  const index = Object.freeze({ ...body, indexSha256: createHash("sha256").update(stableJsonStringify(body)).digest("hex") });
+  await mkdir(join(root, ".cut/footage"), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, ".cut/footage/index.json"), `${stableJsonStringify(index)}\n`),
+    writeFile(join(root, vectorLocator), vectorBytes),
+  ]);
+  return root;
+}
+
+async function writeHangingCliSidecar(root: string, marker: string, operation: "searchText" | "close") {
+  const script = join(root, `hanging-${operation}.mjs`);
+  await writeFile(script, `
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const handshake = ${JSON.stringify(cliFixtureHandshake)};
+process.stdout.write(JSON.stringify(handshake) + "\\n");
+let input = "", started = false;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+  while (input.includes("\\n")) {
+    const end = input.indexOf("\\n"), request = JSON.parse(input.slice(0, end)); input = input.slice(end + 1);
+    if (request.operation === ${JSON.stringify(operation)} && !started) {
+      started = true;
+      const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000)"], { stdio:["ignore","inherit","inherit"] });
+      writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ sidecar:process.pid, grandchild:grandchild.pid }) + "\\n", { flag:"wx" });
+      continue;
+    }
+    if (request.operation === "close") {
+      process.stdout.write(JSON.stringify({ format:"cut-footage-sidecar-response", version:1, id:request.id, operation:"close" }) + "\\n");
+      process.exit(0);
+    }
+  }
+});
+process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setInterval(() => {}, 1000);
+`);
+  return script;
+}
+
+test("footage search and doctor map cli signals to stable cancellation and kill their sidecar trees", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+  for (const command of ["search", "doctor"] as const) {
+    const reports: unknown[] = [];
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      const root = command === "search" ? await cliSearchSignalFixture() : await mkdtemp(join(tmpdir(), "cut-footage-cli-doctor-signal-"));
+      const marker = join(root, `${command}-pids.json`), sidecarScript = await writeHangingCliSidecar(root, marker, command === "search" ? "searchText" : "close");
+      const preload = await writeCliFixtureBackendPreload(root, sidecarScript);
+      const args = command === "search"
+        ? ["footage", "search", ".cut/footage/index.json", "--query", "dog", "--out", ".cut/footage/search.json", "--json"]
+        : ["footage", "doctor", "--json"];
+      const child = spawn(process.execPath, ["--require", preload, cli, ...args], {
+        cwd: root,
+        env: { PATH: process.env.PATH, CUT_FOOTAGE_HOME: join(root, "unused-home"), NO_COLOR: "1", FORCE_COLOR: "0" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdout: Buffer[] = [], stderr: Buffer[] = [];
+      child.stdout.on("data", (value: Buffer) => stdout.push(value));
+      child.stderr.on("data", (value: Buffer) => stderr.push(value));
+      const closed = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>((accept) => child.once("close", (code, terminalSignal) => accept({ code, signal: terminalSignal })));
+      const markerDeadline = Date.now() + 10_000;
+      while (!await lstat(marker).then(() => true, () => false)) {
+        if (Date.now() > markerDeadline) throw new Error(`footage ${command} did not reach its sidecar operation`);
+        await new Promise((accept) => setTimeout(accept, 10));
+      }
+      const pids = JSON.parse(await readFile(marker, "utf8")) as { sidecar: number; grandchild: number };
+      try {
+        assert.equal(child.kill(signal), true);
+        const terminal = await Promise.race([
+          closed,
+          new Promise<never>((_accept, reject) => { const timer = setTimeout(() => reject(new Error(`${command} ignored ${signal}`)), 5_000); timer.unref(); }),
+        ]);
+        assert.deepEqual(terminal, { code: 1, signal: null });
+        assert.equal(Buffer.concat(stderr).toString("utf8"), "");
+        const report = JSON.parse(Buffer.concat(stdout).toString("utf8"));
+        reports.push(report);
+        assert.equal(report.command, `footage ${command}`);
+        assert.equal(report.diagnostics[0].code, "CUT_FOOTAGE_BACKEND_PROTOCOL");
+        assert.match(report.diagnostics[0].message, /cancelled/u);
+        assert.equal(JSON.stringify(report).includes(root), false);
+        assert.equal(await waitForDead(pids.sidecar), true, `${command} sidecar process survived cancellation`);
+        assert.equal(await waitForDead(pids.grandchild), true, `${command} sidecar grandchild survived cancellation`);
+        if (command === "search") {
+          await assert.rejects(lstat(join(root, ".cut/footage/search.json")), { code: "ENOENT" });
+          assert.equal((await readdir(join(root, ".cut/footage"))).some((name) => name.includes("staging")), false);
+        }
+      } finally {
+        for (const pid of [pids.sidecar, pids.grandchild]) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+        child.kill("SIGKILL");
+        await closed;
+      }
+    }
+    assert.deepEqual(reports[0], reports[1]);
+  }
+});
+
+async function waitForSetupMarker(home: string) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() <= deadline) {
+    const payload = await readdir(home).then(
+      (names) => names.find((name) => name.startsWith(".local-clip-v1.payload-")),
+      () => undefined,
+    );
+    if (payload) {
+      const marker = join(home, payload, "setup-pids.json");
+      const contents = await readFile(marker, "utf8").catch(() => undefined);
+      if (contents !== undefined) return JSON.parse(contents) as { installer: number; grandchild: number };
+    }
+    await new Promise((accept) => setTimeout(accept, 10));
+  }
+  throw new Error("footage setup did not launch its locked npm installer");
+}
+
+test("footage setup maps SIGINT and SIGTERM to stable cancellation, kills its npm tree, and removes its payload", { timeout: 40_000, skip: process.platform === "win32" }, async () => {
+  const reports: unknown[] = [];
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const root = await mkdtemp(join(tmpdir(), `cut-footage-cli-setup-${signal.toLowerCase()}-`));
+    const home = join(root, "footage"), fakeNpm = join(root, "fake-npm.mjs");
+    await writeFile(fakeNpm, [
+      'import { spawn } from "node:child_process";',
+      'import { writeFile } from "node:fs/promises";',
+      'const grandchild = spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\",()=>{});process.on(\\"SIGINT\\",()=>{});setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "inherit"] });',
+      'await writeFile("setup-pids.json", JSON.stringify({ installer: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });',
+      'process.on("SIGTERM", () => {});',
+      'process.on("SIGINT", () => {});',
+      'setInterval(() => {}, 1000);',
+    ].join("\n"));
+    const child = spawn(process.execPath, [cli, "footage", "setup", "--backend", "local", "--json"], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        npm_execpath: fakeNpm,
+        CUT_FOOTAGE_HOME: home,
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    child.stdout.on("data", (value: Buffer) => stdout.push(value));
+    child.stderr.on("data", (value: Buffer) => stderr.push(value));
+    const closed = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>((accept) => {
+      child.once("close", (code, terminalSignal) => accept({ code, signal: terminalSignal }));
+    });
+    const pids = await waitForSetupMarker(home);
+    try {
+      assert.equal(child.kill(signal), true);
+      const terminal = await Promise.race([
+        closed,
+        new Promise<never>((_accept, reject) => {
+          const timer = setTimeout(() => reject(new Error(`setup ignored ${signal}`)), 5_000);
+          timer.unref();
+        }),
+      ]);
+      assert.deepEqual(terminal, { code: 1, signal: null });
+      assert.equal(Buffer.concat(stderr).toString("utf8"), "");
+      const report = JSON.parse(Buffer.concat(stdout).toString("utf8"));
+      reports.push(report);
+      assert.equal(report.command, "footage setup");
+      assert.equal(report.diagnostics[0].code, "CUT_FOOTAGE_PUBLISH");
+      assert.match(report.diagnostics[0].message, /cancelled/u);
+      assert.equal(JSON.stringify(report).includes(root), false);
+      assert.equal(await waitForDead(pids.installer), true, "setup npm process survived cancellation");
+      assert.equal(await waitForDead(pids.grandchild), true, "setup npm grandchild survived cancellation");
+      const names = await readdir(home);
+      assert.equal(names.includes("local-clip-v1"), false);
+      assert.equal(names.some((name) => name.startsWith(".local-clip-v1.payload-")), false);
+    } finally {
+      for (const pid of [pids.installer, pids.grandchild]) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+      child.kill("SIGKILL");
+      await closed;
+    }
+  }
+  assert.deepEqual(reports[0], reports[1]);
+});
 
 test("footage extract signals promptly terminate hanging ffprobe metadata and show-frames process groups", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
   for (const [phase, signal] of [["metadata", "SIGINT"], ["show-frames", "SIGTERM"]] as const) {

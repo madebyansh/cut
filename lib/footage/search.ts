@@ -330,6 +330,7 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
       catch (error) { closeError = error; }
     }
   }
+  abortIfRequested(options.signal);
   if (operationError !== undefined) throw operationError;
   if (closeError !== undefined) throw closeError;
   if (!candidates) protocol("$.candidates", "the local footage backend returned no candidate set.");

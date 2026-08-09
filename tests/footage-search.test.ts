@@ -340,6 +340,38 @@ test("search workflow honors cancellation after final index revalidation and bef
   await assert.rejects(readFile(join(fixture.root, ".cut/footage/search.json")), { code: "ENOENT" });
 });
 
+test("search maps sidecar operation and close errors caused by abort to the stable signal boundary", { timeout: 30_000 }, async () => {
+  for (const phase of ["operation", "close"] as const) {
+    const fixture = await workflowFixture(), controller = new AbortController();
+    const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+    const session: CutFootageSidecarSession = Object.freeze({
+      handshake: fixture.handshake,
+      pid: undefined,
+      async index() { throw new Error("not used by search"); },
+      async searchText() {
+        if (phase === "operation") {
+          controller.abort();
+          throw new CutFootageError("CUT_FOOTAGE_BACKEND_PROTOCOL", "$sidecar", "sidecar operation was cancelled");
+        }
+        return candidates;
+      },
+      async close() {
+        if (phase === "close") {
+          controller.abort();
+          throw new CutFootageError("CUT_FOOTAGE_BACKEND_PROTOCOL", "$sidecar", "sidecar operation was cancelled");
+        }
+      },
+    });
+    await assert.rejects(searchProjectFootage({
+      projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator: ".cut/footage/search.json",
+      query: "dog", backendInstall: fixture.install, signal: controller.signal,
+      __testHooks: { async startSidecar() { return session; } },
+    }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL"
+      && error.path === "$signal" && !error.message.includes(fixture.root));
+    await assert.rejects(lstat(join(fixture.root, ".cut/footage/search.json")), { code: "ENOENT" });
+  }
+});
+
 test("search workflow maps missing and empty index files to one stable path-free boundary", { timeout: 30_000 }, async () => {
   const fixture = await workflowFixture();
   const indexPath = join(fixture.root, fixture.indexLocator), errors: CutFootageError[] = [];

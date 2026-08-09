@@ -212,7 +212,7 @@ function codedCliError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
 }
 
-async function withFootageExtractionSignals<T>(operation: (signal: AbortSignal) => Promise<T>) {
+async function withFootageSignals<T>(operation: (signal: AbortSignal) => Promise<T>) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.once("SIGINT", abort);
@@ -566,13 +566,13 @@ async function main() {
   }
   validateCliInvocation(command, process.argv.slice(command.startsWith("otio-") || command.startsWith("legacy-") || command.startsWith("package-") || command.startsWith("agent-") || command.startsWith("asset-") || command.startsWith("footage-") ? 4 : 3));
   if (command === "footage-setup") {
-    const report = await setupCutFootageLocalBackend({ backend: option("--backend")! });
+    const report = await withFootageSignals((signal) => setupCutFootageLocalBackend({ backend: option("--backend")!, signal }));
     if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
     else console.log(`${green("✓")} local footage backend ${report.status} · ${report.identity.model}`);
     return;
   }
   if (command === "footage-doctor") {
-    const report = await collectCutFootageLocalDoctorReport();
+    const report = await withFootageSignals((signal) => collectCutFootageLocalDoctorReport({ signal }));
     if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
     else {
       for (const check of report.checks) {
@@ -585,12 +585,15 @@ async function main() {
     return;
   }
   if (command === "footage-index") {
-    const backend = await createCutFootageLocalIndexBackend();
-    const indexed = await indexProjectFootage({
-      projectRoot: process.cwd(),
-      rootLocator: subject!,
-      outputLocator: option("--out")!,
-      backend,
+    const indexed = await withFootageSignals(async (signal) => {
+      const backend = await createCutFootageLocalIndexBackend({ signal });
+      return indexProjectFootage({
+        projectRoot: process.cwd(),
+        rootLocator: subject!,
+        outputLocator: option("--out")!,
+        backend,
+        signal,
+      });
     });
     if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(indexed.index)}\n`);
     else {
@@ -600,13 +603,16 @@ async function main() {
     return;
   }
   if (command === "footage-search") {
-    const backendInstall = await inspectCutFootageLocalInstall();
-    const searched = await searchProjectFootage({
-      projectRoot: process.cwd(),
-      indexLocator: subject!,
-      outputLocator: option("--out")!,
-      query: option("--query")!,
-      backendInstall,
+    const searched = await withFootageSignals(async (signal) => {
+      const backendInstall = await inspectCutFootageLocalInstall({ signal });
+      return searchProjectFootage({
+        projectRoot: process.cwd(),
+        indexLocator: subject!,
+        outputLocator: option("--out")!,
+        query: option("--query")!,
+        backendInstall,
+        signal,
+      });
     });
     if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(searched.report)}\n`);
     else console.log(`${green("✓")} ${searched.report.matches.length} semantic match(es) → ${option("--out")!}`);
@@ -625,7 +631,7 @@ async function main() {
     }
     const handleText = option("--handles");
     const handles = handleText === undefined ? undefined : parseCutFootageHandle(handleText);
-    const extracted = await withFootageExtractionSignals((signal) => extractProjectFootage({
+    const extracted = await withFootageSignals((signal) => extractProjectFootage({
       projectRoot: process.cwd(),
       searchLocator: subject!,
       outputLocator: option("--out")!,
