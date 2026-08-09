@@ -34,7 +34,7 @@ export type CutFootageIndex = Readonly<{
   indexSha256: string;
 }>;
 export type CutFootageSearch = Readonly<{
-  format: "cut-footage-search"; version: 1; indexSha256: string;
+  format: "cut-footage-search"; version: 1; indexLocator: string; indexSha256: string;
   query: Readonly<{ text: string; thresholdPpm: number }>;
   matches: readonly Readonly<{ id: string; scorePpm: number; chunkIds: readonly string[]; sourceSelection: CutFootageSourceSelection; handles?: CutFootageHandles }>[];
   searchSha256: string;
@@ -169,7 +169,7 @@ export function parseCutFootageIndex(input: string | Uint8Array): CutFootageInde
 }
 
 export function parseCutFootageSearch(input: string | Uint8Array): CutFootageSearch {
-  const root = closed(decode(input), "$", ["format", "version", "indexSha256", "query", "matches", "searchSha256"]);
+  const root = closed(decode(input), "$", ["format", "version", "indexLocator", "indexSha256", "query", "matches", "searchSha256"]);
   if (root.format !== "cut-footage-search" || root.version !== 1) protocol("$", "must be cut-footage-search v1.");
   const query = closed(root.query, "$.query", ["text", "thresholdPpm"]), queryText = text(query.text, "$.query.text");
   if (queryText !== queryText.normalize("NFKC").trim() || !Number.isSafeInteger(query.thresholdPpm) || Number(query.thresholdPpm) < -1_000_000 || Number(query.thresholdPpm) > 1_000_000) protocol("$.query", "must contain normalized text and an integer thresholdPpm in -1000000..1000000.");
@@ -184,7 +184,7 @@ export function parseCutFootageSearch(input: string | Uint8Array): CutFootageSea
   });
   if (new Set(matches.map((match) => match.id)).size !== matches.length || !isSorted(matches, (left, right) => right.scorePpm - left.scorePpm || left.sourceSelection.locator.localeCompare(right.sourceSelection.locator) || compareRational(left.sourceSelection.range.start, right.sourceSelection.range.start) || compareRational(left.sourceSelection.range.end, right.sourceSelection.range.end) || left.id.localeCompare(right.id))) footageFail("CUT_FOOTAGE_MATCH", "$.matches", "must be deterministically ranked without duplicate IDs.");
   const searchSha256 = verifiedIdentity(root, "searchSha256", "$");
-  return Object.freeze({ format: "cut-footage-search", version: 1, indexSha256: sha256(root.indexSha256, "$.indexSha256"), query: Object.freeze({ text: queryText, thresholdPpm: Number(query.thresholdPpm) }), matches: Object.freeze(matches), searchSha256 });
+  return Object.freeze({ format: "cut-footage-search", version: 1, indexLocator: locator(root.indexLocator, "$.indexLocator"), indexSha256: sha256(root.indexSha256, "$.indexSha256"), query: Object.freeze({ text: queryText, thresholdPpm: Number(query.thresholdPpm) }), matches: Object.freeze(matches), searchSha256 });
 }
 
 function sameRange(left: CutFootageRange, right: CutFootageRange) {

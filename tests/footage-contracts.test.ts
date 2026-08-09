@@ -47,6 +47,7 @@ function searchFixture() {
   return signed({
     format: "cut-footage-search",
     version: 1,
+    indexLocator: ".cut/footage/harbour.json",
     indexSha256: index.indexSha256,
     query: { text: "cargo vessel", thresholdPpm: 250000 },
     matches: [{
@@ -83,6 +84,7 @@ test("footage v1 decoders preserve canonical identities and exact rational wire 
   const extract = parseCutFootageExtract(JSON.stringify(extractFixture()));
 
   assert.equal(index.indexSha256, indexFixture().indexSha256);
+  assert.equal(search.indexLocator, ".cut/footage/harbour.json");
   assert.equal(search.matches[0]!.scorePpm, 875000);
   assert.deepEqual(search.matches[0]!.sourceSelection.range, range("0", "3"));
   assert.equal(extract.label, "candidate-only-not-cut-lock");
@@ -98,6 +100,11 @@ test("footage report bindings prove selected chunks and extracts rather than tru
 
   assert.throws(
     () => validateCutFootageSearchAgainstIndex(index, { ...search, indexSha256: sha("f") }),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE",
+  );
+  const unsafeLocator = signed({ ...searchFixture(), indexLocator: "../harbour.json" }, "searchSha256");
+  assert.throws(
+    () => parseCutFootageSearch(JSON.stringify(unsafeLocator)),
     (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE",
   );
   const forgedSearch = { ...search, matches: [{ ...search.matches[0]!, chunkIds: ["harbour-001"] }] };

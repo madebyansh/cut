@@ -144,6 +144,7 @@ export function rankCutFootageCandidates(
 /** Constructs, validates, and serializes one canonical LF-terminated search report. */
 export function buildCutFootageSearchReport(
   index: CutFootageIndex,
+  indexLocator: string,
   query: unknown,
   candidates: readonly CutFootageSidecarCandidate[],
   options: Readonly<{ thresholdPpm: number; limit: number }>,
@@ -151,6 +152,7 @@ export function buildCutFootageSearchReport(
   const body = Object.freeze({
     format: "cut-footage-search" as const,
     version: 1 as const,
+    indexLocator,
     indexSha256: index.indexSha256,
     query: Object.freeze({ text: normalizeCutFootageQuery(query), thresholdPpm: options.thresholdPpm }),
     matches: rankCutFootageCandidates(index, candidates, options),
@@ -277,7 +279,7 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
   await options.__testHooks?.afterInference?.();
   abortIfRequested(options.signal);
   await revalidateSearchIndex(projectRoot, index);
-  const built = buildCutFootageSearchReport(index, query, candidates, bounds);
+  const built = buildCutFootageSearchReport(index, indexLocator, query, candidates, bounds);
   try {
     await writeProjectArtifacts([projectRoot], [Object.freeze({ destination: outputPath, contents: built.bytes, role: "footage-search" })]);
   } catch { footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search report could not be published."); }

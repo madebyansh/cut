@@ -30,7 +30,7 @@ function indexFixture() {
 function searchFixture() {
   const index = indexFixture();
   return signed({
-    format: "cut-footage-search", version: 1, indexSha256: index.indexSha256, searchSha256: "ignored", query: { text: "cargo vessel", thresholdPpm: 250000 },
+    format: "cut-footage-search", version: 1, indexLocator: ".cut/footage/harbour.json", indexSha256: index.indexSha256, searchSha256: "ignored", query: { text: "cargo vessel", thresholdPpm: 250000 },
     matches: [{ id: "match-cargo-000", scorePpm: 875000, chunkIds: ["harbour-000"], sourceSelection: { locator: "media/harbour.mov", sha256: sha("1"), streamIndex: 0, range: range("0", "3") }, handles: { head: time("1"), tail: time("1") } }],
   }, "searchSha256");
 }

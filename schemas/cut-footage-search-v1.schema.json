@@ -2,8 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema",
   "$id": "https://cut.dev/schemas/cut-footage-search-v1.schema.json",
   "type": "object", "additionalProperties": false,
-  "required": ["format", "version", "indexSha256", "query", "matches", "searchSha256"],
-  "properties": { "format": { "const": "cut-footage-search" }, "version": { "const": 1 }, "indexSha256": { "$ref": "#/definitions/sha256" }, "query": { "$ref": "#/definitions/query" }, "matches": { "type": "array", "maxItems": 100, "items": { "$ref": "#/definitions/match" } }, "searchSha256": { "$ref": "#/definitions/sha256" } },
+  "required": ["format", "version", "indexLocator", "indexSha256", "query", "matches", "searchSha256"],
+  "properties": { "format": { "const": "cut-footage-search" }, "version": { "const": 1 }, "indexLocator": { "$ref": "#/definitions/locator" }, "indexSha256": { "$ref": "#/definitions/sha256" }, "query": { "$ref": "#/definitions/query" }, "matches": { "type": "array", "maxItems": 100, "items": { "$ref": "#/definitions/match" } }, "searchSha256": { "$ref": "#/definitions/sha256" } },
   "definitions": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
     "locator": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/]+(?:/[^/]+)*$" },

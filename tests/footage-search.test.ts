@@ -99,10 +99,11 @@ test("ranking permits an honest deterministic empty match list", () => {
 
 test("search report bytes and identity do not depend on candidate enumeration", () => {
   const index = fixtureIndex(), candidates = index.chunks.map((chunk, ordinal) => ({ chunkId: chunk.id, score: 0.9 - ordinal / 10 }));
-  const left = buildCutFootageSearchReport(index, "  Ｄｏｇ outdoors  ", candidates, { thresholdPpm: 0, limit: 10 });
-  const right = buildCutFootageSearchReport(index, "Dog outdoors", [...candidates].reverse(), { thresholdPpm: 0, limit: 10 });
+  const left = buildCutFootageSearchReport(index, ".cut/footage/index.json", "  Ｄｏｇ outdoors  ", candidates, { thresholdPpm: 0, limit: 10 });
+  const right = buildCutFootageSearchReport(index, ".cut/footage/index.json", "Dog outdoors", [...candidates].reverse(), { thresholdPpm: 0, limit: 10 });
   assert.deepEqual(left, right);
   assert.equal(left.report.query.text, "Dog outdoors");
+  assert.equal(left.report.indexLocator, ".cut/footage/index.json");
   assert.equal(left.bytes.at(-1), 10);
   assert.match(left.report.searchSha256, /^[a-f0-9]{64}$/u);
 });
