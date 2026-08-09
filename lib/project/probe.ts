@@ -116,6 +116,7 @@ export type ProbeNativeProcessExecution = Readonly<{
   collector: ReferenceNativeProcessCollector;
   context: ReferenceNativeProcessContext;
   signal?: AbortSignal;
+  terminateProcessTree?: boolean;
 }>;
 export type ProbeDecodedAudioNativeProcessExecutions = Readonly<{
   pcm: ProbeNativeProcessExecution;
@@ -171,7 +172,7 @@ async function spawnProbeNativeProcess(
   execution?: ProbeNativeProcessExecution,
 ): Promise<ProbeNativeProcessControl> {
   if (execution?.signal?.aborted) throw new CutProjectError("CUTP2008", `${tool} native process launch was cancelled.`);
-  const detached = execution?.signal !== undefined && platform() !== "win32";
+  const detached = execution?.terminateProcessTree === true && platform() !== "win32";
   const controlledOptions = detached ? { ...options, detached: true } : options;
   let child: ChildProcess;
   if (execution === undefined) child = spawn(executable, args, controlledOptions);

@@ -40,16 +40,16 @@ async function controlledExecution(
   resourceBytes: number,
   operation: ReferenceNativeProcessContext["operation"],
   streamIndex?: number,
+  options: Readonly<{ signal?: AbortSignal; terminateProcessTree?: boolean }> = {},
 ) {
   const authority = await bindReferenceNativeMediaTool("ffprobe", wrapper);
   const collector = createReferenceNativeProcessCollector(authority);
-  const controller = new AbortController();
   return Object.freeze({
     collector,
     execution: Object.freeze({
       authority,
       collector,
-      signal: controller.signal,
+      ...options,
       context: Object.freeze({
         ordinal: 0,
         operation,
@@ -66,6 +66,14 @@ async function controlledExecution(
 function pidAlive(pid: number) {
   try { process.kill(pid, 0); return true; }
   catch { return false; }
+}
+
+function ownsProcessGroup(pid: number) {
+  try { process.kill(-pid, 0); return true; }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") return false;
+    throw error;
+  }
 }
 
 async function waitForMarker(path: string) {
@@ -110,15 +118,21 @@ async function boundedFailure(operation: Promise<unknown>, marker: string) {
   assert.equal(outcome.kind, "rejected", "probe failure left a pipe-owning process tree alive");
   if (outcome.kind !== "rejected") throw new Error("unreachable probe outcome");
   assert.ok(Date.now() - started < 3_000);
-  assert.equal(await waitForDead(pids.wrapper), true, "ffprobe wrapper survived termination");
-  assert.equal(await waitForDead(pids.grandchild), true, "pipe-owning ffprobe grandchild survived termination");
+  const [wrapperDead, grandchildDead] = await Promise.all([waitForDead(pids.wrapper), waitForDead(pids.grandchild)]);
+  if (!wrapperDead || !grandchildDead) {
+    for (const pid of [pids.wrapper, pids.grandchild]) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  }
+  assert.equal(wrapperDead, true, "ffprobe wrapper survived termination");
+  assert.equal(grandchildDead, true, "pipe-owning ffprobe grandchild survived termination");
   return outcome.error;
 }
 
-test("500ms metadata timeout and output overflow terminate the complete ffprobe process group", { timeout: 20_000, skip: process.platform === "win32" }, async () => {
+test("no-signal metadata timeout and output overflow terminate the opted-in ffprobe process group", { timeout: 20_000, skip: process.platform === "win32" }, async () => {
   for (const mode of ["metadata-timeout", "metadata-output"] as const) {
     const item = await fixture(mode);
-    const bound = await controlledExecution(item.wrapper, item.sourceBytes, "media-metadata");
+    const bound = await controlledExecution(item.wrapper, item.sourceBytes, "media-metadata", undefined, { terminateProcessTree: true });
     const error = await boundedFailure(probeProjectMedia(
       item.root,
       "media/source.mp4",
@@ -132,12 +146,12 @@ test("500ms metadata timeout and output overflow terminate the complete ffprobe 
   }
 });
 
-test("decoded-cadence parse failure terminates the complete ffprobe process group", { timeout: 15_000, skip: process.platform === "win32" }, async () => {
+test("no-signal decoded-cadence parse failure terminates the opted-in ffprobe process group", { timeout: 15_000, skip: process.platform === "win32" }, async () => {
   const item = await fixture("cadence-parse");
   const media = await probeProjectMedia(item.root, "media/source.mp4");
   const stream = media.streams.find((candidate) => candidate.type === "video");
   assert.ok(stream);
-  const bound = await controlledExecution(item.wrapper, item.sourceBytes, "decoded-video-cadence", stream.index);
+  const bound = await controlledExecution(item.wrapper, item.sourceBytes, "decoded-video-cadence", stream.index, { terminateProcessTree: true });
   const error = await boundedFailure(probeProjectDecodedVideoCadence(
     item.root,
     "media/source.mp4",
@@ -149,5 +163,31 @@ test("decoded-cadence parse failure terminates the complete ffprobe process grou
   ), item.marker);
   assert.ok(error instanceof CutProjectError);
   assert.equal(error.code, "CUTP2014");
+  await assert.rejects(bound.collector.seal());
+});
+
+test("an AbortSignal alone leaves ordinary probe execution in the caller process group", { timeout: 10_000, skip: process.platform === "win32" }, async () => {
+  const item = await fixture("metadata-timeout");
+  const controller = new AbortController();
+  const bound = await controlledExecution(item.wrapper, item.sourceBytes, "media-metadata", undefined, { signal: controller.signal });
+  const operation = probeProjectMedia(
+    item.root,
+    "media/source.mp4",
+    { timeoutMs: 5_000 },
+    {},
+    bound.execution,
+  );
+  const observed = operation.then(() => undefined, () => undefined);
+  const pids = await waitForMarker(item.marker);
+  let ownsGroup: boolean;
+  try { ownsGroup = ownsProcessGroup(pids.wrapper); }
+  finally {
+    controller.abort();
+    for (const pid of [pids.wrapper, pids.grandchild]) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await observed;
+  }
+  assert.equal(ownsGroup, false, "an ordinary controlled probe was globally detached without an explicit tree-control opt-in");
   await assert.rejects(bound.collector.seal());
 });

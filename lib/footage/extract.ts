@@ -471,7 +471,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       initialBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
       abortIfRequested(options.signal);
       initialMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
         context: mediaContext(0, "media-metadata", indexedSource),
       });
       abortIfRequested(options.signal);
@@ -492,7 +492,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
           { maxFileBytes: maximumIndexedSourceBytes },
           { ffprobe: ffprobe.executablePath },
           {
-            authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
+            authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
             context: mediaContext(1, "decoded-video-cadence", indexedSource, currentStream.index),
           },
         );
@@ -551,7 +551,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       if (outputBytes.file.bytes !== heldStageBytes || outputBytes.file.sha256 !== heldStageSha) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed during byte verification.");
       abortIfRequested(options.signal);
       outputMedia = await probeProjectMedia(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes }, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
         context: mediaContext(2, "media-metadata", outputBytes.file, undefined, "proxy"),
       });
       if (outputMedia.streams.length !== 1) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.output.streams", "the staged output must contain exactly one public video stream.");
@@ -562,7 +562,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
         footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.output.streams[0]", "must be one zero-start High-profile H.264 stream at the selected source frame rate.");
       }
       outputCadence = await probeProjectDecodedVideoCadence(projectRoot, stageLocator, outputMedia, 0, {}, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
         context: mediaContext(3, "decoded-video-cadence", outputBytes.file, 0, "proxy"),
       });
       const outputDuration = decodedVideoCadenceDuration(outputCadence, outputStream);
@@ -573,7 +573,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       abortIfRequested(options.signal);
       const postBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
       const postMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
         context: mediaContext(4, "media-metadata", indexedSource),
       });
       normalizeSourceProbe(postBytes, postMedia, indexedSource);
