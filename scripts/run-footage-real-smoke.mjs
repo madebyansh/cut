@@ -69,6 +69,7 @@ export function createFootageRealSmokePlan(options) {
     cutStep("extract", ["footage", "extract", ".cut/footage/search.json", "--match", "1", "--out", "selects/dog.mp4", "--json"], "extract.json", 10 * 60_000),
     cutStep("extract-no-clobber", ["footage", "extract", ".cut/footage/search.json", "--match", "1", "--out", "selects/dog.mp4", "--json"], "extract-no-clobber.json", 2 * 60_000, {
       expectedExit: "failure",
+      expectedDiagnostic: Object.freeze({ format: "cut-cli-diagnostics", command: "footage extract", code: "CUT_FOOTAGE_OUTPUT_EXISTS" }),
       preserveOutputs: Object.freeze([
         resolve(project, "selects/dog.mp4"),
         resolve(project, "selects/dog.mp4.cut-footage.json"),
@@ -116,6 +117,15 @@ function executionResult(value, name) {
   return value;
 }
 
+function hasExpectedDiagnostic(result, expected) {
+  let report;
+  try { report = JSON.parse(result.stdout); }
+  catch { return false; }
+  return result.stderr === "" && result.stdout.endsWith("\n") && report?.format === expected.format && report?.version === 1
+    && report?.command === expected.command && report?.status === "fail" && Array.isArray(report?.diagnostics)
+    && report.diagnostics.length === 1 && report.diagnostics[0]?.code === expected.code && report.diagnostics[0]?.severity === "error";
+}
+
 export async function executeFootageRealSmokePlan(plan, operations) {
   if (!Array.isArray(plan) || plan.length < 1 || plan.length > 64) throw new Error("CUT_FOOTAGE_REAL_SMOKE: execution plan is invalid");
   if (!operations || typeof operations.execute !== "function") throw new Error("CUT_FOOTAGE_REAL_SMOKE: process executor is required");
@@ -134,6 +144,9 @@ export async function executeFootageRealSmokePlan(plan, operations) {
     if (item.expectedExit === "failure") {
       if (result.exitCode === 0) throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} was expected to fail`);
       if (result.exitCode !== 1) throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} expected exit 1 but received ${result.exitCode}`);
+      if (item.expectedDiagnostic && !hasExpectedDiagnostic(result, item.expectedDiagnostic)) {
+        throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} returned the wrong failure diagnostic`);
+      }
     } else if (result.exitCode !== 0) {
       throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} failed with exit ${result.exitCode}`);
     }

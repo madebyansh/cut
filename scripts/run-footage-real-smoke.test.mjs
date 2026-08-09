@@ -39,6 +39,9 @@ test("real smoke plan allows network only for the first setup and drives the ins
     assert.ok(Number.isSafeInteger(step.timeoutMs) && step.timeoutMs >= 60_000 && step.timeoutMs <= 30 * 60_000, step.name);
   }
   assert.equal(plan[9].expectedExit, "failure");
+  assert.deepEqual(plan[9].expectedDiagnostic, {
+    format: "cut-cli-diagnostics", command: "footage extract", code: "CUT_FOOTAGE_OUTPUT_EXISTS",
+  });
   assert.deepEqual(plan[9].preserveOutputs, [
     resolve(root, "project/selects/dog.mp4"),
     resolve(root, "project/selects/dog.mp4.cut-footage.json"),
@@ -66,7 +69,11 @@ test("real smoke executor captures reports and proves the failed second extracti
   await writeFile(manifest, "manifest-before");
   const plan = [
     Object.freeze({ name: "success", command: "/bin/true", args: Object.freeze([]), cwd: sandbox, environment: Object.freeze({}), reportPath: join(reports, "success.json") }),
-    Object.freeze({ name: "extract-no-clobber", command: "/bin/false", args: Object.freeze([]), cwd: sandbox, environment: Object.freeze({}), reportPath: join(reports, "failure.json"), expectedExit: "failure", preserveOutputs: Object.freeze([clip, manifest]) }),
+    Object.freeze({
+      name: "extract-no-clobber", command: "/bin/false", args: Object.freeze([]), cwd: sandbox, environment: Object.freeze({}), reportPath: join(reports, "failure.json"),
+      expectedExit: "failure", expectedDiagnostic: Object.freeze({ format: "cut-cli-diagnostics", command: "footage extract", code: "CUT_FOOTAGE_OUTPUT_EXISTS" }),
+      preserveOutputs: Object.freeze([clip, manifest]),
+    }),
   ];
   const seen = [];
   await executeFootageRealSmokePlan(plan, {
@@ -74,12 +81,12 @@ test("real smoke executor captures reports and proves the failed second extracti
       seen.push(step.name);
       return step.name === "success"
         ? { exitCode: 0, stdout: "{\"status\":\"pass\"}\n", stderr: "" }
-        : { exitCode: 1, stdout: "{\"status\":\"fail\"}\n", stderr: "" };
+        : { exitCode: 1, stdout: "{\"command\":\"footage extract\",\"diagnostics\":[{\"code\":\"CUT_FOOTAGE_OUTPUT_EXISTS\",\"severity\":\"error\"}],\"format\":\"cut-cli-diagnostics\",\"status\":\"fail\",\"version\":1}\n", stderr: "" };
     },
   });
   assert.deepEqual(seen, ["success", "extract-no-clobber"]);
   assert.equal(await readFile(join(reports, "success.json"), "utf8"), "{\"status\":\"pass\"}\n");
-  assert.equal(await readFile(join(reports, "failure.json"), "utf8"), "{\"status\":\"fail\"}\n");
+  assert.match(await readFile(join(reports, "failure.json"), "utf8"), /CUT_FOOTAGE_OUTPUT_EXISTS/u);
   assert.equal(await readFile(clip, "utf8"), "clip-before");
   assert.equal(await readFile(manifest, "utf8"), "manifest-before");
 });
@@ -90,10 +97,14 @@ test("real smoke executor rejects a successful no-clobber probe or a changed pro
   await writeFile(output, "before");
   const failureStep = Object.freeze({
     name: "extract-no-clobber", command: "/bin/false", args: Object.freeze([]), cwd: sandbox, environment: Object.freeze({}),
-    expectedExit: "failure", preserveOutputs: Object.freeze([output]),
+    expectedExit: "failure", expectedDiagnostic: Object.freeze({ format: "cut-cli-diagnostics", command: "footage extract", code: "CUT_FOOTAGE_OUTPUT_EXISTS" }),
+    preserveOutputs: Object.freeze([output]),
   });
   await assert.rejects(executeFootageRealSmokePlan([failureStep], { execute: async () => ({ exitCode: 0, stdout: "", stderr: "" }) }), /was expected to fail/u);
   await assert.rejects(executeFootageRealSmokePlan([failureStep], { execute: async () => ({ exitCode: 124, stdout: "", stderr: "" }) }), /expected exit 1/u);
+  await assert.rejects(executeFootageRealSmokePlan([failureStep], { execute: async () => ({
+    exitCode: 1, stdout: "{\"format\":\"cut-cli-diagnostics\",\"version\":1,\"command\":\"footage extract\",\"status\":\"fail\",\"diagnostics\":[{\"code\":\"CUT_FOOTAGE_PUBLISH\",\"severity\":\"error\"}]}\n", stderr: "",
+  }) }), /wrong failure diagnostic/u);
   await assert.rejects(executeFootageRealSmokePlan([failureStep], { execute: async () => {
     await writeFile(output, "changed");
     return { exitCode: 1, stdout: "", stderr: "" };
@@ -124,7 +135,9 @@ test("real smoke runner starts from empty roots, protects the CUT project, and r
         await writeFile(join(options.projectRoot, "selects/dog.mp4"), "clip");
         await writeFile(join(options.projectRoot, "selects/dog.mp4.cut-footage.json"), "manifest");
       }
-      return { exitCode: step.expectedExit === "failure" ? 1 : 0, stdout: "{}\n", stderr: "" };
+      return step.expectedExit === "failure"
+        ? { exitCode: 1, stdout: "{\"format\":\"cut-cli-diagnostics\",\"version\":1,\"command\":\"footage extract\",\"status\":\"fail\",\"diagnostics\":[{\"code\":\"CUT_FOOTAGE_OUTPUT_EXISTS\",\"severity\":\"error\"}]}\n", stderr: "" }
+        : { exitCode: 0, stdout: "{}\n", stderr: "" };
     },
     async assertSmoke(project, reports, home) {
       assert.equal(project, options.projectRoot);
