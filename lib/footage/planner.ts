@@ -56,6 +56,7 @@ export type FootagePlannerTestHooks = Readonly<{
 
 export const defaultFootageChunkPolicy: FootageChunkPolicy = Object.freeze({ duration: rational(8), overlap: rational(2) });
 const footagePlannerProbeConcurrency = 4;
+const maximumFootageSamplePoints = cutFootageLimits.maximumChunks * 8;
 
 function abortIfRequested(signal: AbortSignal | undefined) {
   if (signal?.aborted) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$signal", "the footage source-planning operation was cancelled.");
@@ -111,10 +112,22 @@ function chunkId(source: FootageNormalizedSource, range: CutFootageRange) {
   return `chunk-${digest({ sourceLocator: source.source.locator, sourceSha256: source.source.sha256, streamIndex: source.selectedStreamIndex, range })}`;
 }
 
-function samplePoints(range: CutFootageRange, grid: Rational): readonly Rational[] {
+function boundedSamplePointCount(range: CutFootageRange, maximumPoints: number) {
+  if (!Number.isSafeInteger(maximumPoints) || maximumPoints < 0 || maximumPoints > maximumFootageSamplePoints) {
+    footageFail("CUT_FOOTAGE_RANGE", "$samplePoints", "has one invalid remaining sample-point budget.");
+  }
+  const extent = subtractRational(range.end, range.start);
+  const numerator = BigInt(extent.numerator), denominator = BigInt(extent.denominator);
+  const count = (numerator + denominator - 1n) / denominator;
+  if (count > BigInt(maximumPoints)) footageFail("CUT_FOOTAGE_RANGE", "$samplePoints", "exceeds the bounded footage sample-point count.");
+  return Number(count);
+}
+
+function samplePoints(range: CutFootageRange, grid: Rational, maximumPoints: number): readonly Rational[] {
+  const count = boundedSamplePointCount(range, maximumPoints);
   const result: Rational[] = [];
   let slotStart = range.start;
-  while (compareRational(slotStart, range.end) < 0) {
+  for (let ordinal = 0; ordinal < count; ordinal += 1) {
     const slotEnd = compareRational(addRational(slotStart, rational(1)), range.end) < 0 ? addRational(slotStart, rational(1)) : range.end;
     const middle = addRational(slotStart, divideRational(subtractRational(slotEnd, slotStart), rational(2)));
     let point = floorFootageTimeToGrid(middle, grid);
@@ -129,14 +142,32 @@ function samplePoints(range: CutFootageRange, grid: Rational): readonly Rational
   return Object.freeze(result);
 }
 
+function planFootageChunksWithin(
+  source: FootageNormalizedSource,
+  policy: FootageChunkPolicy,
+  maximumChunks: number,
+  maximumSamplePoints: number,
+) {
+  const ranges = planFootageChunkRanges(
+    { duration: source.searchableDuration, chunkDuration: policy.duration, overlap: policy.overlap, grid: source.grid },
+    maximumChunks,
+  );
+  const chunks: FootagePlannedChunk[] = [];
+  let remainingSamplePoints = maximumSamplePoints;
+  for (const range of ranges) {
+    const points = samplePoints(range, source.grid, remainingSamplePoints);
+    remainingSamplePoints -= points.length;
+    chunks.push(Object.freeze({
+      id: chunkId(source, range), sourceLocator: source.source.locator, sourceSha256: source.source.sha256,
+      streamIndex: source.selectedStreamIndex, range, samplePoints: points,
+    }));
+  }
+  return Object.freeze(chunks);
+}
+
 /** Plans v1's fixed 8s/2s chunk law and one grid-aligned frame point per second slot. */
 export function planFootageChunks(source: FootageNormalizedSource, policy: FootageChunkPolicy = defaultFootageChunkPolicy): readonly FootagePlannedChunk[] {
-  const ranges = planFootageChunkRanges({ duration: source.searchableDuration, chunkDuration: policy.duration, overlap: policy.overlap, grid: source.grid });
-  if (ranges.length > cutFootageLimits.maximumChunks) footageFail("CUT_FOOTAGE_RANGE", "$chunks", "exceeds the bounded footage chunk count.");
-  return Object.freeze(ranges.map((range) => Object.freeze({
-    id: chunkId(source, range), sourceLocator: source.source.locator, sourceSha256: source.source.sha256,
-    streamIndex: source.selectedStreamIndex, range, samplePoints: samplePoints(range, source.grid),
-  })));
+  return planFootageChunksWithin(source, policy, cutFootageLimits.maximumChunks, maximumFootageSamplePoints);
 }
 
 /** Returns reuse only when an entire source's public probe, backend, policy, and chunk set are unchanged. */
@@ -151,7 +182,11 @@ export function reusableFootageChunkIds(
   const priorSource = prior.sources.find((candidate) => candidate.locator === source.source.locator);
   if (!priorSource || !same(priorSource, source.source)) return Object.freeze([]);
   const priorChunks = prior.chunks.filter((chunk) => chunk.sourceLocator === source.source.locator);
-  if (priorChunks.length !== chunks.length || !chunks.every((chunk) => priorChunks.some((previous) => sameChunk(chunk, previous)))) return Object.freeze([]);
+  const priorChunksById = new Map(priorChunks.map((chunk) => [chunk.id, chunk]));
+  if (priorChunks.length !== chunks.length || !chunks.every((chunk) => {
+    const previous = priorChunksById.get(chunk.id);
+    return previous !== undefined && sameChunk(chunk, previous);
+  })) return Object.freeze([]);
   return Object.freeze(chunks.map((chunk) => chunk.id));
 }
 
@@ -206,7 +241,10 @@ async function probeFootageSourceWithEvent(
   } catch (error) {
     if (primaryError === undefined) primaryError = error;
   }
-  if (primaryError !== undefined) throw primaryError;
+  if (primaryError !== undefined) {
+    abortIfRequested(signal);
+    throw primaryError;
+  }
   return source!;
 }
 
@@ -261,14 +299,26 @@ export async function planFootageSources(options: Readonly<{
   catch (error) { sealError = error; }
   try { await authority.verify(); }
   catch (error) { verifyError = error; }
-  if (primaryError !== undefined) throw primaryError;
+  if (primaryError !== undefined) {
+    abortIfRequested(options.signal);
+    throw primaryError;
+  }
   abortIfRequested(options.signal);
   if (sealError !== undefined || verifyError !== undefined) {
     footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.locators", "the bound FFprobe source-planning lifecycle could not be verified.");
   }
-  const chunks = sources.flatMap((source) => planFootageChunks(source, policy));
-  if (chunks.length > cutFootageLimits.maximumChunks) footageFail("CUT_FOOTAGE_RANGE", "$chunks", "exceeds the bounded footage chunk count.");
-  const reusableChunkIds = sources.flatMap((source) => reusableFootageChunkIds(source, chunks.filter((chunk) => chunk.sourceLocator === source.source.locator), options.priorIndex, options.backend, policy));
-  const samplePointList = chunks.flatMap((chunk) => chunk.samplePoints.map((time) => Object.freeze({ chunkId: chunk.id, time })));
+  const chunks: FootagePlannedChunk[] = [], reusableChunkIds: string[] = [];
+  let remainingChunks = cutFootageLimits.maximumChunks, remainingSamplePoints = maximumFootageSamplePoints;
+  for (const source of sources) {
+    const sourceChunks = planFootageChunksWithin(source, policy, remainingChunks, remainingSamplePoints);
+    chunks.push(...sourceChunks);
+    remainingChunks -= sourceChunks.length;
+    remainingSamplePoints -= sourceChunks.reduce((total, chunk) => total + chunk.samplePoints.length, 0);
+    reusableChunkIds.push(...reusableFootageChunkIds(source, sourceChunks, options.priorIndex, options.backend, policy));
+  }
+  const samplePointList: Array<Readonly<{ chunkId: string; time: Rational }>> = [];
+  for (const chunk of chunks) {
+    for (const time of chunk.samplePoints) samplePointList.push(Object.freeze({ chunkId: chunk.id, time }));
+  }
   return Object.freeze({ sources: Object.freeze(sources), chunks: Object.freeze(chunks), samplePoints: Object.freeze(samplePointList), reusableChunkIds: Object.freeze(reusableChunkIds) });
 }

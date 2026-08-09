@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { rational } from "../lib/language/rational";
-import { createCutProject, type CutByteProbe, type CutMediaProbe } from "../lib/project";
+import { createCutProject, CutProjectError, type CutByteProbe, type CutMediaProbe } from "../lib/project";
 import { stableJsonStringify } from "../lib/core/stable";
 import { cutFootageLimits, parseCutFootageIndex, type CutFootageIndex } from "../lib/footage/contracts";
 import {
@@ -132,6 +133,29 @@ test("chunk planner uses exact eight-second chunks, two-second overlap, and one 
     && BigInt(point.numerator) * BigInt(chunk.range.end.denominator) < BigInt(chunk.range.end.numerator) * BigInt(point.denominator))));
 });
 
+test("chunk and sample planning reject hostile rational extents before unbounded allocation", { timeout: 10_000 }, () => {
+  const plannerPath = resolve("dist-cli/lib/footage/planner.js"), rationalPath = resolve("dist-cli/lib/language/rational.js");
+  const script = `
+const { planFootageChunks } = require(${JSON.stringify(plannerPath)});
+const { rational } = require(${JSON.stringify(rationalPath)});
+const mode = process.argv[1];
+const duration = rational(1000000000000);
+const source = Object.freeze({
+  source: Object.freeze({ locator:"media/huge.mp4", bytes:1, sha256:"a".repeat(64), duration, probeSha256:"b".repeat(64), streams:Object.freeze([]) }),
+  selectedStreamIndex:0, grid:rational(1, 30), searchableDuration:duration,
+});
+const policy = mode === "samples" ? Object.freeze({ duration, overlap:rational(0) }) : undefined;
+try { planFootageChunks(source, policy); process.exitCode = 2; }
+catch (error) { process.stdout.write(String(error && error.code)); }
+`;
+  for (const mode of ["chunks", "samples"]) {
+    const child = spawnSync(process.execPath, ["-e", script, mode], { encoding: "utf8", timeout: 2_000 });
+    assert.equal(child.signal, null, `${mode} planning exceeded its bounded rejection deadline`);
+    assert.equal(child.status, 0, `${mode}: ${child.stderr}`);
+    assert.equal(child.stdout, "CUT_FOOTAGE_RANGE", mode);
+  }
+});
+
 test("planner probes a real fixture through bound ffprobe authority and returns public locators only", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
   const root = join(await mkdtemp(join(tmpdir(), "cut-footage-plan-")), "project");
   await createCutProject(root, "Footage planner");
@@ -149,6 +173,36 @@ test("planner rejects a non-media locator before probing", async () => {
     planFootageSources({ projectRoot: "/not-used", locators: ["media/notes.txt"], backend }),
     /MP4 or MOV/u,
   );
+});
+
+test("planner maps a slow multi-chunk byte-hash abort to the stable signal boundary and preserves non-cancellation probe errors", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await plannerFixture(1), controller = new AbortController();
+  await truncate(join(fixture.root, fixture.locators[0]!), 256 * 1024 * 1024);
+  try {
+    let timer: NodeJS.Timeout | undefined;
+    await assert.rejects(planFootageSources({
+      projectRoot: fixture.root,
+      locators: fixture.locators,
+      backend,
+      signal: controller.signal,
+      __testHooks: {
+        probeEvent(event) {
+          if (event.phase === "start") timer = setTimeout(() => controller.abort(), 5);
+        },
+      },
+    }), (error: unknown) => error instanceof Error
+      && "code" in error && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL"
+      && "path" in error && error.path === "$signal");
+    if (timer) clearTimeout(timer);
+
+    await assert.rejects(planFootageSources({
+      projectRoot: fixture.root,
+      locators: ["media/missing.mp4"],
+      backend,
+    }), (error: unknown) => error instanceof CutProjectError && error.code === "CUTP1015");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 });
 
 test("planner rejects source counts above the public index bound before probing", async () => {

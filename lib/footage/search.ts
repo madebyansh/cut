@@ -209,16 +209,20 @@ function backendFromHandshake(handshake: CutFootageLocalInstall["manifest"]["han
   });
 }
 
-async function revalidateSearchIndex(projectRoot: string, index: CutFootageIndex) {
+async function revalidateSearchIndex(projectRoot: string, index: CutFootageIndex, signal?: AbortSignal) {
   try {
-    await loadCutFootageVectorArtifact(projectRoot, index);
+    abortIfRequested(signal);
+    await loadCutFootageVectorArtifact(projectRoot, index, signal === undefined ? {} : { signal });
+    abortIfRequested(signal);
     const plan = await planFootageSources({
       projectRoot,
       locators: index.sources.map((source) => source.locator),
       backend: index.backend,
       priorIndex: index,
       chunkPolicy: index.chunkPolicy,
+      ...(signal === undefined ? {} : { signal }),
     });
+    abortIfRequested(signal);
     const publicChunks = plan.chunks.map((chunk) => Object.freeze({
       id: chunk.id,
       sourceLocator: chunk.sourceLocator,
@@ -231,23 +235,37 @@ async function revalidateSearchIndex(projectRoot: string, index: CutFootageIndex
       || stableJsonStringify(publicChunks) !== stableJsonStringify(index.chunks)) {
       footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof CutFootageError && error.path === "$signal") throw error;
+    abortIfRequested(signal);
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
   }
 }
 
-async function resolveSearchVectorArtifact(projectRoot: string, index: CutFootageIndex) {
-  try { return await resolveProjectFile(projectRoot, index.vectorArtifact.locator); }
-  catch {
-    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
-  }
-}
-
-async function loadSearchIndex(projectRoot: string, indexLocator: string) {
+async function resolveSearchVectorArtifact(projectRoot: string, index: CutFootageIndex, signal?: AbortSignal) {
   try {
+    abortIfRequested(signal);
+    const path = await resolveProjectFile(projectRoot, index.vectorArtifact.locator);
+    abortIfRequested(signal);
+    return path;
+  } catch (error) {
+    if (error instanceof CutFootageError && error.path === "$signal") throw error;
+    abortIfRequested(signal);
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
+  }
+}
+
+async function loadSearchIndex(projectRoot: string, indexLocator: string, signal?: AbortSignal) {
+  try {
+    abortIfRequested(signal);
     const path = await resolveProjectFile(projectRoot, indexLocator);
-    return Object.freeze({ path, index: await loadCutFootageIndexFile(path) });
-  } catch {
+    abortIfRequested(signal);
+    const index = await loadCutFootageIndexFile(path);
+    abortIfRequested(signal);
+    return Object.freeze({ path, index });
+  } catch (error) {
+    if (error instanceof CutFootageError && error.path === "$signal") throw error;
+    abortIfRequested(signal);
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index could not be loaded as one current bounded report.");
   }
 }
@@ -269,11 +287,11 @@ async function verifyCurrentSearchAuthority(
   signal: AbortSignal | undefined,
 ) {
   abortIfRequested(signal);
-  const current = await loadSearchIndex(projectRoot, indexLocator);
+  const current = await loadSearchIndex(projectRoot, indexLocator, signal);
   assertCurrentSearchIndex(admitted, current);
-  await revalidateSearchIndex(projectRoot, current.index);
+  await revalidateSearchIndex(projectRoot, current.index, signal);
   abortIfRequested(signal);
-  assertCurrentSearchIndex(admitted, await loadSearchIndex(projectRoot, indexLocator));
+  assertCurrentSearchIndex(admitted, await loadSearchIndex(projectRoot, indexLocator, signal));
   abortIfRequested(signal);
 }
 
@@ -287,9 +305,10 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
     limit: options.limit ?? cutFootageSearchDefaults.limit,
   });
   const projectRoot = await realpath(resolve(options.projectRoot));
+  abortIfRequested(options.signal);
   const indexLocator = validateProjectLocator(options.indexLocator, "footage index locator");
   const outputLocator = validateProjectLocator(options.outputLocator, "footage search output locator");
-  const admittedIndex = await loadSearchIndex(projectRoot, indexLocator);
+  const admittedIndex = await loadSearchIndex(projectRoot, indexLocator, options.signal);
   const index = admittedIndex.index;
   const foldedOutput = foldedLocator(outputLocator);
   if ([indexLocator, index.vectorArtifact.locator, ...index.sources.map((source) => source.locator)]
@@ -298,14 +317,21 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
   }
   const outputPath = resolve(projectRoot, outputLocator);
   let expectedOutput: StagedFileDestinationSnapshot;
-  try { expectedOutput = await snapshotStagedFileDestination(outputPath); }
-  catch { footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search output could not be admitted safely."); }
-  const install = options.backendInstall ?? await inspectCutFootageLocalInstall();
+  try {
+    expectedOutput = await snapshotStagedFileDestination(outputPath);
+    abortIfRequested(options.signal);
+  } catch (error) {
+    if (error instanceof CutFootageError && error.path === "$signal") throw error;
+    abortIfRequested(options.signal);
+    footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search output could not be admitted safely.");
+  }
+  const install = options.backendInstall ?? await inspectCutFootageLocalInstall(options.signal === undefined ? {} : { signal: options.signal });
+  abortIfRequested(options.signal);
   const installIdentity = cutFootageBackendIdentityFromInstall(install);
   if (stableJsonStringify(installIdentity) !== stableJsonStringify(index.backend)) {
     footageFail("CUT_FOOTAGE_MODEL_MISMATCH", "$backend", "the installed local footage backend does not match the index identity.");
   }
-  await revalidateSearchIndex(projectRoot, index);
+  await revalidateSearchIndex(projectRoot, index, options.signal);
   abortIfRequested(options.signal);
 
   let session: CutFootageSidecarSession | undefined;
@@ -320,7 +346,7 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
       footageFail("CUT_FOOTAGE_MODEL_MISMATCH", "$backend", "the running local footage backend does not match the index identity.");
     }
     candidates = await session.searchText({
-      artifact: { path: await resolveSearchVectorArtifact(projectRoot, index), bytes: index.vectorArtifact.bytes, sha256: index.vectorArtifact.sha256 },
+      artifact: { path: await resolveSearchVectorArtifact(projectRoot, index, options.signal), bytes: index.vectorArtifact.bytes, sha256: index.vectorArtifact.sha256 },
       query,
     });
   } catch (error) { operationError = error; }

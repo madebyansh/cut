@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { createCutProject } from "../lib/project";
+import type { CutFootageIndex } from "../lib/footage/contracts";
 import { runFfmpeg } from "../lib/runtime/reference/ffmpeg";
 import { CutFootageError } from "../lib/footage/diagnostics";
 import {
@@ -165,6 +167,36 @@ test("CUTFVEC1 rejects signed negative zero and empty record sets", () => {
   );
 });
 
+test("bounded vector loading cancels one slow multi-chunk read at the stable signal boundary", { timeout: 10_000 }, async () => {
+  const root = join(await mkdtemp(join(tmpdir(), "cut-footage-vector-cancel-")), "project");
+  await createCutProject(root, "Vector read cancellation");
+  const locator = ".cut/footage/large.vectors", path = join(root, locator);
+  await mkdir(join(root, ".cut/footage"), { recursive: true });
+  await writeFile(path, Buffer.from([0]));
+  await truncate(path, 128 * 1024 * 1024);
+  const index = {
+    vectorArtifact: { locator, bytes: 128 * 1024 * 1024, sha256: digest("a") },
+    backend: { dimensions },
+    chunks: [{ id: "chunk-a" }],
+  } as unknown as CutFootageIndex;
+  const controller = new AbortController();
+  const cancellableLoad = loadCutFootageVectorArtifact as unknown as (
+    projectRoot: string,
+    footageIndex: CutFootageIndex,
+    control: Readonly<{ signal?: AbortSignal }>,
+  ) => Promise<unknown>;
+  try {
+    const started = Date.now(), operation = cancellableLoad(root, index, { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 5);
+    await assert.rejects(operation, (error: unknown) => error instanceof CutFootageError
+      && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL" && error.path === "$signal");
+    clearTimeout(timer);
+    assert.ok(Date.now() - started < 2_000, "bounded vector cancellation was not observed promptly");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("FFmpeg frame batches isolate one first frame per planned window before numbering", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
   const fixture = await fixtureProject(false);
   const calls: FootageFrameBatchRequest[] = [];
@@ -230,6 +262,31 @@ setTimeout(() => process.exit(0), 2000);
   await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   assert.throws(() => process.kill(grandchildPid!, 0), (error: unknown) => error !== null && typeof error === "object" && "code" in error && error.code === "ESRCH");
   assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors") || name.includes("staging")), []);
+});
+
+test("index library maps cancellation during slow source admission to the stable signal boundary and leaves no pair", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false), controller = new AbortController();
+  await truncate(join(fixture.root, "media/a.mp4"), 256 * 1024 * 1024);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const operation = indexProjectFootage({
+      projectRoot: fixture.root,
+      rootLocator: "media",
+      outputLocator: fixture.output,
+      backend: backend(fixture.script),
+      signal: controller.signal,
+      ffmpegExecutable: process.execPath,
+      __testHooks: { runFrameBatch: frameHook([]) },
+    });
+    timer = setTimeout(() => controller.abort(), 5);
+    await assert.rejects(operation, (error: unknown) => error instanceof CutFootageError
+      && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL" && error.path === "$signal");
+    const names = await readdir(join(fixture.root, ".cut/footage")).catch(() => []);
+    assert.equal(names.some((name) => name === "index.json" || name === "index.vectors" || name.includes("staging")), false);
+  } finally {
+    if (timer) clearTimeout(timer);
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 });
 
 test("abort at the final publication boundary leaves no footage pair", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
@@ -367,6 +424,39 @@ test("publication admission preserves concurrent same-inode index and vector wri
     assert.equal(after.ino, before.ino, "the test must mutate the admitted destination inode in place");
     assert.deepEqual(await readFile(target), concurrentBytes, "CUT must preserve the concurrent writer's exact bytes");
   }
+});
+
+test("publication rolls back an in-place overwrite of the newly promoted vector before finalize", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  await indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook([]) },
+  });
+  const sourcePath = join(fixture.root, "media/a.mp4"), indexPath = join(fixture.root, fixture.output);
+  const vectorPath = join(fixture.root, ".cut/footage/index.vectors"), priorPair = await Promise.all([readFile(indexPath), readFile(vectorPath)]);
+  await appendFile(sourcePath, Buffer.from([0]));
+  const marker = Buffer.from("same-inode promoted vector overwrite\n", "utf8");
+  let injected = false;
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath,
+    __testHooks: {
+      runFrameBatch: frameHook([]),
+      publication: {
+        async fault(point) {
+          if (injected || point.phase !== "promotion" || point.timing !== "after" || point.role !== "footage-vector") return;
+          injected = true;
+          const before = await lstat(vectorPath, { bigint: true });
+          await writeFile(vectorPath, marker);
+          const after = await lstat(vectorPath, { bigint: true });
+          assert.equal(after.dev, before.dev);
+          assert.equal(after.ino, before.ino, "the injected writer must retain the newly promoted vector inode");
+        },
+      },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
+  assert.equal(injected, true);
+  assert.deepEqual(await Promise.all([readFile(indexPath), readFile(vectorPath)]), priorPair);
 });
 
 test("source authority changes inside either publication verifier phase restore the prior pair", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
@@ -517,6 +607,61 @@ test("full reuse seals all 301 sources after a timer mutation during the final a
       }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
     } finally { await mutation; }
     assert.deepEqual(await Promise.all([readFile(indexPath), readFile(vectorPath)]), priorPair);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("full reuse rejects an external same-inode destination writer during the 301-source final seal", { timeout: 120_000, skip: process.platform === "win32" }, async () => {
+  const root = join(await mkdtemp(join(tmpdir(), "cut-footage-indexer-reuse-destination-seal-")), "project");
+  await createCutProject(root, "Footage full reuse destination seal");
+  const locators = Array.from({ length: 301 }, (_unused, index) => `media/${String(index).padStart(3, "0")}.mp4`);
+  await Promise.all(locators.map((locator) => copyFile(resolve("examples/media/demo.mp4"), join(root, locator))));
+  const script = await deterministicSidecar(join(root, ".cut")), output = ".cut/footage/index.json";
+  try {
+    await indexProjectFootage({
+      projectRoot: root, rootLocator: "media", outputLocator: output, backend: backend(script),
+      ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook([]) },
+    });
+    const indexPath = join(root, output), validIndex = await readFile(indexPath);
+    const marker = Buffer.alloc(validIndex.byteLength, 0x79), timestampPath = join(root, ".cut/destination-mutated.txt");
+    const before = await lstat(indexPath, { bigint: true });
+    const code = 'const { writeFileSync } = require("node:fs"); const [path,timestamp,bytes] = process.argv.slice(1); process.send("ready"); process.once("message", () => { writeFileSync(path, Buffer.alloc(Number(bytes), 0x79)); writeFileSync(timestamp, String(Date.now())); process.exit(0); });';
+    const mutator = spawn(process.execPath, ["-e", code, indexPath, timestampPath, String(validIndex.byteLength)], {
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    await new Promise<void>((resolveReady, rejectReady) => {
+      mutator.once("message", (message) => message === "ready" ? resolveReady() : rejectReady(new Error("destination mutator sent an invalid readiness marker")));
+      mutator.once("error", rejectReady);
+    });
+    const mutation = new Promise<void>((resolveMutation, rejectMutation) => {
+      mutator.once("error", rejectMutation);
+      mutator.once("close", (exitCode, signal) => exitCode === 0 && signal === null
+        ? resolveMutation()
+        : rejectMutation(new Error(`destination mutator failed: ${exitCode ?? signal}`)));
+    });
+    try {
+      await assert.rejects(indexProjectFootage({
+        projectRoot: root, rootLocator: "media", outputLocator: output, backend: backend(script),
+        ffmpegExecutable: process.execPath,
+        __testHooks: {
+          afterFirstFullReuseOutputSeal() {
+            mutator.send("mutate");
+            const deadline = Date.now() + 5_000;
+            while (!existsSync(timestampPath)) {
+              if (Date.now() > deadline) throw new Error("external destination writer did not finish at the sync seal seam");
+            }
+          },
+        },
+      }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
+      await mutation;
+    } finally {
+      if (mutator.exitCode === null && mutator.signalCode === null) mutator.kill("SIGKILL");
+    }
+    const after = await lstat(indexPath, { bigint: true });
+    assert.equal(after.dev, before.dev);
+    assert.equal(after.ino, before.ino, "the external writer must retain the admitted destination inode");
+    assert.deepEqual(await readFile(indexPath), marker);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

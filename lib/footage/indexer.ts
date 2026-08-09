@@ -88,6 +88,7 @@ export type FootageIndexerTestHooks = Readonly<{
   beforeSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
   afterSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
   beforePublication?: (plan: FootagePlan) => void | Promise<void>;
+  afterFirstFullReuseOutputSeal?: () => void;
   publication?: StagedFileTransactionTestHooks;
 }>;
 
@@ -281,25 +282,39 @@ function sealPlannedSourceAuthority(
   }
 }
 
+function sealPairAuthority(
+  expected: Readonly<{ index: FileEvidence; vector: FileEvidence }>,
+  indexPath: string,
+  vectorPath: string,
+  signal?: AbortSignal,
+) {
+  try {
+    abortIfRequested(signal);
+    const indexMetadata = lstatSync(indexPath, { bigint: true }), vectorMetadata = lstatSync(vectorPath, { bigint: true });
+    if (!sameSourceMetadata(indexMetadata, expected.index) || !sameSourceMetadata(vectorMetadata, expected.vector)
+      || realpathSync(indexPath) !== indexPath || realpathSync(vectorPath) !== vectorPath) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the verified footage index/vector pair changed at its final authority seal.");
+    }
+    abortIfRequested(signal);
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the final footage index/vector authority seal could not be verified.");
+  }
+}
+
 function sealFullReuseAuthority(
   prior: PriorPair,
   indexPath: string,
   vectorPath: string,
   snapshots: ReadonlyMap<string, PlannedSourceSnapshot>,
   signal?: AbortSignal,
+  hooks?: FootageIndexerTestHooks,
 ) {
-  try {
-    abortIfRequested(signal);
-    const indexMetadata = lstatSync(indexPath, { bigint: true }), vectorMetadata = lstatSync(vectorPath, { bigint: true });
-    if (!sameSourceMetadata(indexMetadata, prior.indexEvidence) || !sameSourceMetadata(vectorMetadata, prior.vectorEvidence)
-      || realpathSync(indexPath) !== indexPath || realpathSync(vectorPath) !== vectorPath) {
-      footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the verified prior footage pair changed at the final reuse seal.");
-    }
-    sealPlannedSourceAuthority(snapshots, signal);
-  } catch (error) {
-    if (error instanceof CutFootageError) throw error;
-    footageFail("CUT_FOOTAGE_INDEX_STALE", "$reuse", "the final full-reuse authority seal could not be verified.");
-  }
+  const expected = Object.freeze({ index: prior.indexEvidence, vector: prior.vectorEvidence });
+  sealPairAuthority(expected, indexPath, vectorPath, signal);
+  hooks?.afterFirstFullReuseOutputSeal?.();
+  sealPlannedSourceAuthority(snapshots, signal);
+  sealPairAuthority(expected, indexPath, vectorPath, signal);
 }
 
 async function verifyFullReuseAuthority(
@@ -308,13 +323,14 @@ async function verifyFullReuseAuthority(
   vectorPath: string,
   snapshots: ReadonlyMap<string, PlannedSourceSnapshot>,
   signal?: AbortSignal,
+  hooks?: FootageIndexerTestHooks,
 ) {
   abortIfRequested(signal);
-  await recheckPriorPair(prior, indexPath, vectorPath);
+  await recheckPriorPair(prior, indexPath, vectorPath, signal);
   abortIfRequested(signal);
   await verifyPlannedSourceMetadata(snapshots);
   abortIfRequested(signal);
-  sealFullReuseAuthority(prior, indexPath, vectorPath, snapshots, signal);
+  sealFullReuseAuthority(prior, indexPath, vectorPath, snapshots, signal, hooks);
 }
 
 function modelIdentity(handshake: CutFootageSidecarStart["expectedHandshake"]): FootageBackendIdentity {
@@ -460,22 +476,37 @@ export function encodeCutFootageVectorArtifact(artifact: CutFootageVectorArtifac
   return encodeRecords(artifact.dimensions, artifact.planSha256, artifact.records.map((record) => ({ ...record, canonicalizeZero: true })));
 }
 
-async function readRegularFile(path: string, maximumBytes: number): Promise<Readonly<{ bytes: Buffer; evidence: FileEvidence }>> {
+async function readRegularFile(path: string, maximumBytes: number, signal?: AbortSignal): Promise<Readonly<{ bytes: Buffer; evidence: FileEvidence }>> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
+    abortIfRequested(signal);
     if (typeof fsConstants.O_NOFOLLOW !== "number") footageFail("CUT_FOOTAGE_INDEX_STALE", "$artifact", "the host cannot perform a no-follow artifact read.");
     handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    abortIfRequested(signal);
     const before = await handle.stat({ bigint: true });
+    abortIfRequested(signal);
     if (!before.isFile() || before.size < 1n || before.size > BigInt(maximumBytes) || before.size > BigInt(Number.MAX_SAFE_INTEGER)) {
       footageFail("CUT_FOOTAGE_INDEX_STALE", "$artifact", "must be one bounded regular no-follow file.");
     }
-    const bytes = await handle.readFile(), after = await handle.stat({ bigint: true });
+    const byteLength = Number(before.size), bytes = Buffer.allocUnsafe(byteLength), digest = createHash("sha256");
+    let position = 0;
+    while (position < byteLength) {
+      abortIfRequested(signal);
+      const length = Math.min(sourceHashBufferBytes, byteLength - position);
+      const { bytesRead } = await handle.read(bytes, position, length, position);
+      abortIfRequested(signal);
+      if (bytesRead < 1) footageFail("CUT_FOOTAGE_INDEX_STALE", "$artifact", "changed during its bounded read.");
+      digest.update(bytes.subarray(position, position + bytesRead));
+      position += bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    abortIfRequested(signal);
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || bytes.byteLength !== Number(before.size)) {
       footageFail("CUT_FOOTAGE_INDEX_STALE", "$artifact", "changed during its bounded read.");
     }
     return Object.freeze({
       bytes,
-      evidence: Object.freeze({ bytes: bytes.byteLength, sha256: sha256(bytes), dev: before.dev, ino: before.ino, size: before.size, mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs }),
+      evidence: Object.freeze({ bytes: bytes.byteLength, sha256: digest.digest("hex"), dev: before.dev, ino: before.ino, size: before.size, mtimeNs: before.mtimeNs, ctimeNs: before.ctimeNs }),
     });
   } catch (error) {
     if (error instanceof CutFootageError) throw error;
@@ -483,14 +514,41 @@ async function readRegularFile(path: string, maximumBytes: number): Promise<Read
   } finally { await handle?.close().catch(() => undefined); }
 }
 
+async function verifyExactPairBytes(
+  expected: Readonly<{ indexBytes: Buffer; vectorBytes: Buffer }>,
+  indexPath: string,
+  vectorPath: string,
+  signal?: AbortSignal,
+): Promise<Readonly<{ index: FileEvidence; vector: FileEvidence }>> {
+  abortIfRequested(signal);
+  const [index, vector] = await Promise.all([
+    readRegularFile(indexPath, cutFootageLimits.maximumBytes, signal),
+    readRegularFile(vectorPath, maximumVectorBytes, signal),
+  ]);
+  abortIfRequested(signal);
+  if (!index.bytes.equals(expected.indexBytes) || !vector.bytes.equals(expected.vectorBytes)) {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the footage index/vector pair does not retain its exact expected bytes and file authority.");
+  }
+  return Object.freeze({ index: index.evidence, vector: vector.evidence });
+}
+
 /** Loads, hashes, and independently parses the vector artifact bound by an index. */
-export async function loadCutFootageVectorArtifact(projectRoot: string, index: CutFootageIndex): Promise<CutFootageVectorArtifact> {
+export async function loadCutFootageVectorArtifact(
+  projectRoot: string,
+  index: CutFootageIndex,
+  control: Readonly<{ signal?: AbortSignal }> = {},
+): Promise<CutFootageVectorArtifact> {
+  abortIfRequested(control.signal);
   const path = await resolveProjectFile(projectRoot, index.vectorArtifact.locator);
-  const loaded = await readRegularFile(path, maximumVectorBytes);
+  abortIfRequested(control.signal);
+  const loaded = await readRegularFile(path, maximumVectorBytes, control.signal);
   if (loaded.evidence.bytes !== index.vectorArtifact.bytes || loaded.evidence.sha256 !== index.vectorArtifact.sha256) {
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$.vectorArtifact", "does not match the index byte length and SHA-256.");
   }
-  return parseCutFootageVectorArtifact(loaded.bytes, { dimensions: index.backend.dimensions, chunkIds: index.chunks.map((chunk) => chunk.id) });
+  abortIfRequested(control.signal);
+  const artifact = parseCutFootageVectorArtifact(loaded.bytes, { dimensions: index.backend.dimensions, chunkIds: index.chunks.map((chunk) => chunk.id) });
+  abortIfRequested(control.signal);
+  return artifact;
 }
 
 function vectorLocatorFor(indexLocator: string) {
@@ -525,16 +583,19 @@ async function loadPriorPair(
   vectorLocator: string,
   indexPath: string,
   vectorPath: string,
+  signal?: AbortSignal,
 ): Promise<PriorPair | undefined> {
+  abortIfRequested(signal);
   const [indexMetadata, vectorMetadata] = await Promise.all([optionalMetadata(indexPath), optionalMetadata(vectorPath)]);
+  abortIfRequested(signal);
   if (!indexMetadata && !vectorMetadata) return undefined;
   if (!indexMetadata || !vectorMetadata || indexMetadata.isSymbolicLink() || vectorMetadata.isSymbolicLink()
     || !indexMetadata.isFile() || !vectorMetadata.isFile()) {
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the existing footage index/vector destination is not one complete regular no-follow pair.");
   }
   const [indexLoaded, vectorLoaded] = await Promise.all([
-    readRegularFile(indexPath, cutFootageLimits.maximumBytes),
-    readRegularFile(vectorPath, maximumVectorBytes),
+    readRegularFile(indexPath, cutFootageLimits.maximumBytes, signal),
+    readRegularFile(vectorPath, maximumVectorBytes, signal),
   ]);
   let index: CutFootageIndex;
   try { index = parseCutFootageIndex(indexLoaded.bytes); }
@@ -558,15 +619,22 @@ function sameFileEvidence(left: FileEvidence, right: FileEvidence) {
     && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 
-async function recheckPriorPair(prior: PriorPair | undefined, indexPath: string, vectorPath: string) {
+function samePromotedFileOrigin(left: FileEvidence, right: FileEvidence) {
+  return left.bytes === right.bytes && left.sha256 === right.sha256 && left.dev === right.dev && left.ino === right.ino
+    && left.size === right.size && left.mtimeNs === right.mtimeNs;
+}
+
+async function recheckPriorPair(prior: PriorPair | undefined, indexPath: string, vectorPath: string, signal?: AbortSignal) {
+  abortIfRequested(signal);
   if (!prior) {
     const [indexMetadata, vectorMetadata] = await Promise.all([optionalMetadata(indexPath), optionalMetadata(vectorPath)]);
+    abortIfRequested(signal);
     if (indexMetadata || vectorMetadata) footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "a footage destination appeared during indexing.");
     return;
   }
   const [index, vector] = await Promise.all([
-    readRegularFile(indexPath, cutFootageLimits.maximumBytes),
-    readRegularFile(vectorPath, maximumVectorBytes),
+    readRegularFile(indexPath, cutFootageLimits.maximumBytes, signal),
+    readRegularFile(vectorPath, maximumVectorBytes, signal),
   ]);
   if (!sameFileEvidence(index.evidence, prior.indexEvidence) || !sameFileEvidence(vector.evidence, prior.vectorEvidence)) {
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the verified prior footage pair changed during indexing.");
@@ -604,8 +672,8 @@ function compareTime(left: Rational, right: Rational) {
   return compareRational(left, right);
 }
 
-async function inspectFrame(path: string) {
-  const loaded = await readRegularFile(path, maximumFrameBytes);
+async function inspectFrame(path: string, signal?: AbortSignal) {
+  const loaded = await readRegularFile(path, maximumFrameBytes, signal);
   return Object.freeze({ path, bytes: loaded.evidence.bytes, sha256: loaded.evidence.sha256 });
 }
 
@@ -709,7 +777,7 @@ async function extractChangedFrames(options: Readonly<{
             footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", group.source.source.locator, "did not produce exactly one numbered PNG for every requested frame window.");
           }
           for (const [index, point] of batch.entries()) {
-            const evidence = await inspectFrame(outputPaths[index]!);
+            const evidence = await inspectFrame(outputPaths[index]!, options.signal);
             totalFrameBytes += evidence.bytes;
             if (totalFrameBytes > maximumStagedFrameBytes) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$frames", "exceeded the staged frame byte budget.");
             frames.set(sampleKey(group.source.source.locator, group.source.selectedStreamIndex, point), evidence);
@@ -827,7 +895,7 @@ async function indexDelta(options: Readonly<{
   if (operationError !== undefined) throw operationError;
   if (closeError !== undefined) throw closeError;
   if (!response) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$sidecar", "did not return vector artifact evidence.");
-  const loaded = await readRegularFile(artifactPath, maximumVectorBytes);
+  const loaded = await readRegularFile(artifactPath, maximumVectorBytes, options.signal);
   if (loaded.evidence.bytes !== response.bytes || loaded.evidence.sha256 !== response.sha256
     || response.recordCount !== options.changedChunkIds.length || response.dimensions !== options.backend.sidecar.expectedHandshake.dimensions) {
     footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$sidecar.artifact", "does not match the sidecar response evidence.");
@@ -872,7 +940,7 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
   const parentLocator = dirname(indexLocator).split(sep).join("/");
   const outputParent = parentLocator === "." ? canonicalProjectRoot : await ensureProjectWriteDirectory(canonicalProjectRoot, parentLocator);
   const indexPath = resolve(outputParent, basename(indexLocator)), vectorPath = resolve(outputParent, basename(vectorLocator));
-  const prior = await loadPriorPair(rootLocator, vectorLocator, indexPath, vectorPath);
+  const prior = await loadPriorPair(rootLocator, vectorLocator, indexPath, vectorPath, options.signal);
   const locators = await discoverProjectFootage(
     canonicalProjectRoot,
     rootLocator,
@@ -940,11 +1008,11 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
     await verifyPlannedSourceHashes(sourceSnapshots, options.signal);
     await options.__testHooks?.afterSourceRecheck?.(plan);
     if (prior && prior.indexBytes.equals(indexBytes) && prior.vectorBytes.equals(vectorBytes)) {
-      await verifyFullReuseAuthority(prior, indexPath, vectorPath, sourceSnapshots, options.signal);
+      await verifyFullReuseAuthority(prior, indexPath, vectorPath, sourceSnapshots, options.signal, options.__testHooks);
       return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);
     }
     abortIfRequested(options.signal);
-    await recheckPriorPair(prior, indexPath, vectorPath);
+    await recheckPriorPair(prior, indexPath, vectorPath, options.signal);
     abortIfRequested(options.signal);
     await verifyPlannedSourceMetadata(sourceSnapshots);
     abortIfRequested(options.signal);
@@ -953,15 +1021,52 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
     await verifyPlannedSourceMetadata(sourceSnapshots);
     const expectedDestinations = await publicationDestinationSnapshots(prior, indexPath, vectorPath);
     abortIfRequested(options.signal);
+    const stagedPairEvidence = await verifyExactPairBytes(
+      Object.freeze({ indexBytes, vectorBytes }),
+      stagedIndex,
+      stagedVector,
+      options.signal,
+    );
+    abortIfRequested(options.signal);
     const publications: readonly StagedFilePublication[] = Object.freeze([
       Object.freeze({ staged: stagedVector, destination: vectorPath, order: 100, role: "footage-vector", expectedDestinationSnapshot: expectedDestinations.vector }),
       Object.freeze({ staged: stagedIndex, destination: indexPath, order: 200, role: "footage-index", expectedDestinationSnapshot: expectedDestinations.index }),
     ]);
-    const verifyPublicationAuthority = async () => {
+    const verifyPublicationAuthority = async (phase: "before-promotion" | "before-finalize") => {
       abortIfRequested(options.signal);
+      if (phase === "before-promotion") {
+        const currentStageEvidence = await verifyExactPairBytes(
+          Object.freeze({ indexBytes, vectorBytes }),
+          stagedIndex,
+          stagedVector,
+          options.signal,
+        );
+        if (!sameFileEvidence(currentStageEvidence.index, stagedPairEvidence.index)
+          || !sameFileEvidence(currentStageEvidence.vector, stagedPairEvidence.vector)) {
+          footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the exact staged footage pair changed before promotion.");
+        }
+        await verifyPlannedSourceMetadata(sourceSnapshots);
+        abortIfRequested(options.signal);
+        sealPairAuthority(currentStageEvidence, stagedIndex, stagedVector, options.signal);
+        sealPlannedSourceAuthority(sourceSnapshots, options.signal);
+        sealPairAuthority(currentStageEvidence, stagedIndex, stagedVector, options.signal);
+        return;
+      }
+      const promotedPairEvidence = await verifyExactPairBytes(
+        Object.freeze({ indexBytes, vectorBytes }),
+        indexPath,
+        vectorPath,
+        options.signal,
+      );
+      if (!samePromotedFileOrigin(promotedPairEvidence.index, stagedPairEvidence.index)
+        || !samePromotedFileOrigin(promotedPairEvidence.vector, stagedPairEvidence.vector)) {
+        footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the promoted footage pair does not retain its staged inode and exact bytes.");
+      }
       await verifyPlannedSourceMetadata(sourceSnapshots);
       abortIfRequested(options.signal);
+      sealPairAuthority(promotedPairEvidence, indexPath, vectorPath, options.signal);
       sealPlannedSourceAuthority(sourceSnapshots, options.signal);
+      sealPairAuthority(promotedPairEvidence, indexPath, vectorPath, options.signal);
     };
     try {
       if (options.__testHooks?.publication) {
@@ -983,6 +1088,7 @@ export async function indexProjectFootage(options: IndexProjectFootageOptions): 
     return await indexProjectFootageOperation(options);
   } catch (error) {
     if (error instanceof CutFootageError) throw error;
+    abortIfRequested(options.signal);
     footageFail("CUT_FOOTAGE_PUBLISH", "$", "the footage index operation failed at a bounded local I/O boundary.");
   }
 }

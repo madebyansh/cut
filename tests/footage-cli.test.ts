@@ -512,6 +512,68 @@ test("footage search and doctor map cli signals to stable cancellation and kill 
   }
 });
 
+test("footage search cancellation drains revalidation FFprobe and kills its complete process tree", { timeout: 20_000, skip: process.platform === "win32" }, async () => {
+  const root = await cliSearchSignalFixture(), marker = join(root, ".cut/search-revalidation-probe-pids.json");
+  const probe = await writeHangingFfprobe(root, "metadata", marker);
+  const preload = await writeCliFixtureBackendPreload(root);
+  const output = ".cut/footage/search-cancelled.json";
+  const child = spawn(process.execPath, [
+    "--require", preload, cli, "footage", "search", ".cut/footage/index.json",
+    "--query", "dog", "--out", output, "--json",
+  ], {
+    cwd: root,
+    env: {
+      PATH: `${probe.tools}${delimiter}${process.env.PATH ?? ""}`,
+      CUT_FOOTAGE_HOME: join(root, "unused-home"),
+      CUT_TEST_PROBE_PHASE: probe.phase,
+      CUT_TEST_PROBE_MARKER: marker,
+      CUT_TEST_REAL_FFPROBE: probe.realFfprobe,
+      NO_COLOR: "1",
+      FORCE_COLOR: "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout: Buffer[] = [], stderr: Buffer[] = [];
+  child.stdout.on("data", (value: Buffer) => stdout.push(value));
+  child.stderr.on("data", (value: Buffer) => stderr.push(value));
+  const closed = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>((accept) => {
+    child.once("close", (code, terminalSignal) => accept({ code, signal: terminalSignal }));
+  });
+  const deadline = Date.now() + 10_000;
+  while (!await lstat(marker).then(() => true, () => false)) {
+    if (Date.now() > deadline) throw new Error("search revalidation FFprobe did not launch");
+    await new Promise((accept) => setTimeout(accept, 10));
+  }
+  const pids = JSON.parse(await readFile(marker, "utf8")) as { wrapper: number; grandchild: number };
+  try {
+    assert.equal(child.kill("SIGTERM"), true);
+    const outcome = await Promise.race([
+      closed.then((terminal) => ({ kind: "closed" as const, terminal })),
+      new Promise<{ kind: "timeout" }>((accept) => {
+        const timer = setTimeout(() => accept({ kind: "timeout" }), 4_000);
+        timer.unref();
+      }),
+    ]);
+    assert.equal(outcome.kind, "closed", "search did not thread cancellation into revalidation FFprobe");
+    if (outcome.kind !== "closed") return;
+    assert.deepEqual(outcome.terminal, { code: 1, signal: null });
+    assert.equal(Buffer.concat(stderr).toString("utf8"), "");
+    const report = JSON.parse(Buffer.concat(stdout).toString("utf8"));
+    assert.equal(report.command, "footage search");
+    assert.equal(report.diagnostics[0].code, "CUT_FOOTAGE_BACKEND_PROTOCOL");
+    assert.match(report.diagnostics[0].message, /cancelled/u);
+    assert.equal(await waitForDead(pids.wrapper), true, "search revalidation wrapper survived cancellation");
+    assert.equal(await waitForDead(pids.grandchild), true, "search revalidation grandchild survived cancellation");
+    await assert.rejects(lstat(join(root, output)), { code: "ENOENT" });
+  } finally {
+    for (const pid of [pids.wrapper, pids.grandchild]) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    child.kill("SIGKILL");
+    await closed;
+  }
+});
+
 async function waitForSetupMarker(home: string) {
   const deadline = Date.now() + 10_000;
   while (Date.now() <= deadline) {
