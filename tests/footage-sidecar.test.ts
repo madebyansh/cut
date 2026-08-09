@@ -52,11 +52,21 @@ test("sidecar serializes exact request IDs and validates index and search eviden
 
 test("sidecar permits only downward limit overrides", async () => {
   for (const [key, value] of Object.entries(cutFootageSidecarLimits)) {
+    if (key === "handshakeMs") continue;
     await protocol(() => startCutFootageSidecar({
       executable: process.execPath, arguments: Object.freeze([fixture, "valid"]), expectedHandshake: handshake,
       limits: { [key]: value + 1 },
     }));
   }
+  const coldSetup = await startCutFootageSidecar({
+    executable: process.execPath, arguments: Object.freeze([fixture, "valid"]), expectedHandshake: handshake,
+    limits: { handshakeMs: 30 * 60_000, closeMs: 500 },
+  });
+  await coldSetup.close();
+  await protocol(() => startCutFootageSidecar({
+    executable: process.execPath, arguments: Object.freeze([fixture, "valid"]), expectedHandshake: handshake,
+    limits: { handshakeMs: 30 * 60_000 + 1 },
+  }));
   await protocol(() => startWith({
     executable: process.execPath, arguments: Object.freeze([fixture, "valid"]), expectedHandshake: handshake,
     limits: { unexpected: 1 } as NonNullable<Parameters<typeof startCutFootageSidecar>[0]["limits"]>,
@@ -67,7 +77,14 @@ test("sidecar uses only its named explicit environment", async () => {
   const expected = Object.freeze({ ...handshake, provider: "fixture-isolated" });
   const session = await startWith({
     executable: process.execPath, arguments: Object.freeze([fixture, "environment"]), expectedHandshake: expected,
-    environment: { CUT_FOOTAGE_CACHE_DIR: "fixture-cache", CUT_FOOTAGE_MODEL_DIR: "fixture-model" },
+    environment: {
+      CUT_FOOTAGE_CACHE_DIR: "fixture-cache",
+      CUT_FOOTAGE_MODEL_DIR: "fixture-model",
+      HTTP_PROXY: "http://proxy.invalid:8080",
+      HTTPS_PROXY: "http://secure-proxy.invalid:8080",
+      ALL_PROXY: "socks5://all-proxy.invalid:1080",
+      NO_PROXY: "localhost,127.0.0.1",
+    },
     limits: { handshakeMs: 500, closeMs: 500 },
   });
   await session.close();

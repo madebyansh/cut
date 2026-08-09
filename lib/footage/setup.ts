@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -8,20 +9,20 @@ import {
   readdir,
   readlink,
   realpath,
-  rm,
   stat,
   symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize, parse, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, normalize, parse, relative, resolve, sep } from "node:path";
 import { stableJsonStringify } from "../core/stable";
 import { parseStrictPackageJson } from "../package/json";
 import { cutDoctorNodeVersionCheck } from "../system/doctor";
 import { CutFootageError, footageFail } from "./diagnostics";
 import {
   startCutFootageSidecar,
+  type CutFootageSidecarLimits,
   type CutFootageSidecarHandshake,
   type CutFootageSidecarSession,
 } from "./sidecar";
@@ -39,6 +40,12 @@ const maximumTreeFiles = 100_000;
 const maximumTreeBytes = 2 * 1024 * 1024 * 1024;
 const maximumTreeFileBytes = 512 * 1024 * 1024;
 const maximumTreeDepth = 64;
+const maximumNpmCliBytes = 16 * 1024 * 1024;
+const maximumNpmOutputBytes = 4 * 1024 * 1024;
+const maximumNpmCombinedOutputBytes = 8 * 1024 * 1024;
+const npmInstallTimeoutMs = 30 * 60_000;
+const npmTerminateGraceMs = 1_000;
+const proxyEnvironmentKeys = Object.freeze(["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] as const);
 const pinnedProvider = "huggingface-transformers-js";
 const pinnedModel = "Xenova/clip-vit-base-patch32";
 const pinnedRevision = "d15189d7028b43f1d3e65039190477f6af591c2a";
@@ -118,13 +125,17 @@ export type CutFootageLocalSidecarLaunch = Readonly<{
   installationRoot: string;
   modelRevisionRoot: string;
   expectedHandshake: CutFootageSidecarHandshake;
+  limits: CutFootageSidecarLimits;
+  signal?: AbortSignal;
 }>;
 
 export type CutFootageLocalInstallRuntimeRequest = Readonly<{
   stagingRoot: string;
-  npmExecutable: string;
+  nodeExecutable: string;
+  npmCliPath: string;
   npmCacheRoot: string;
   environment: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
 }>;
 
 export type CutFootageLocalOperations = Readonly<{
@@ -140,7 +151,8 @@ export type CutFootageLocalSetupOptions = Readonly<{
   homeDirectory?: string;
   environment?: Readonly<Record<string, string | undefined>>;
   recipeRoot?: string;
-  npmExecutable?: string;
+  npmCliPath?: string;
+  signal?: AbortSignal;
   platform?: NodeJS.Platform;
   architecture?: string;
   nodeVersion?: string;
@@ -158,6 +170,7 @@ export type CutFootageLocalInspectOptions = Readonly<{
 
 export type CutFootageLocalStartOptions = CutFootageLocalInspectOptions & Readonly<{
   operations?: CutFootageLocalOperations;
+  signal?: AbortSignal;
 }>;
 
 export type CutFootageLocalSetupReport = Readonly<{
@@ -176,6 +189,20 @@ type TreeEntry = Readonly<{
   target?: string;
 }>;
 type EntrySnapshot = Readonly<{ dev: number | bigint; ino: number | bigint }>;
+type PublicationSnapshot = Readonly<{
+  home: string;
+  homeSnapshot: EntrySnapshot;
+  target: string;
+  targetSnapshot: EntrySnapshot;
+  declaredTarget: string;
+  payload: string;
+  payloadSnapshot: EntrySnapshot;
+  canonicalHome: string;
+  canonicalPayload: string;
+}>;
+
+const fixturePayloads = new Map<string, EntrySnapshot>();
+const inspectedPublications = new WeakMap<CutFootageLocalInstall, PublicationSnapshot>();
 
 function systemErrorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
@@ -277,6 +304,87 @@ function platformIdentity(options: CutFootageLocalInspectOptions) {
   if (!((platform === "darwin" && architecture === "arm64") || (platform === "linux" && (architecture === "x64" || architecture === "arm64")))) mismatch("the local footage backend is unsupported on this platform and architecture.");
   if (cutDoctorNodeVersionCheck(nodeVersion).status !== "pass") mismatch("the local footage backend is unsupported on this Node.js version.");
   return Object.freeze({ platform, architecture, nodeVersion });
+}
+
+function boundedEnvironmentValue(value: string | undefined) {
+  if (value === undefined || !value.length || Buffer.byteLength(value, "utf8") > 4_096 || /[\u0000-\u001f\u007f]/u.test(value)) return undefined;
+  return value;
+}
+
+function proxyEnvironment(source: Readonly<Record<string, string | undefined>>) {
+  const result: Record<string, string> = {};
+  for (const key of proxyEnvironmentKeys) {
+    const value = boundedEnvironmentValue(source[key] ?? source[key.toLowerCase()]);
+    if (value !== undefined) result[key] = value;
+  }
+  return Object.freeze(result);
+}
+
+function runtimePath(nodeExecutable: string, source: Readonly<Record<string, string | undefined>>) {
+  const candidates = [dirname(nodeExecutable)];
+  for (const value of (source.PATH ?? "").split(delimiter)) {
+    if (!value || !isAbsolute(value) || normalize(value) !== value || Buffer.byteLength(value, "utf8") > 4_096 || /[\u0000-\u001f\u007f]/u.test(value)) continue;
+    candidates.push(value);
+  }
+  candidates.push("/usr/local/bin", "/usr/bin", "/bin");
+  return [...new Set(candidates)].join(delimiter);
+}
+
+async function npmCliCandidate(candidate: string | undefined) {
+  if (!candidate || !isAbsolute(candidate) || normalize(candidate) !== candidate || Buffer.byteLength(candidate, "utf8") > 16_384 || /[\u0000-\u001f\u007f]/u.test(candidate)) return undefined;
+  try {
+    const physical = await realpath(candidate), metadata = await stat(physical);
+    if (!metadata.isFile() || metadata.size < 1 || metadata.size > maximumNpmCliBytes) return undefined;
+    return physical;
+  } catch { return undefined; }
+}
+
+async function resolveNpmCliPath(
+  explicit: string | undefined,
+  source: Readonly<Record<string, string | undefined>>,
+  nodeExecutable: string,
+) {
+  const direct = await npmCliCandidate(explicit);
+  if (explicit !== undefined) {
+    if (direct) return direct;
+    publishFailure("the npm CLI path is invalid.");
+  }
+  const fromEnvironment = await npmCliCandidate(source.npm_execpath);
+  if (fromEnvironment) return fromEnvironment;
+  for (const directory of runtimePath(nodeExecutable, source).split(delimiter)) {
+    const fromPath = await npmCliCandidate(join(directory, "npm"));
+    if (fromPath) return fromPath;
+  }
+  for (const candidate of [
+    resolve(dirname(nodeExecutable), "../lib/node_modules/npm/bin/npm-cli.js"),
+    resolve(dirname(nodeExecutable), "node_modules/npm/bin/npm-cli.js"),
+  ]) {
+    const adjacent = await npmCliCandidate(candidate);
+    if (adjacent) return adjacent;
+  }
+  return publishFailure("the npm CLI required for local footage setup is unavailable.");
+}
+
+function runtimeEnvironment(
+  stagingRoot: string,
+  npmCacheRoot: string,
+  nodeExecutable: string,
+  source: Readonly<Record<string, string | undefined>>,
+) {
+  return Object.freeze({
+    PATH: runtimePath(nodeExecutable, source),
+    HOME: join(stagingRoot, ".npm-home"),
+    TMPDIR: join(stagingRoot, ".npm-tmp"),
+    CI: "1",
+    LANG: "C",
+    LC_ALL: "C",
+    NO_COLOR: "1",
+    npm_config_audit: "false",
+    npm_config_fund: "false",
+    npm_config_update_notifier: "false",
+    npm_config_cache: npmCacheRoot,
+    ...proxyEnvironment(source),
+  });
 }
 
 async function readBoundedRegular(path: string, maximumBytes: number) {
@@ -459,31 +567,126 @@ function expectedHandshake(model: CutFootageLocalModel, adapterSha256: string): 
   });
 }
 
-function launchFor(root: string, model: CutFootageLocalModel, handshake: CutFootageSidecarHandshake, mode: "setup" | "offline"): CutFootageLocalSidecarLaunch {
+function launchFor(
+  root: string,
+  model: CutFootageLocalModel,
+  handshake: CutFootageSidecarHandshake,
+  mode: "setup" | "offline",
+  sourceEnvironment: Readonly<Record<string, string | undefined>> = {},
+  signal?: AbortSignal,
+): CutFootageLocalSidecarLaunch {
   const modelRoot = modelRevisionPath(root, model), sidecarPath = join(root, "local-clip-sidecar.mjs");
   return deepFreeze({
     mode,
     executable: process.execPath,
     arguments: Object.freeze([sidecarPath, mode]),
     environment: mode === "setup"
-      ? Object.freeze({ CUT_FOOTAGE_CACHE_DIR: join(root, "models"), CUT_FOOTAGE_MODEL_DIR: modelRoot })
+      ? Object.freeze({ CUT_FOOTAGE_CACHE_DIR: join(root, "models"), CUT_FOOTAGE_MODEL_DIR: modelRoot, ...proxyEnvironment(sourceEnvironment) })
       : Object.freeze({ CUT_FOOTAGE_MODEL_DIR: modelRoot }),
     installationRoot: root,
     modelRevisionRoot: modelRoot,
     expectedHandshake: handshake,
+    limits: Object.freeze({ handshakeMs: mode === "setup" ? 30 * 60_000 : 120_000 }),
+    signal,
   });
 }
 
+/** Runs the locked adapter npm install without a shell and with bounded, drained output. */
+export async function installCutFootageLocalRuntime(request: CutFootageLocalInstallRuntimeRequest): Promise<void> {
+  if (!request || typeof request !== "object" || !isAbsolute(request.stagingRoot) || normalize(request.stagingRoot) !== request.stagingRoot
+    || !isAbsolute(request.nodeExecutable) || normalize(request.nodeExecutable) !== request.nodeExecutable
+    || !isAbsolute(request.npmCliPath) || normalize(request.npmCliPath) !== request.npmCliPath
+    || !isAbsolute(request.npmCacheRoot) || normalize(request.npmCacheRoot) !== request.npmCacheRoot) {
+    publishFailure("the locked local footage runtime installer request is invalid.");
+  }
+  if (request.signal?.aborted) publishFailure("the locked local footage runtime install was cancelled.");
+  try {
+    await Promise.all([
+      mkdir(request.environment.HOME, { recursive: true, mode: 0o700 }),
+      mkdir(request.environment.TMPDIR, { recursive: true, mode: 0o700 }),
+      mkdir(request.npmCacheRoot, { recursive: true, mode: 0o700 }),
+    ]);
+  } catch { publishFailure("the locked local footage runtime installer could not prepare its private directories."); }
+
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    let child: ReturnType<typeof spawn>;
+    let failure = false, stdoutBytes = 0, stderrBytes = 0, combinedBytes = 0;
+    let terminateTimer: NodeJS.Timeout | undefined;
+    const fail = () => {
+      if (failure) return;
+      failure = true;
+      child?.kill("SIGTERM");
+      terminateTimer = setTimeout(() => child?.kill("SIGKILL"), npmTerminateGraceMs);
+    };
+    const abort = () => fail();
+    const wallTimer = setTimeout(fail, npmInstallTimeoutMs);
+    try {
+      child = spawn(request.nodeExecutable, [
+        request.npmCliPath,
+        "ci",
+        "--omit=dev",
+        "--ignore-scripts=false",
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=error",
+        "--cache",
+        request.npmCacheRoot,
+      ], {
+        cwd: request.stagingRoot,
+        detached: false,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...request.environment },
+      });
+    } catch {
+      clearTimeout(wallTimer);
+      rejectPromise(new CutFootageError("CUT_FOOTAGE_PUBLISH", "$installation", "the locked local footage runtime installer failed."));
+      return;
+    }
+    request.signal?.addEventListener("abort", abort, { once: true });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.byteLength; combinedBytes += chunk.byteLength;
+      if (stdoutBytes > maximumNpmOutputBytes || combinedBytes > maximumNpmCombinedOutputBytes) fail();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.byteLength; combinedBytes += chunk.byteLength;
+      if (stderrBytes > maximumNpmOutputBytes || combinedBytes > maximumNpmCombinedOutputBytes) fail();
+    });
+    child.on("error", fail);
+    child.on("close", (code, signal) => {
+      clearTimeout(wallTimer); clearTimeout(terminateTimer);
+      request.signal?.removeEventListener("abort", abort);
+      if (!failure && code === 0 && signal === null) resolvePromise();
+      else rejectPromise(new CutFootageError("CUT_FOOTAGE_PUBLISH", "$installation", "the locked local footage runtime installer failed."));
+    });
+  });
+}
+
+async function verifyInstalledRuntime(root: string) {
+  for (const [locatorValue, name, version] of [
+    ["node_modules/@huggingface/transformers/package.json", "@huggingface/transformers", "4.2.0"],
+    ["node_modules/onnxruntime-node/package.json", "onnxruntime-node", "1.24.3"],
+  ] as const) {
+    let parsed: unknown;
+    try { parsed = parseStrictPackageJson(await readBoundedRegular(join(root, locatorValue), maximumRecipeFileBytes)); }
+    catch { mismatch("the installed local footage runtime does not match its pinned versions."); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || (parsed as Record<string, unknown>).name !== name || (parsed as Record<string, unknown>).version !== version) {
+      mismatch("the installed local footage runtime does not match its pinned versions.");
+    }
+  }
+}
+
 const defaultOperations: CutFootageLocalOperations = Object.freeze({
-  async installRuntime() {
-    publishFailure("the locked local footage runtime installer is unavailable.");
-  },
+  installRuntime: installCutFootageLocalRuntime,
   async startSidecar(launch) {
     return startCutFootageSidecar({
       executable: launch.executable,
       arguments: launch.arguments,
       environment: launch.environment,
       expectedHandshake: launch.expectedHandshake,
+      limits: launch.limits,
+      signal: launch.signal,
     });
   },
 });
@@ -652,8 +855,10 @@ async function publishVerifiedInstall(
 }
 
 async function resolvePublishedPayload(home: string, target: string) {
-  let before, declaredTarget: string;
+  let before, homeMetadata, declaredTarget: string;
   try {
+    homeMetadata = await lstat(home);
+    if (!homeMetadata.isDirectory() || homeMetadata.isSymbolicLink()) mismatch();
     before = await lstat(target);
     if (!before.isSymbolicLink()) mismatch();
     declaredTarget = await readlink(target);
@@ -670,11 +875,43 @@ async function resolvePublishedPayload(home: string, target: string) {
     const after = await lstat(target), afterTarget = await readlink(target);
     if (!payloadMetadata.isDirectory() || payloadMetadata.isSymbolicLink() || !inside(canonicalHome, canonicalPayload)
       || before.dev !== after.dev || before.ino !== after.ino || declaredTarget !== afterTarget) mismatch();
+    return Object.freeze({
+      home,
+      homeSnapshot: Object.freeze({ dev: homeMetadata.dev, ino: homeMetadata.ino }),
+      target,
+      targetSnapshot: Object.freeze({ dev: before.dev, ino: before.ino }),
+      declaredTarget,
+      payload,
+      payloadSnapshot: Object.freeze({ dev: payloadMetadata.dev, ino: payloadMetadata.ino }),
+      canonicalHome,
+      canonicalPayload,
+    });
   } catch (error) {
     if (error instanceof CutFootageError) throw error;
     mismatch();
   }
-  return payload;
+  return mismatch();
+}
+
+async function assertPublishedSnapshot(snapshot: PublicationSnapshot) {
+  try {
+    const [homeMetadata, targetMetadata, declaredTarget, payloadMetadata, canonicalHome, canonicalPayload] = await Promise.all([
+      lstat(snapshot.home),
+      lstat(snapshot.target),
+      readlink(snapshot.target),
+      lstat(snapshot.payload),
+      realpath(snapshot.home),
+      realpath(snapshot.payload),
+    ]);
+    if (!homeMetadata.isDirectory() || homeMetadata.isSymbolicLink() || homeMetadata.dev !== snapshot.homeSnapshot.dev || homeMetadata.ino !== snapshot.homeSnapshot.ino
+      || !targetMetadata.isSymbolicLink() || targetMetadata.dev !== snapshot.targetSnapshot.dev || targetMetadata.ino !== snapshot.targetSnapshot.ino
+      || declaredTarget !== snapshot.declaredTarget || !payloadMetadata.isDirectory() || payloadMetadata.isSymbolicLink()
+      || payloadMetadata.dev !== snapshot.payloadSnapshot.dev || payloadMetadata.ino !== snapshot.payloadSnapshot.ino
+      || canonicalHome !== snapshot.canonicalHome || canonicalPayload !== snapshot.canonicalPayload) mismatch();
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    mismatch();
+  }
 }
 
 function setupReport(status: "installed" | "ready", install: CutFootageLocalInstall): CutFootageLocalSetupReport {
@@ -682,12 +919,12 @@ function setupReport(status: "installed" | "ready", install: CutFootageLocalInst
 }
 
 export function cutFootageBackendIdentityFromInstall(install: CutFootageLocalInstall) {
-  const { model, adapterSha256 } = install.manifest;
+  const { handshake } = install.manifest;
   return deepFreeze({
     protocolVersion: 1 as const,
-    provider: model.provider,
-    model: `${model.model}@${model.revision};${model.dtype};${model.device};adapter=${adapterSha256}`,
-    dimensions: model.dimensions,
+    provider: handshake.provider,
+    model: `${handshake.model}@${handshake.revision}+adapter.${handshake.adapterSha256}`,
+    dimensions: handshake.dimensions,
     normalization: "l2" as const,
   });
 }
@@ -696,10 +933,18 @@ export function cutFootageBackendIdentityFromInstall(install: CutFootageLocalIns
 export async function inspectCutFootageLocalInstall(options: CutFootageLocalInspectOptions = {}): Promise<CutFootageLocalInstall> {
   const home = resolveCutFootageHome({ explicitHome: options.home, homeDirectory: options.homeDirectory, environment: options.environment });
   const target = join(home, cutFootageLocalDirectoryName), current = platformIdentity(options);
-  const payload = await resolvePublishedPayload(home, target);
+  const publication = await resolvePublishedPayload(home, target), { payload } = publication;
   try {
     const manifest = parseInstallManifest(await readBoundedRegular(join(payload, manifestName), maximumManifestBytes));
     if (manifest.platform !== current.platform || manifest.architecture !== current.architecture) mismatch();
+    const fixtureSnapshot = fixturePayloads.get(payload);
+    const fixtureInstall = fixtureSnapshot?.dev === publication.payloadSnapshot.dev && fixtureSnapshot.ino === publication.payloadSnapshot.ino;
+    if (!fixtureInstall) {
+      requirePinnedModel(manifest.model);
+      const bundledAdapter = resolve(__dirname, "../../../adapters/footage-local/local-clip-sidecar.mjs");
+      if ((await hashRegular(bundledAdapter)).sha256 !== manifest.adapterSha256) mismatch();
+    }
+    if ((await hashRegular(join(payload, "local-clip-sidecar.mjs"))).sha256 !== manifest.adapterSha256) mismatch();
     const modelRoot = modelRevisionPath(payload, manifest.model);
     await verifyExpectedModelFiles(modelRoot, manifest.model);
     const [recipeTree, runtimeTree, modelTree, installationTree] = await Promise.all([
@@ -709,7 +954,11 @@ export async function inspectCutFootageLocalInstall(options: CutFootageLocalInsp
       treeIdentity(payload, new Set([manifestName])),
     ]);
     if (!same(recipeTree, manifest.recipeTree) || !same(runtimeTree, manifest.runtimeTree) || !same(modelTree, manifest.modelTree) || !same(installationTree, manifest.installationTree)) mismatch();
-    return deepFreeze({ root: payload, modelRevisionRoot: modelRoot, sidecarPath: join(payload, "local-clip-sidecar.mjs"), manifest });
+    if ((await hashRegular(join(payload, "local-clip-sidecar.mjs"))).sha256 !== manifest.adapterSha256) mismatch();
+    await assertPublishedSnapshot(publication);
+    const install = deepFreeze({ root: payload, modelRevisionRoot: modelRoot, sidecarPath: join(payload, "local-clip-sidecar.mjs"), manifest });
+    inspectedPublications.set(install, publication);
+    return install;
   } catch (error) {
     if (error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_MISSING") throw error;
     mismatch();
@@ -719,9 +968,13 @@ export async function inspectCutFootageLocalInstall(options: CutFootageLocalInsp
 /** Starts a verified ordinary sidecar with remote model access disabled by the adapter. */
 export async function startCutFootageLocalSidecar(options: CutFootageLocalStartOptions = {}): Promise<CutFootageSidecarSession> {
   const install = await inspectCutFootageLocalInstall(options), operations = options.operations ?? defaultOperations;
-  const launch = launchFor(install.root, install.manifest.model, install.manifest.handshake, "offline");
+  const launch = launchFor(install.root, install.manifest.model, install.manifest.handshake, "offline", {}, options.signal);
   let session: CutFootageSidecarSession | undefined;
   try {
+    const publication = inspectedPublications.get(install);
+    if (!publication) mismatch();
+    await assertPublishedSnapshot(publication);
+    if ((await hashRegular(install.sidecarPath)).sha256 !== install.manifest.adapterSha256) mismatch();
     session = await operations.startSidecar(launch);
     if (!same(session.handshake, install.manifest.handshake)) {
       await session.close().catch(() => undefined);
@@ -742,6 +995,7 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
   }
   const home = resolveCutFootageHome({ explicitHome: options.home, homeDirectory: options.homeDirectory, environment: options.environment });
   const system = platformIdentity(options), operations = options.operations ?? defaultOperations;
+  const sourceEnvironment = options.environment ?? process.env;
   const target = join(home, cutFootageLocalDirectoryName);
   try {
     const existing = await inspectCutFootageLocalInstall({ ...options, home });
@@ -764,7 +1018,6 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
   const lockPath = join(home, `${cutFootageLocalDirectoryName}.lock`), token = `${process.pid}-${randomUUID()}\n`;
   const stagingRoot = join(home, `.${cutFootageLocalDirectoryName}.payload-${process.pid}-${randomUUID()}`);
   let lockHandle: Awaited<ReturnType<typeof open>> | undefined, lockSnapshot: EntrySnapshot | undefined, stagingSnapshot: EntrySnapshot | undefined;
-  let stagingCreated = false, published = false;
   try {
     try {
       lockHandle = await open(lockPath, "wx", 0o600);
@@ -782,21 +1035,29 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     const recipeRoot = options.recipeRoot ?? resolve(__dirname, "../../../adapters/footage-local");
     const fixtureRecipe = options.recipeRoot !== undefined;
     if (fixtureRecipe && options.operations === undefined) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$recipe", "a custom footage recipe is permitted only with injected test operations.");
-    await mkdir(stagingRoot, { mode: 0o700 }); stagingCreated = true;
+    await mkdir(stagingRoot, { mode: 0o700 });
     const stagingMetadata = await lstat(stagingRoot);
     stagingSnapshot = Object.freeze({ dev: stagingMetadata.dev, ino: stagingMetadata.ino });
     const recipe = await loadRecipe(recipeRoot, stagingRoot, !fixtureRecipe);
-    const npmExecutable = options.npmExecutable ?? process.execPath;
-    if (!isAbsolute(npmExecutable) || normalize(npmExecutable) !== npmExecutable) publishFailure("the npm executable is invalid.");
+    const nodeExecutable = process.execPath;
+    const npmCliPath = await resolveNpmCliPath(options.npmCliPath, sourceEnvironment, nodeExecutable);
+    const npmCacheRoot = join(home, ".npm-cache");
+    const environment = runtimeEnvironment(stagingRoot, npmCacheRoot, nodeExecutable, sourceEnvironment);
     await operations.installRuntime({
       stagingRoot,
-      npmExecutable,
-      npmCacheRoot: join(home, ".npm-cache"),
-      environment: Object.freeze({}),
+      nodeExecutable,
+      npmCliPath,
+      npmCacheRoot,
+      environment,
+      signal: options.signal,
     });
+    await verifyInstalledRuntime(stagingRoot);
+    if ((await hashRegular(join(stagingRoot, "local-clip-sidecar.mjs"))).sha256 !== recipe.adapterSha256) mismatch("the local footage adapter changed during runtime installation.");
     const modelRoot = modelRevisionPath(stagingRoot, recipe.model), handshake = expectedHandshake(recipe.model, recipe.adapterSha256);
-    await verifySession(operations, launchFor(stagingRoot, recipe.model, handshake, "setup"));
-    await verifySession(operations, launchFor(stagingRoot, recipe.model, handshake, "offline"));
+    await verifySession(operations, launchFor(stagingRoot, recipe.model, handshake, "setup", sourceEnvironment, options.signal));
+    if ((await hashRegular(join(stagingRoot, "local-clip-sidecar.mjs"))).sha256 !== recipe.adapterSha256) mismatch("the local footage adapter changed during setup verification.");
+    await verifySession(operations, launchFor(stagingRoot, recipe.model, handshake, "offline", {}, options.signal));
+    if ((await hashRegular(join(stagingRoot, "local-clip-sidecar.mjs"))).sha256 !== recipe.adapterSha256) mismatch("the local footage adapter changed during offline verification.");
     await verifyExpectedModelFiles(modelRoot, recipe.model);
     const [recipeTree, runtimeTree, modelTree, installationTree] = await Promise.all([
       selectedFileIdentity(stagingRoot, recipeFiles),
@@ -822,7 +1083,8 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     });
     const manifest = deepFreeze({ ...body, identitySha256: createHash("sha256").update(manifestBody(body)).digest("hex") });
     await writeFile(join(stagingRoot, manifestName), `${stableJsonStringify(manifest)}\n`, { flag: "wx", mode: 0o600 });
-    await publishVerifiedInstall(stagingRoot, target, stagingSnapshot, operations.beforePublish); published = true;
+    await publishVerifiedInstall(stagingRoot, target, stagingSnapshot, operations.beforePublish);
+    if (fixtureRecipe) fixturePayloads.set(stagingRoot, stagingSnapshot);
     const install = await inspectCutFootageLocalInstall({ ...options, home });
     return setupReport("installed", install);
   } catch (error) {
@@ -830,12 +1092,7 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     publishFailure("the local footage backend could not be installed.");
   } finally {
     await lockHandle?.close().catch(() => undefined);
-    if (stagingCreated && !published && stagingSnapshot) try {
-      const metadata = await lstat(stagingRoot);
-      if (metadata.isDirectory() && !metadata.isSymbolicLink() && metadata.dev === stagingSnapshot.dev && metadata.ino === stagingSnapshot.ino) {
-        await rm(stagingRoot, { recursive: true, force: true });
-      }
-    } catch { /* Remove only the exact payload directory created by this invocation. */ }
+    // Node exposes no inode-bound recursive unlink. Preserve an unpublished payload rather than risk deleting a replacement pathname.
     if (lockSnapshot) {
       try {
         const metadata = await lstat(lockPath);

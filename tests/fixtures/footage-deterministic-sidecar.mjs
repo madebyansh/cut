@@ -9,7 +9,12 @@ const handshake = {
   adapterSha256: digest("a"), selfTestSha256: digest("b"),
 };
 if (mode === "environment") handshake.provider = process.env.CUT_FOOTAGE_CACHE_DIR === "fixture-cache"
-  && process.env.CUT_FOOTAGE_MODEL_DIR === "fixture-model" && process.env.PATH === undefined ? "fixture-isolated" : "environment-leaked";
+  && process.env.CUT_FOOTAGE_MODEL_DIR === "fixture-model"
+  && process.env.HTTP_PROXY === "http://proxy.invalid:8080"
+  && process.env.HTTPS_PROXY === "http://secure-proxy.invalid:8080"
+  && process.env.ALL_PROXY === "socks5://all-proxy.invalid:1080"
+  && process.env.NO_PROXY === "localhost,127.0.0.1"
+  && process.env.PATH === undefined ? "fixture-isolated" : "environment-leaked";
 const line = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const request = (id, operation) => ({ format: "cut-footage-sidecar-response", version: 1, id, operation });
 

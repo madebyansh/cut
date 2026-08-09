@@ -1,17 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { CutFootageError } from "../lib/footage/diagnostics";
 import { collectCutFootageLocalDoctorReport } from "../lib/footage/doctor";
 import {
   cutFootageBackendIdentityFromInstall,
+  installCutFootageLocalRuntime,
   inspectCutFootageLocalInstall,
   resolveCutFootageHome,
   setupCutFootageLocalBackend,
   startCutFootageLocalSidecar,
+  type CutFootageLocalInstallRuntimeRequest,
   type CutFootageLocalOperations,
   type CutFootageLocalSidecarLaunch,
 } from "../lib/footage/setup";
@@ -104,12 +106,23 @@ async function installedFixture() {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-install-")), "footage");
   const recipe = await fakeRecipe();
   const launches: CutFootageLocalSidecarLaunch[] = [];
-  const operations = fakeOperations(recipe.model, launches);
+  const baseOperations = fakeOperations(recipe.model, launches);
+  const runtimeRequests: CutFootageLocalInstallRuntimeRequest[] = [];
+  const operations: CutFootageLocalOperations = Object.freeze({
+    ...baseOperations,
+    async installRuntime(request) { runtimeRequests.push(request); await baseOperations.installRuntime(request); },
+  });
   const report = await setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+    environment: {
+      PATH: "/usr/bin:/bin:/usr/bin",
+      http_proxy: "http://proxy.invalid:8080",
+      HTTPS_PROXY: "http://secure-proxy.invalid:8080",
+      NODE_OPTIONS: "--require=/private/secret.js",
+    },
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations,
   });
-  return { home, recipe, launches, operations, report, installationRoot: join(home, "local-clip-v1") };
+  return { home, recipe, launches, runtimeRequests, operations, report, installationRoot: join(home, "local-clip-v1") };
 }
 
 test("footage setup rejects unsupported backends and unsafe explicit homes before touching disk", async () => {
@@ -161,6 +174,21 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
   assert.equal(fixture.launches[0]?.modelRevisionRoot.includes(".local-clip-v1.payload-"), true);
   assert.equal(fixture.launches[0]?.modelRevisionRoot.endsWith("/models/fixture/clip/r1"), true);
   assert.equal(fixture.launches[1]?.environment.CUT_FOOTAGE_MODEL_DIR, fixture.launches[1]?.modelRevisionRoot);
+  assert.equal(fixture.launches[0]?.limits.handshakeMs, 30 * 60_000);
+  assert.equal(fixture.launches[1]?.limits.handshakeMs, 120_000);
+  assert.equal(fixture.launches[0]?.environment.HTTP_PROXY, "http://proxy.invalid:8080");
+  assert.equal(fixture.launches[0]?.environment.HTTPS_PROXY, "http://secure-proxy.invalid:8080");
+  assert.deepEqual(Object.keys(fixture.launches[1]?.environment ?? {}).sort(), ["CUT_FOOTAGE_MODEL_DIR"]);
+  assert.equal(fixture.runtimeRequests.length, 1);
+  const runtimeRequest = fixture.runtimeRequests[0]!;
+  assert.equal(runtimeRequest.nodeExecutable, process.execPath);
+  assert.equal(runtimeRequest.npmCliPath, await realpath(join(fixture.recipe.root, "local-clip-sidecar.mjs")));
+  assert.equal(runtimeRequest.environment.PATH?.startsWith(`${dirname(process.execPath)}:`), true);
+  assert.equal(runtimeRequest.environment.HTTP_PROXY, "http://proxy.invalid:8080");
+  assert.equal(runtimeRequest.environment.HTTPS_PROXY, "http://secure-proxy.invalid:8080");
+  assert.equal(runtimeRequest.environment.NODE_OPTIONS, undefined);
+  assert.equal(runtimeRequest.environment.HOME?.startsWith(runtimeRequest.stagingRoot), true);
+  assert.equal(runtimeRequest.environment.TMPDIR?.startsWith(runtimeRequest.stagingRoot), true);
   const names = await readdir(fixture.home);
   assert.equal(names.includes("local-clip-v1"), true);
   assert.equal(names.some((name) => name.includes("staging") || name.endsWith(".lock")), false);
@@ -170,7 +198,7 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
 
   let installedAgain = false;
   const reused = await setupCutFootageLocalBackend({
-    backend: "local", home: fixture.home, recipeRoot: fixture.recipe.root, npmExecutable: process.execPath,
+    backend: "local", home: fixture.home, recipeRoot: fixture.recipe.root, npmCliPath: join(fixture.recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
     operations: {
       async installRuntime() { installedAgain = true; throw new Error("must not reinstall"); },
@@ -181,12 +209,12 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
   assert.equal(installedAgain, false);
 });
 
-test("setup failure removes only its lock and staging directory and does not leak child diagnostics", async () => {
+test("setup failure removes only its lock, preserves its unpublished payload, and does not leak child diagnostics", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-failed-")), "secret-home");
   const recipe = await fakeRecipe();
   await assert.rejects(
     setupCutFootageLocalBackend({
-      backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+      backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
       platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
       operations: {
         async installRuntime() { throw new Error(`super-secret ${home}`); },
@@ -196,14 +224,41 @@ test("setup failure removes only its lock and staging directory and does not lea
     (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH"
       && !error.message.includes("super-secret") && !error.message.includes(home),
   );
-  assert.deepEqual(await readdir(home), []);
+  const names = await readdir(home);
+  assert.equal(names.includes("local-clip-v1"), false);
+  assert.equal(names.some((name) => name.endsWith(".lock")), false);
+  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 1);
+});
+
+test("locked npm runner uses node plus exact argv and fails without leaking child output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cut-footage-npm-runner-"));
+  const stagingRoot = join(root, "stage"), npmCacheRoot = join(root, "cache"), npmCliPath = join(root, "fake-npm.mjs");
+  await mkdir(stagingRoot);
+  await writeFile(npmCliPath, [
+    'import { writeFile } from "node:fs/promises";',
+    'await writeFile("npm-runner-record.json", JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), environment: process.env }));',
+  ].join("\n"));
+  const environment = Object.freeze({ PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".home"), TMPDIR: join(stagingRoot, ".tmp"), CI: "1" });
+  await installCutFootageLocalRuntime({ stagingRoot, nodeExecutable: process.execPath, npmCliPath, npmCacheRoot, environment });
+  const record = JSON.parse(await readFile(join(stagingRoot, "npm-runner-record.json"), "utf8"));
+  assert.equal(record.cwd, await realpath(stagingRoot));
+  assert.deepEqual(record.argv, ["ci", "--omit=dev", "--ignore-scripts=false", "--no-audit", "--no-fund", "--loglevel=error", "--cache", npmCacheRoot]);
+  assert.equal(record.environment.HOME, environment.HOME);
+
+  const failingCli = join(root, "failing-npm.mjs");
+  await writeFile(failingCli, 'process.stderr.write("private-registry-token /private/secret"); process.exit(17);\n');
+  await assert.rejects(
+    installCutFootageLocalRuntime({ stagingRoot, nodeExecutable: process.execPath, npmCliPath: failingCli, npmCacheRoot, environment }),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH"
+      && !error.message.includes("private-registry-token") && !error.message.includes("/private/secret"),
+  );
 });
 
 test("setup cleanup never deletes a payload pathname whose inode was replaced", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-cleanup-race-")), "footage");
   const recipe = await fakeRecipe();
   await assert.rejects(setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
     operations: {
       async installRuntime({ stagingRoot }) {
@@ -227,7 +282,7 @@ test("setup lock contention and an invalid immutable install fail without deleti
   await mkdir(home);
   await writeFile(join(home, "local-clip-v1.lock"), "held\n");
   await assert.rejects(setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations: fakeOperations(recipe.model),
   }), footageError("CUT_FOOTAGE_PUBLISH"));
   assert.equal(await readFile(join(home, "local-clip-v1.lock"), "utf8"), "held\n");
@@ -236,7 +291,7 @@ test("setup lock contention and an invalid immutable install fail without deleti
   await mkdir(join(home, "local-clip-v1"));
   await writeFile(join(home, "local-clip-v1/preserve-me"), "do not delete\n");
   await assert.rejects(setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations: fakeOperations(recipe.model),
   }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
   assert.equal(await readFile(join(home, "local-clip-v1/preserve-me"), "utf8"), "do not delete\n");
@@ -247,7 +302,7 @@ test("setup never replaces a destination created at the publication boundary", a
   const recipe = await fakeRecipe();
   const operations = fakeOperations(recipe.model);
   await assert.rejects(setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
     operations: {
       ...operations,
@@ -261,7 +316,7 @@ test("setup never replaces a destination created at the publication boundary", a
   assert.equal((await readdir(home)).some((name) => name.includes("staging") || name.endsWith(".lock")), false);
 });
 
-test("setup refuses package scripts and cleans its owned stage and lock", async () => {
+test("setup refuses package scripts, removes its lock, and never guesses at recursive payload cleanup", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-hostile-recipe-")), "footage");
   const recipe = await fakeRecipe();
   const packagePath = join(recipe.root, "package.json");
@@ -269,10 +324,13 @@ test("setup refuses package scripts and cleans its owned stage and lock", async 
   packageJson.scripts = { preinstall: "steal-secrets" };
   await writeFile(packagePath, `${JSON.stringify(packageJson)}\n`);
   await assert.rejects(setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations: fakeOperations(recipe.model),
   }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
-  assert.deepEqual(await readdir(home), []);
+  const names = await readdir(home);
+  assert.equal(names.includes("local-clip-v1"), false);
+  assert.equal(names.some((name) => name.endsWith(".lock")), false);
+  assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 1);
 });
 
 test("doctor rehashes the complete runtime, model, and adapter trees before launching inference", async () => {
@@ -297,6 +355,41 @@ test("doctor rehashes the complete runtime, model, and adapter trees before laun
     assert.equal(report.status, "fail");
     assert.equal(started, false);
     assert.equal(JSON.stringify(report).includes(fixture.home), false);
+  }
+});
+
+test("normal inspection refuses a copied self-signed fixture backend", async () => {
+  const fixture = await installedFixture();
+  const copiedHome = join(await mkdtemp(join(tmpdir(), "cut-footage-self-signed-")), "footage");
+  await mkdir(copiedHome);
+  const payloadName = await readlink(fixture.installationRoot);
+  await cp(join(fixture.home, payloadName), join(copiedHome, payloadName), { recursive: true, verbatimSymlinks: true });
+  await symlink(payloadName, join(copiedHome, "local-clip-v1"), "dir");
+  await assert.rejects(inspectCutFootageLocalInstall({
+    home: copiedHome, platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+  }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
+});
+
+test("setup refuses an adapter changed by runtime installation or sidecar verification", async () => {
+  for (const phase of ["runtime", "sidecar"] as const) {
+    const home = join(await mkdtemp(join(tmpdir(), `cut-footage-adapter-drift-${phase}-`)), "footage");
+    const recipe = await fakeRecipe(), base = fakeOperations(recipe.model);
+    await assert.rejects(setupCutFootageLocalBackend({
+      backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+      platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+      operations: {
+        ...base,
+        async installRuntime(request) {
+          await base.installRuntime(request);
+          if (phase === "runtime") await writeFile(join(request.stagingRoot, "local-clip-sidecar.mjs"), "changed after trust\n");
+        },
+        async startSidecar(launch) {
+          const session = await base.startSidecar(launch);
+          if (phase === "sidecar" && launch.mode === "setup") await writeFile(join(launch.installationRoot, "local-clip-sidecar.mjs"), "changed during launch\n");
+          return session;
+        },
+      },
+    }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
   }
 });
 
@@ -355,7 +448,7 @@ test("doctor binds empty directories as part of the complete immutable runtime t
   }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
 });
 
-test("canonical public backend identity binds model revision, dtype, device, and adapter bytes", async () => {
+test("canonical public backend identity binds the handshake model revision and adapter bytes", async () => {
   const fixture = await installedFixture();
   const install = await inspectCutFootageLocalInstall({
     home: fixture.home, platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
@@ -363,7 +456,7 @@ test("canonical public backend identity binds model revision, dtype, device, and
   assert.deepEqual(cutFootageBackendIdentityFromInstall(install), {
     protocolVersion: 1,
     provider: "fixture-transformers",
-    model: `fixture/clip@r1;q8;cpu;adapter=${fixture.recipe.adapterSha256}`,
+    model: `fixture/clip@r1+adapter.${fixture.recipe.adapterSha256}`,
     dimensions: 4,
     normalization: "l2",
   });

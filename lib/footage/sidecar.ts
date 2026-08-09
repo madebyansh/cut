@@ -16,6 +16,10 @@ export const cutFootageSidecarLimits = Object.freeze({
   maximumArgumentBytes: 16_384,
   maximumArguments: 64,
 });
+const cutFootageSidecarLimitCeilings = Object.freeze({
+  ...cutFootageSidecarLimits,
+  handshakeMs: 30 * 60_000,
+});
 
 export type CutFootageSidecarHandshake = Readonly<{
   format: "cut-footage-sidecar-handshake"; version: 1; protocolVersion: 1;
@@ -41,7 +45,14 @@ export type CutFootageSidecarSession = Readonly<{
   close(): Promise<void>;
 }>;
 
-const allowedEnvironment = new Set(["CUT_FOOTAGE_CACHE_DIR", "CUT_FOOTAGE_MODEL_DIR"]);
+const allowedEnvironment = new Set([
+  "ALL_PROXY",
+  "CUT_FOOTAGE_CACHE_DIR",
+  "CUT_FOOTAGE_MODEL_DIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+]);
 const shaPattern = /^[a-f0-9]{64}$/u;
 const idPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const safeTextPattern = /^[^\u0000-\u001f\u007f]+$/u;
@@ -90,12 +101,13 @@ function boundedLimits(overrides: CutFootageSidecarLimits | undefined) {
   if (overrides !== undefined && (!overrides || typeof overrides !== "object" || Array.isArray(overrides))) protocol("limits are malformed");
   for (const [key, value] of Object.entries(overrides ?? {})) {
     if (!Object.hasOwn(cutFootageSidecarLimits, key)) protocol("limits are not allowlisted");
-    const maximum = cutFootageSidecarLimits[key as keyof typeof cutFootageSidecarLimits];
+    const maximum = cutFootageSidecarLimitCeilings[key as keyof typeof cutFootageSidecarLimits];
     if (!Number.isSafeInteger(value) || value < 1 || value > maximum) protocol(`invalid ${key} limit`);
   }
   const result = { ...cutFootageSidecarLimits, ...overrides };
   for (const [key, value] of Object.entries(result)) {
-    if (!Number.isSafeInteger(value) || value < 1 || value > 64 * 1024 * 1024) protocol(`invalid ${key} limit`);
+    const maximum = cutFootageSidecarLimitCeilings[key as keyof typeof cutFootageSidecarLimits];
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum) protocol(`invalid ${key} limit`);
   }
   return Object.freeze(result);
 }
