@@ -46,6 +46,7 @@
     "dist-cli/lib/parser.*",
     "dist-cli/lib/types.*",
     "assets/cut-wordmark.svg",
+    "adapters/footage-local",
     "docs",
     "editors/vscode",
     "examples/agent-guide-pulse.cut",
