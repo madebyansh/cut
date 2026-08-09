@@ -87,6 +87,12 @@ function freezeHandshake(value: Record<string, unknown>): CutFootageSidecarHands
 function sameHandshake(left: CutFootageSidecarHandshake, right: CutFootageSidecarHandshake) { return JSON.stringify(left) === JSON.stringify(right); }
 function parseJson(line: Buffer): unknown { try { return JSON.parse(line.toString("utf8")); } catch { return protocol("received malformed JSON"); } }
 function boundedLimits(overrides: CutFootageSidecarLimits | undefined) {
+  if (overrides !== undefined && (!overrides || typeof overrides !== "object" || Array.isArray(overrides))) protocol("limits are malformed");
+  for (const [key, value] of Object.entries(overrides ?? {})) {
+    if (!Object.hasOwn(cutFootageSidecarLimits, key)) protocol("limits are not allowlisted");
+    const maximum = cutFootageSidecarLimits[key as keyof typeof cutFootageSidecarLimits];
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum) protocol(`invalid ${key} limit`);
+  }
   const result = { ...cutFootageSidecarLimits, ...overrides };
   for (const [key, value] of Object.entries(result)) {
     if (!Number.isSafeInteger(value) || value < 1 || value > 64 * 1024 * 1024) protocol(`invalid ${key} limit`);
@@ -117,9 +123,9 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
     child = spawn(start.executable, [...start.arguments], { shell: false, detached: false, stdio: ["pipe", "pipe", "pipe"], env: environment });
   } catch { protocol("sidecar could not start"); }
   let pid: number | undefined = child!.pid;
-  let stdout = Buffer.alloc(0), stdoutBytes = 0, stderrBytes = 0, handshaken = false, closeRequested = false;
+  let stdout = Buffer.alloc(0), stdoutBytes = 0, stderrBytes = 0, handshaken = false, closeRequested = false, closeSent = false, closeAcknowledged = false;
   let fatal: CutFootageError | undefined, pending: Pending | undefined, settled: Readonly<{ pending: Pending; result: unknown }> | undefined, closePromise: Promise<void> | undefined;
-  let terminateTimer: NodeJS.Timeout | undefined;
+  let terminateTimer: NodeJS.Timeout | undefined, closeTimer: NodeJS.Timeout | undefined;
   let resolveDead!: () => void;
   const dead = new Promise<void>((resolve) => { resolveDead = resolve; });
   let resolveHandshake!: (value: CutFootageSidecarSession) => void, rejectHandshake!: (error: Error) => void;
@@ -130,6 +136,7 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
     if (fatal) return;
     fatal = error(reason);
     clearTimeout(terminateTimer);
+    clearTimeout(closeTimer);
     if (pending) {
       clearTimeout(pending.timer);
       const current = pending; pending = undefined;
@@ -170,7 +177,9 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
       if (current.operation === "index") {
         const record = closed(value, ["format", "version", "id", "operation", "artifact"], "index response is malformed");
         const artifact = closed(record.artifact, ["bytes", "sha256", "recordCount", "dimensions"], "index response is malformed");
-        result = Object.freeze({ bytes: positive(artifact.bytes, Number.MAX_SAFE_INTEGER, "index response is malformed"), sha256: sha(artifact.sha256, "index response is malformed"), recordCount: positive(artifact.recordCount, limits.maximumCandidates, "index response is malformed"), dimensions: positive(artifact.dimensions, 65_536, "index response is malformed") });
+        const dimensions = positive(artifact.dimensions, 65_536, "index response is malformed");
+        if (dimensions !== expected.dimensions) protocol("index response is malformed");
+        result = Object.freeze({ bytes: positive(artifact.bytes, Number.MAX_SAFE_INTEGER, "index response is malformed"), sha256: sha(artifact.sha256, "index response is malformed"), recordCount: positive(artifact.recordCount, limits.maximumCandidates, "index response is malformed"), dimensions });
       } else if (current.operation === "searchText") {
         const record = closed(value, ["format", "version", "id", "operation", "candidates"], "search response is malformed");
         if (!Array.isArray(record.candidates) || record.candidates.length > limits.maximumCandidates) protocol("search response is malformed");
@@ -184,10 +193,11 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
         }));
       } else {
         closed(value, ["format", "version", "id", "operation"], "close response is malformed");
+        closeAcknowledged = true;
         result = undefined;
       }
     } catch { return finishSoon("response violates the footage protocol"); }
-    clearTimeout(current.timer);
+    if (current.operation !== "close") clearTimeout(current.timer);
     settled = Object.freeze({ pending: current, result });
   };
 
@@ -215,9 +225,10 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
   child!.stderr.on("data", (chunk: Buffer) => { stderrBytes += chunk.byteLength; if (stderrBytes > limits.maximumStderrBytes) finish("stderr exceeds its byte limit"); });
   child!.on("error", () => finish("sidecar could not start"));
   child!.on("close", (code) => {
-    clearTimeout(terminateTimer); pid = undefined; resolveDead();
+    clearTimeout(terminateTimer); clearTimeout(closeTimer); pid = undefined;
     if (stdout.byteLength) finish("sidecar ended with a partial response line");
-    else if (!fatal && (!closeRequested || code !== 0)) finish("sidecar exited before a valid close");
+    else if (!fatal && (!closeRequested || !closeSent || !closeAcknowledged || code !== 0)) finish("sidecar exited before a valid close");
+    resolveDead();
   });
   const handshakeTimer = setTimeout(() => finish("handshake timed out"), limits.handshakeMs);
   handshakeReady.finally(() => clearTimeout(handshakeTimer)).catch(() => undefined);
@@ -235,9 +246,14 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
       }
       const id = `footage-${++requestOrdinal}`;
       const message = JSON.stringify(Object.freeze({ format: "cut-footage-sidecar-request", version: 1, id, operation, ...body }));
-      if (Buffer.byteLength(message, "utf8") > limits.maximumRequestBytes) { reject(error("request exceeds its byte limit")); return; }
+      if (Buffer.byteLength(message, "utf8") > limits.maximumRequestBytes) {
+        finish("request exceeds its byte limit");
+        void dead.then(() => reject(fatal!));
+        return;
+      }
       const timer = setTimeout(() => rejectTimeout(operation), timeout);
       pending = Object.freeze({ id, operation, resolve, reject, timer });
+      if (operation === "close") { closeSent = true; closeTimer = timer; }
       child!.stdin.write(`${message}\n`, (writeError) => { if (writeError) finish("sidecar request write failed"); });
     });
     const next = tail.then(run, run) as Promise<T>;
@@ -261,7 +277,10 @@ export async function startCutFootageSidecar(start: CutFootageSidecarStart): Pro
     close() {
       if (!closePromise) {
         closeRequested = true;
-        closePromise = request<void>("close", {}, limits.closeMs).then(() => dead);
+        closePromise = request<void>("close", {}, limits.closeMs).then(async () => {
+          await dead;
+          if (fatal) throw fatal;
+        });
       }
       return closePromise;
     },

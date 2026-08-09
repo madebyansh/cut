@@ -8,6 +8,8 @@ const handshake = {
   normalization: "l2", modalities: ["image", "text"], hardware: "cpu",
   adapterSha256: digest("a"), selfTestSha256: digest("b"),
 };
+if (mode === "environment") handshake.provider = process.env.CUT_FOOTAGE_CACHE_DIR === "fixture-cache"
+  && process.env.CUT_FOOTAGE_MODEL_DIR === "fixture-model" && process.env.PATH === undefined ? "fixture-isolated" : "environment-leaked";
 const line = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const request = (id, operation) => ({ format: "cut-footage-sidecar-response", version: 1, id, operation });
 
@@ -18,6 +20,7 @@ if (mode === "partial-handshake") {
 else line(handshake);
 
 if (mode === "stderr-overflow") process.stderr.write("x".repeat(16_384));
+if (mode === "stderr-secret") process.stderr.write("secret-value /tmp/sidecar-secret CUT_FOOTAGE_SECRET".repeat(512));
 if (mode === "stdout-overflow") process.stdout.write("x".repeat(16_384));
 if (mode === "unsolicited") line({ ...request("unsolicited", "searchText"), candidates: [] });
 if (mode === "malformed") process.stdout.write("not-json\n");
@@ -40,12 +43,13 @@ process.stdin.on("data", (chunk) => {
     requestIds.add(value.id);
     if (mode === "timeout" || mode === "signal") continue;
     if (mode === "crash") process.exit(17);
+    if (mode === "exit-before-close" && value.operation === "index") process.exit(0);
     if (mode === "partial") {
       process.stdout.write(`{"format":"cut-footage-sidecar-response","version":1,"id":${JSON.stringify(value.id)}`);
       process.exit(0);
     }
     if (value.operation === "index") {
-      const response = { ...request(value.id, "index"), artifact: { bytes: 12, sha256: digest("c"), recordCount: 3, dimensions: 4 } };
+      const response = { ...request(value.id, "index"), artifact: { bytes: 12, sha256: digest("c"), recordCount: 3, dimensions: mode === "wrong-index-dimensions" ? 5 : 4 } };
       if (mode === "duplicate") process.stdout.write(`${JSON.stringify(response)}\n${JSON.stringify(response)}\n`);
       else line(mode === "unknown" ? { ...response, surprise: true } : response);
       continue;
@@ -60,7 +64,9 @@ process.stdin.on("data", (chunk) => {
     }
     if (value.operation === "close") {
       line(request(value.id, "close"));
-      process.exit(0);
+      if (mode === "close-hang") continue;
+      if (mode === "close-exit17") setTimeout(() => process.exit(17), 20);
+      else process.exit(0);
     }
   }
 });

@@ -32,3 +32,11 @@ complete. one focused commit: `feat: add bounded footage sidecar protocol`.
 
 - hostile fixture covers exact handshake, request IDs, partial lines, unsolicited/unknown/malformed/duplicate output, bounds, timeout, crash, abort, invalid search candidates, idempotent close, and environment refusal.
 - no model adapter, setup, doctor operation, or real vector indexing workflow was added.
+
+## review round 1
+
+- status: complete after focused follow-up fix commit `fix: harden footage sidecar limits and close lifecycle`.
+- red: the 14-test focused sidecar suite exposed five failures: upward/unknown limit overrides, request overflow cleanup, handshake/index dimension drift, queued-close early exit, and close acknowledgement without a clean exit.
+- green: `node node_modules/typescript/bin/tsc -p tsconfig.cli.json && node --test dist-cli/tests/footage-sidecar.test.js` passes all 14 tests, including close acknowledgement plus hang/exit-17 and no-live-PID checks.
+- hard limits now accept only named downward overrides. a close completes only after its request is actually written, acknowledged, and followed by exit code zero; its timeout covers the full acknowledgement-and-exit lifetime.
+- index artifact dimensions must exactly match the immutable handshake. new diagnostic tests prove child stderr/path-like text does not reach public errors, request overflow terminates without writing, bad executable startup fails closed, and the explicit environment does not inherit `PATH`.
