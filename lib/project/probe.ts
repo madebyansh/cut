@@ -152,6 +152,11 @@ const HARD_BUDGET = {
 
 const probeTerminationGraceMs = 250;
 
+type ProbeNativeProcessControl = Readonly<{
+  child: ChildProcess;
+  terminate: () => void;
+}>;
+
 function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
@@ -164,7 +169,7 @@ async function spawnProbeNativeProcess(
   args: readonly string[],
   options: SpawnOptions,
   execution?: ProbeNativeProcessExecution,
-): Promise<ChildProcess> {
+): Promise<ProbeNativeProcessControl> {
   if (execution?.signal?.aborted) throw new CutProjectError("CUTP2008", `${tool} native process launch was cancelled.`);
   const detached = execution?.signal !== undefined && platform() !== "win32";
   const controlledOptions = detached ? { ...options, detached: true } : options;
@@ -176,8 +181,6 @@ async function spawnProbeNativeProcess(
     }
     child = await spawnBoundReferenceNativeProcess(execution.collector, execution.context, args, controlledOptions);
   }
-  if (!execution?.signal) return child;
-  const signal = execution.signal;
   let terminating = false;
   const signalTree = (value: NodeJS.Signals) => {
     if (detached && child.pid !== undefined) {
@@ -186,7 +189,7 @@ async function spawnProbeNativeProcess(
     }
     if (child.exitCode === null && child.signalCode === null) child.kill(value);
   };
-  const abort = () => {
+  const terminate = () => {
     if (terminating) return;
     terminating = true;
     signalTree("SIGTERM");
@@ -199,10 +202,13 @@ async function spawnProbeNativeProcess(
       }, probeTerminationGraceMs);
     }, probeTerminationGraceMs);
   };
-  child.once("close", () => signal.removeEventListener("abort", abort));
-  signal.addEventListener("abort", abort, { once: true });
-  if (signal.aborted) abort();
-  return child;
+  const signal = execution?.signal;
+  if (signal) {
+    child.once("close", () => signal.removeEventListener("abort", terminate));
+    signal.addEventListener("abort", terminate, { once: true });
+    if (signal.aborted) terminate();
+  }
+  return Object.freeze({ child, terminate });
 }
 
 function probeBudget(options: ProbeBudget): Required<ProbeBudget> {
@@ -375,9 +381,9 @@ async function ffprobe(
   const inheritedDescriptor = platform() !== "win32";
   const input = inheritedDescriptor ? "/dev/fd/3" : path;
   const args = ["-v", "error", "-print_format", "json", "-show_program_version", "-show_format", "-show_streams", "-show_chapters", input];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffprobe",
       executable,
       args,
@@ -387,7 +393,7 @@ async function ffprobe(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffprobe executable was not found on PATH.")
@@ -410,7 +416,7 @@ async function ffprobe(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(
       () => abort(new CutProjectError("CUTP2001", `ffprobe timed out after ${budget.timeoutMs}ms.`)),
@@ -477,9 +483,9 @@ async function ffmpegDecodedAudioPcmIdentity(
     "-map", `0:${stream.index}`, "-vn", "-sn", "-dn",
     "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1",
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffmpeg",
       executable,
       args,
@@ -489,7 +495,7 @@ async function ffmpegDecodedAudioPcmIdentity(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffmpeg executable was not found on PATH.", path)
@@ -509,7 +515,7 @@ async function ffmpegDecodedAudioPcmIdentity(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(() => abort(new CutProjectError("CUTP2001", `ffmpeg decoded-audio PCM scan timed out after ${budget.timeoutMs}ms.`, path)), budget.timeoutMs);
     if (!child.stdout || !child.stderr) abort(new CutProjectError("CUTP2008", "ffmpeg decoded-audio PCM scan did not expose bounded output pipes.", path));
@@ -577,9 +583,9 @@ async function ffmpegAudioProxyAnalysisPcm(
     "-map", "[cut_audio_proxy_alignment]", "-map_metadata", "-1",
     "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1",
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffmpeg",
       executable,
       args,
@@ -589,7 +595,7 @@ async function ffmpegAudioProxyAnalysisPcm(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffmpeg executable was not found on PATH.", path)
@@ -607,7 +613,7 @@ async function ffmpegAudioProxyAnalysisPcm(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(
       () => abort(new CutProjectError("CUTP2001", `ffmpeg audio-proxy alignment scan timed out after ${budget.timeoutMs}ms.`, path)),
@@ -988,9 +994,9 @@ async function ffmpegVideoProxyAnalysisRgb(
     "-map", "[cut_video_proxy_alignment]", "-map_metadata", "-1",
     "-fps_mode", "passthrough", "-c:v", "rawvideo", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffmpeg",
       executable,
       args,
@@ -1000,7 +1006,7 @@ async function ffmpegVideoProxyAnalysisRgb(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffmpeg executable was not found on PATH.", path)
@@ -1018,7 +1024,7 @@ async function ffmpegVideoProxyAnalysisRgb(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(
       () => abort(new CutProjectError("CUTP2001", `ffmpeg video-proxy alignment scan timed out after ${budget.timeoutMs}ms.`, path)),
@@ -1244,9 +1250,9 @@ async function ffprobeDecodedAudioSamples(
     "-of", "compact=p=1:nk=0",
     input,
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffprobe",
       executable,
       args,
@@ -1256,7 +1262,7 @@ async function ffprobeDecodedAudioSamples(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffprobe executable was not found on PATH.", path)
@@ -1285,7 +1291,7 @@ async function ffprobeDecodedAudioSamples(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const invalid = (message: string) => abort(new CutProjectError("CUTP2016", `Audio stream ${stream.index} has no safe decoded sample witness: ${message}`, path));
     const parseLine = (line: string) => {
@@ -1484,9 +1490,9 @@ async function ffprobeDecodedVideoCadence(
     "-of", "compact=p=1:nk=0",
     input,
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffprobe",
       executable,
       args,
@@ -1496,7 +1502,7 @@ async function ffprobeDecodedVideoCadence(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffprobe executable was not found on PATH.", path)
@@ -1519,7 +1525,7 @@ async function ffprobeDecodedVideoCadence(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const invalid = (message: string) => abort(new CutProjectError("CUTP2014", `Video stream ${stream.index} has no safe decoded cadence witness: ${message}`, path));
     const parseLine = (line: string) => {
