@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -923,6 +924,137 @@ export type ReferencePreviewManifest = ReturnType<typeof commonManifest> & {
   audio: { normalization: unknown; delivery: unknown };
 };
 
+export type ReferenceDraftPreviewManifest = ReturnType<typeof commonManifest> & {
+  format: "cut-reference-draft-preview";
+  version: 1;
+  authority: "non-authoritative-draft";
+  visibleMark: "CUT DRAFT pixel label";
+  pictureToolchain: ReferencePictureMediaToolchainIdentity;
+  artifact: { file: string; sha256: string; bytes: number; container: "mp4"; videoCodec: "h264"; audioCodec: "aac" };
+  range: {
+    semantics: "half-open";
+    start: Rational;
+    end: Rational;
+    duration: Rational;
+    firstFrame: number;
+    endFrameExclusive: number;
+    frames: number;
+    startSample: number;
+    endSampleExclusive: number;
+    samples: number;
+  };
+  canvas: { sourceWidth: number; sourceHeight: number; width: number; height: number; resize: "none" | "lanczos3-v1"; aspect: "preserved-exactly" };
+  execution: {
+    inputProfile: "proxy";
+    picture: "canonical-selected-frames-with-draft-delivery-encode";
+    pictureCache: ReferencePreviewPictureCacheEvidence;
+    audio: "selected-f32le-direct-draft-aac";
+    audioGraph: { roots: number; filters: number; sha256: string; bytes: number };
+    omitted: readonly [
+      "loudness-normalization",
+      "true-peak-scan",
+      "aac-delivery-verification",
+      "stems",
+      "release-manifest",
+    ];
+  };
+};
+
+const draftGlyphs: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  C: Object.freeze(["01111", "10000", "10000", "10000", "10000", "10000", "01111"]),
+  U: Object.freeze(["10001", "10001", "10001", "10001", "10001", "10001", "01110"]),
+  D: Object.freeze(["11110", "10001", "10001", "10001", "10001", "10001", "11110"]),
+  R: Object.freeze(["11110", "10001", "10001", "11110", "10100", "10010", "10001"]),
+  A: Object.freeze(["01110", "10001", "10001", "11111", "10001", "10001", "10001"]),
+  F: Object.freeze(["11111", "10000", "10000", "11110", "10000", "10000", "10000"]),
+  T: Object.freeze(["11111", "00100", "00100", "00100", "00100", "00100", "00100"]),
+  " ": Object.freeze(["000", "000", "000", "000", "000", "000", "000"]),
+});
+
+async function draftWatermark(path: string) {
+  const label = "CUT DRAFT", scale = 3, padding = 7, gap = 1;
+  const glyphWidths = [...label].map((glyph) => draftGlyphs[glyph]?.[0]?.length ?? 0);
+  if (glyphWidths.some((width) => width < 1)) fail("CUT_REVIEW_TOOL_CONTRACT", "internal draft label contains an unsupported glyph.");
+  const width = padding * 2 + (glyphWidths.reduce((sum, value) => sum + value, 0) + gap * (label.length - 1)) * scale;
+  const height = padding * 2 + 7 * scale;
+  const rgba = Buffer.alloc(width * height * 4);
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const offset = pixel * 4;
+    rgba[offset] = 255; rgba[offset + 1] = 45; rgba[offset + 2] = 137; rgba[offset + 3] = 224;
+  }
+  let cursor = padding;
+  for (const glyph of label) {
+    const rows = draftGlyphs[glyph]!;
+    for (let row = 0; row < rows.length; row += 1) {
+      for (let column = 0; column < rows[row]!.length; column += 1) {
+        if (rows[row]![column] !== "1") continue;
+        for (let y = 0; y < scale; y += 1) for (let x = 0; x < scale; x += 1) {
+          const offset = ((padding + row * scale + y) * width + cursor + column * scale + x) * 4;
+          rgba[offset] = 8; rgba[offset + 1] = 12; rgba[offset + 2] = 22; rgba[offset + 3] = 255;
+        }
+      }
+    }
+    cursor += (rows[0]!.length + gap) * scale;
+  }
+  const sharpModule = await import("sharp"), sharp = sharpModule.default ?? sharpModule;
+  await sharp(rgba, { raw: { width, height, channels: 4 } }).png({ compressionLevel: 9, adaptiveFiltering: false }).toFile(path);
+}
+
+async function runDraftMux(ffmpeg: string, input: Readonly<{
+  picture: string;
+  audio: string;
+  watermark: string;
+  output: string;
+  sampleRate: number;
+}>) {
+  const arguments_ = [
+    "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+    "-i", input.picture,
+    "-f", "f32le", "-ar", String(input.sampleRate), "-ac", "2", "-i", input.audio,
+    "-loop", "1", "-i", input.watermark,
+    "-filter_complex", "[0:v][2:v]overlay=16:16:format=auto[v]",
+    "-map", "[v]", "-map", "1:a:0",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart", input.output,
+  ];
+  await new Promise<void>((accept, reject) => {
+    const child = spawn(ffmpeg, arguments_, { shell: false, stdio: ["ignore", "ignore", "pipe"] });
+    const stderr: Buffer[] = [];
+    let stderrBytes = 0, settled = false, forcedFailure: Error | undefined;
+    let forcedKill: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (forcedKill) clearTimeout(forcedKill);
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", terminate);
+      if (error) reject(error); else accept();
+    };
+    const interrupted = (signal: string) => {
+      if (forcedFailure) return;
+      forcedFailure = new Error(`CUT_DRAFT_CANCELLED: draft mux was cancelled by ${signal}.`);
+      child.kill("SIGTERM");
+      forcedKill = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    };
+    const interrupt = () => interrupted("SIGINT"), terminate = () => interrupted("SIGTERM");
+    process.once("SIGINT", interrupt);
+    process.once("SIGTERM", terminate);
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.byteLength;
+      if (stderrBytes > 1_048_576) {
+        forcedFailure = new Error("CUT_DRAFT_MUX_LIMIT: ffmpeg diagnostic output exceeded 1 MiB.");
+        child.kill("SIGKILL");
+      } else stderr.push(Buffer.from(chunk));
+    });
+    child.on("error", (error) => finish(error));
+    child.on("exit", (code, signal) => {
+      if (forcedFailure) finish(forcedFailure);
+      else if (code === 0) finish();
+      else finish(new Error(`CUT_DRAFT_MUX: ffmpeg exited ${code ?? signal}: ${Buffer.concat(stderr).toString("utf8").trim()}`));
+    });
+  });
+}
+
 /**
  * Render a bounded review interval directly from canonical CUT clocks.
  * Picture frames use one immutable content-addressed range artifact keyed by
@@ -1134,6 +1266,124 @@ export async function renderReferencePreviewArtifact(ir: CutAVIR, projectRoot: s
   } finally {
     await cleanupSession();
     if (delivery) await delivery.cleanup().catch(() => undefined);
+    if (staging) await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Fast, visibly marked authoring output. This is deliberately not a reference
+ * preview: it retains locked proxy inputs and canonical picture evaluation but
+ * omits final mastering and delivery verification.
+ */
+export async function renderReferenceDraftPreviewArtifact(ir: CutAVIR, projectRoot: string, destination: string, authoredOptions: unknown) {
+  const options = closedOptions(authoredOptions, [
+    "range", "width", "outputName", "mediaProfile", "lockSha256", "__lockedReferenceBackend",
+    "__testAfterInputSnapshot", "__testBeforeInputCleanup", "__testPreparationFault", "__testPublicationHooks",
+    "__testPictureHooks",
+  ], "draft preview");
+  if (options.mediaProfile !== undefined && options.mediaProfile !== "proxy") fail("CUT_REVIEW_TOOL_CONTRACT", "draft preview mediaProfile is fixed to proxy.");
+  const requestedOutput = outputPath(projectRoot, destination, ".mp4"), digest = lockDigest(options.lockSha256);
+  const session = await prepareReviewSession(ir, projectRoot, options.outputName, "proxy", options.__lockedReferenceBackend as CutReferenceBackendIdentity | undefined, "full");
+  let sessionCleanupStarted = false, staging: string | undefined;
+  const cleanupSession = async () => {
+    if (sessionCleanupStarted) return;
+    sessionCleanupStarted = true;
+    await session.cleanup();
+  };
+  try {
+    await (options.__testAfterInputSnapshot as (() => void | Promise<void>) | undefined)?.();
+    const selection = normalizedPreviewSelection(session.composition, options.range, options.width);
+    const localParent = relative(resolve(projectRoot), dirname(requestedOutput));
+    const parent = localParent ? await ensureProjectWriteDirectory(projectRoot, localParent.split(sep).join("/")) : resolve(projectRoot);
+    const output = resolve(parent, basename(requestedOutput));
+    staging = await mkdtemp(resolve(parent, ".cut-draft-preview-"));
+    const selectedAudio = resolve(staging, "selected.f32le");
+    const watermark = resolve(staging, "draft-watermark.png");
+    const stagedArtifact = resolve(staging, "draft.mp4");
+    const stagedManifest = resolve(staging, "draft.manifest.json");
+    const cacheRoot = await ensureProjectWriteDirectory(projectRoot, ".cut/cache/reference");
+    const sceneToolchain = await bindReferencePictureMediaToolchain();
+    const picture = await renderReferencePreviewPictureArtifact({
+      ir: session.ir,
+      composition: session.composition,
+      projectRoot,
+      cacheRoot,
+      firstFrame: selection.frameStart,
+      endFrameExclusive: selection.frameEnd,
+      width: selection.width,
+      height: selection.height,
+      color: session.output.color,
+      backend: session.backend,
+      toolchain: sceneToolchain,
+      verifiedResourcePath: session.pathFor,
+      __testHooks: options.__testPictureHooks as ReferencePreviewPictureTestHooks | undefined,
+    });
+    const audioExecution = await renderReferenceAudioSelection(
+      session.ir,
+      session.composition,
+      projectRoot,
+      selectedAudio,
+      referenceMasterAudioRootIds(session.ir, session.composition),
+      {
+        outputFormat: "raw-stereo-f32le",
+        sampleRange: { start: selection.sampleStart, end: selection.sampleEnd },
+        __verifiedResourcePath: session.pathFor,
+      },
+    );
+    const audioSha256 = await fileSha256(selectedAudio), audioBytes = (await stat(selectedAudio)).size;
+    if (audioBytes !== selection.samples * 8) fail("CUT_REVIEW_TOOL_WAVE", "draft audio output does not contain the exact selected stereo f32le sample count.");
+    await draftWatermark(watermark);
+    await runDraftMux(sceneToolchain.ffmpegExecutablePath, {
+      picture: picture.path,
+      audio: selectedAudio,
+      watermark,
+      output: stagedArtifact,
+      sampleRate: session.composition.sampleRate,
+    });
+    await (options.__testPreparationFault as (() => void | Promise<void>) | undefined)?.();
+    const artifactSha256 = await fileSha256(stagedArtifact), artifactBytes = (await stat(stagedArtifact)).size;
+    const manifest: ReferenceDraftPreviewManifest = {
+      format: "cut-reference-draft-preview",
+      version: 1,
+      authority: "non-authoritative-draft",
+      visibleMark: "CUT DRAFT pixel label",
+      pictureToolchain: sceneToolchain.toolchain,
+      ...commonManifest(session, digest),
+      artifact: { file: basename(output), sha256: artifactSha256, bytes: artifactBytes, container: "mp4", videoCodec: "h264", audioCodec: "aac" },
+      range: {
+        semantics: "half-open", start: selection.range.start, end: selection.range.end, duration: selection.duration,
+        firstFrame: selection.frameStart, endFrameExclusive: selection.frameEnd, frames: selection.frames,
+        startSample: selection.sampleStart, endSampleExclusive: selection.sampleEnd, samples: selection.samples,
+      },
+      canvas: { sourceWidth: session.composition.width, sourceHeight: session.composition.height, width: selection.width, height: selection.height, resize: selection.width === session.composition.width ? "none" : "lanczos3-v1", aspect: "preserved-exactly" },
+      execution: {
+        inputProfile: "proxy",
+        picture: "canonical-selected-frames-with-draft-delivery-encode",
+        pictureCache: picture.cache,
+        audio: "selected-f32le-direct-draft-aac",
+        audioGraph: { roots: audioExecution.roots, filters: audioExecution.filters, sha256: audioSha256, bytes: audioBytes },
+        omitted: Object.freeze([
+          "loudness-normalization",
+          "true-peak-scan",
+          "aac-delivery-verification",
+          "stems",
+          "release-manifest",
+        ]),
+      },
+    };
+    await writeFile(stagedManifest, `${stableJsonStringify(manifest)}\n`, { flag: "wx", mode: 0o600 });
+    await (options.__testBeforeInputCleanup as (() => void | Promise<void>) | undefined)?.();
+    await cleanupSession();
+    const publications = [
+      { staged: stagedArtifact, destination: output, order: 100, role: "draft-preview" },
+      { staged: stagedManifest, destination: `${output}.manifest.json`, order: 200, role: "draft-preview-manifest" },
+    ];
+    const hooks = options.__testPublicationHooks as StagedFileTransactionTestHooks | undefined;
+    if (hooks) await publishStagedFileTransactionForTest(publications, hooks);
+    else await publishStagedFileTransaction(publications);
+    return manifest;
+  } finally {
+    await cleanupSession();
     if (staging) await rm(staging, { recursive: true, force: true }).catch(() => undefined);
   }
 }

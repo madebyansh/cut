@@ -82,6 +82,7 @@ import { reviewReferenceStudyFile } from "../lib/review/reference-study";
 import {
   renderReferenceAudioAuditionArtifact,
   renderReferenceContactSheetArtifact,
+  renderReferenceDraftPreviewArtifact,
   renderReferenceFrameArtifact,
   renderReferencePreviewArtifact,
 } from "../lib/runtime/reference/authoring-review";
@@ -125,7 +126,7 @@ Typed audiovisual source (canonical)
   cut frame <program.cut> --lock cut.lock (--frame 42 | --at 1.75s) --out review/frame.png [--output name] [--profile master|proxy] [--json]
   cut contact <program.cut> --lock cut.lock --frames 0,24,48 --out review/contact.png [--columns 3] [--thumbnail-width 480] [--output name] [--profile master|proxy] [--json]
   cut audition <program.cut> --lock cut.lock --samples 48000:96000 --out review/audition.wav [--stem dialogue] [--output name] [--profile master|proxy] [--json]
-  cut preview <program.cut> --lock cut.lock [--output preview] [--range 2s:5s] [--width 640] [--out output/preview.mp4] [--json]
+  cut preview <program.cut> --lock cut.lock [--output preview] [--range 2s:5s] [--width 640] [--out output/preview.mp4] [--draft] [--json]
   cut render <program.cut> --lock cut.lock --out video.mp4 [--output name] [--stems directory] [--json]
 
 Provenance-bearing asset discovery (candidate bytes are never trusted implicitly)
@@ -294,7 +295,7 @@ const cliCommandSchemas: Readonly<Record<string, CliCommandSchema>> = Object.fre
   frame: schema(1, { "--lock": "value", "--out": "value", "--frame": "value", "--at": "value", "--output": "value", "--profile": "value", "--json": "flag" }, ["--lock", "--out"]),
   contact: schema(1, { "--lock": "value", "--out": "value", "--frames": "value", "--columns": "value", "--thumbnail-width": "value", "--output": "value", "--profile": "value", "--json": "flag" }, ["--lock", "--out", "--frames"]),
   audition: schema(1, { "--lock": "value", "--out": "value", "--samples": "value", "--stem": "value", "--output": "value", "--profile": "value", "--json": "flag" }, ["--lock", "--out", "--samples"]),
-  preview: schema(1, { "--lock": "value", "--out": "value", "--output": "value", "--range": "value", "--width": "value", "--json": "flag" }, ["--lock"]),
+  preview: schema(1, { "--lock": "value", "--out": "value", "--output": "value", "--range": "value", "--width": "value", "--draft": "flag", "--json": "flag" }, ["--lock"]),
   render: schema(1, { "--lock": "value", "--out": "value", "--output": "value", "--stems": "value", "--json": "flag" }, ["--lock", "--out"]),
   "agent-author": schema(1, { "--out": "value", "--provider": "value", "--model": "value", "--attempts": "value", "--report": "value", "--trace": "value", "--json": "flag" }, ["--out"]),
   "agent-repair": schema(1, { "--brief": "value", "--out": "value", "--provider": "value", "--model": "value", "--attempts": "value", "--report": "value", "--trace": "value", "--json": "flag" }, ["--brief", "--out"]),
@@ -1108,6 +1109,7 @@ async function main() {
     }
     if (command === "preview" || command === "render") {
       const isPreview = command === "preview";
+      const isDraft = isPreview && process.argv.includes("--draft");
       if (!lockPath || !appliedLockSha256 || !appliedLock || !lockedReferenceBackend) throw new Error(`${command} requires --lock cut.lock`);
       const outputName = option("--output", isPreview ? "preview" : undefined);
       if (isPreview && !ir.outputs.some((item) => item.name === outputName)) {
@@ -1115,13 +1117,14 @@ async function main() {
         error.code = "CUT_PREVIEW_OUTPUT_MISSING";
         throw error;
       }
-      const output = option("--out", isPreview ? resolve(projectRoot, "output", "preview.mp4") : undefined);
+      const output = option("--out", isDraft ? resolve(projectRoot, "output", "draft-preview.mp4") : isPreview ? resolve(projectRoot, "output", "preview.mp4") : undefined);
       if (!output) throw new Error("render requires --out video.mp4");
       const stemsDirectory = isPreview ? undefined : option("--stems"), emitJson = process.argv.includes("--json");
-      if (!emitJson) console.log(`${cyan(command)} locked CUT graph → authored ${isPreview ? "preview output" : "reference compositor + audio graph"}…`);
+      if (!emitJson) console.log(`${cyan(command)} locked CUT graph → authored ${isDraft ? "non-authoritative draft output" : isPreview ? "preview output" : "reference compositor + audio graph"}…`);
       const boundedPreview = isPreview && (option("--range") !== undefined || option("--width") !== undefined);
-      const manifest = boundedPreview
-        ? await renderReferencePreviewArtifact(ir, projectRoot, resolve(output), {
+      if (isDraft && !boundedPreview) throw codedCliError("CUT_DRAFT_RANGE_REQUIRED", "draft preview requires --range and/or --width so it cannot silently render an unbounded review artifact.");
+      const manifest = isDraft
+        ? await renderReferenceDraftPreviewArtifact(ir, projectRoot, resolve(output), {
             range: option("--range"),
             width: option("--width"),
             outputName,
@@ -1129,7 +1132,16 @@ async function main() {
             lockSha256: appliedLockSha256,
             __lockedReferenceBackend: lockedReferenceBackend,
           })
-        : await renderReferenceIr(ir, projectRoot, resolve(output), outputName, {
+        : boundedPreview
+          ? await renderReferencePreviewArtifact(ir, projectRoot, resolve(output), {
+            range: option("--range"),
+            width: option("--width"),
+            outputName,
+            mediaProfile: "proxy",
+            lockSha256: appliedLockSha256,
+            __lockedReferenceBackend: lockedReferenceBackend,
+          })
+          : await renderReferenceIr(ir, projectRoot, resolve(output), outputName, {
             lockSha256: appliedLockSha256,
             mediaProfile: isPreview ? "proxy" : "master",
             __lockedReferenceBackend: lockedReferenceBackend,
@@ -1137,7 +1149,9 @@ async function main() {
           });
       if (emitJson) process.stdout.write(`${stableJsonStringify({ format: isPreview ? "cut-preview-report" : "cut-render-report", version: 1, command, status: "pass", output: outputName, manifest })}\n`);
       else {
-        if (manifest.format === "cut-reference-range-preview") {
+        if (manifest.format === "cut-reference-draft-preview") {
+          console.log(`${yellow("DRAFT")} ${manifest.range.frames} frame(s) · ${manifest.canvas.width}×${manifest.canvas.height} · non-authoritative`); console.log(dim(`  ${manifest.artifact.file}`));
+        } else if (manifest.format === "cut-reference-range-preview") {
           console.log(`${green("✓")} ${manifest.range.frames} exact frame(s) · ${manifest.range.samples} exact sample(s) · ${manifest.canvas.width}×${manifest.canvas.height} · proxy`); console.log(dim(`  ${manifest.artifact.file}`));
         } else {
           console.log(`${green("✓")} ${manifest.duration.toFixed(2)}s · ${manifest.canvas.width}×${manifest.canvas.height} · ${manifest.audio.filters} audio filters · ${manifest.cache.hits} scene cache hit(s)`); console.log(dim(`  ${manifest.output}`));
