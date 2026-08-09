@@ -31,9 +31,9 @@ This is the quickest demo, but CUT would depend on human-formatted output, Sentr
 
 This gives one installer, but it would add large platform-specific ML dependencies to every CUT install and make Apple Metal, CUDA, and CPU compatibility part of the core package. It would also make Linux packaging much harder. The convenience is not worth the install and maintenance cost during alpha.
 
-## Scope of PR #3
+## Implementation Scope
 
-PR #3 will establish the complete CUT-owned boundary without depending on the unfinished live-preview branch:
+The implementation will establish the complete CUT-owned boundary without depending on the unfinished live-preview branch:
 
 - `cut footage setup`, `index`, `search`, `extract`, and `doctor` command contracts
 - versioned index, search-report, and extraction-manifest validators
@@ -123,4 +123,4 @@ Implementation follows test-first development.
 
 ## Acceptance Criteria
 
-PR #3 is ready when the deterministic executable adapter can index fixture footage, return candidate chunks, produce a validated and deterministically ranked search report, extract one stable match ID, and verify its manifest on macOS and Linux. The adapter subprocess boundary must be the same one used later by the local-model package. A default npm install remains the same size class and all existing authoritative preview/render bytes remain unchanged. The issue remains open until a separately installable real local-model adapter passes its own quality and hardware matrix.
+The implementation is ready when the deterministic executable adapter can index fixture footage, return candidate chunks, produce a validated and deterministically ranked search report, extract one stable match ID, and verify its manifest on macOS and Linux. The adapter subprocess boundary must be the same one used later by the local-model package. A default npm install remains the same size class and all existing authoritative preview/render bytes remain unchanged. The issue remains open until a separately installable real local-model adapter passes its own quality and hardware matrix.
