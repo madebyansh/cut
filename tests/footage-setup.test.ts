@@ -209,7 +209,7 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
   assert.equal(installedAgain, false);
 });
 
-test("setup failure removes only its lock, preserves its unpublished payload, and does not leak child diagnostics", async () => {
+test("setup failure preserves its unpublished payload, creates no shared lock, and does not leak child diagnostics", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-failed-")), "secret-home");
   const recipe = await fakeRecipe();
   await assert.rejects(
@@ -281,6 +281,23 @@ test("locked npm runner kills and drains output overflow and cancellation", asyn
   await assert.rejects(running, footageError("CUT_FOOTAGE_PUBLISH"));
   assert.throws(() => process.kill(pid!, 0), { code: "ESRCH" });
 
+  const grandchildCli = join(root, "grandchild-npm.mjs"), grandchildPidPath = join(stagingRoot, "npm-grandchild.pid");
+  await writeFile(grandchildCli, [
+    'import { spawn } from "node:child_process";',
+    'import { writeFile } from "node:fs/promises";',
+    'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });',
+    'await writeFile("npm-grandchild.pid", String(child.pid));',
+    'process.exit(17);',
+  ].join("\n"));
+  const startedAt = Date.now();
+  await assert.rejects(
+    installCutFootageLocalRuntime({ stagingRoot, nodeExecutable: process.execPath, npmCliPath: grandchildCli, npmCacheRoot, environment }),
+    footageError("CUT_FOOTAGE_PUBLISH"),
+  );
+  const grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
+  assert.ok(Date.now() - startedAt < 2_000);
+  assert.throws(() => process.kill(grandchildPid, 0), { code: "ESRCH" });
+
   const earlyRoot = await mkdtemp(join(tmpdir(), "cut-footage-npm-early-abort-"));
   const earlyStage = join(earlyRoot, "stage"), earlyCache = join(earlyRoot, "cache"), earlyCli = join(earlyRoot, "npm.mjs");
   await mkdir(earlyStage);
@@ -343,26 +360,27 @@ test("setup cleanup never deletes a payload pathname whose inode was replaced", 
   assert.equal(await readFile(join(home, replacement, "preserve-me"), "utf8"), "replacement inode\n");
 });
 
-test("setup lock contention and an invalid immutable install fail without deleting either", async () => {
+test("setup relies on create-only publication, preserves legacy locks, and refuses an invalid immutable install", async () => {
   const base = await mkdtemp(join(tmpdir(), "cut-footage-contention-"));
   const recipe = await fakeRecipe();
   const home = join(base, "footage");
   await mkdir(home);
   await writeFile(join(home, "local-clip-v1.lock"), "held\n");
-  await assert.rejects(setupCutFootageLocalBackend({
+  const installed = await setupCutFootageLocalBackend({
     backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations: fakeOperations(recipe.model),
-  }), footageError("CUT_FOOTAGE_PUBLISH"));
+  });
+  assert.equal(installed.status, "installed");
   assert.equal(await readFile(join(home, "local-clip-v1.lock"), "utf8"), "held\n");
 
-  await rm(join(home, "local-clip-v1.lock"));
-  await mkdir(join(home, "local-clip-v1"));
-  await writeFile(join(home, "local-clip-v1/preserve-me"), "do not delete\n");
+  const invalidHome = join(base, "invalid-footage");
+  await mkdir(join(invalidHome, "local-clip-v1"), { recursive: true });
+  await writeFile(join(invalidHome, "local-clip-v1/preserve-me"), "do not delete\n");
   await assert.rejects(setupCutFootageLocalBackend({
-    backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+    backend: "local", home: invalidHome, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0", operations: fakeOperations(recipe.model),
   }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
-  assert.equal(await readFile(join(home, "local-clip-v1/preserve-me"), "utf8"), "do not delete\n");
+  assert.equal(await readFile(join(invalidHome, "local-clip-v1/preserve-me"), "utf8"), "do not delete\n");
 });
 
 test("setup never replaces a destination created at the publication boundary", async () => {
@@ -384,7 +402,7 @@ test("setup never replaces a destination created at the publication boundary", a
   assert.equal((await readdir(home)).some((name) => name.includes("staging") || name.endsWith(".lock")), false);
 });
 
-test("setup refuses package scripts, removes its lock, and never guesses at recursive payload cleanup", async () => {
+test("setup refuses package scripts, creates no shared lock, and never guesses at recursive payload cleanup", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-hostile-recipe-")), "footage");
   const recipe = await fakeRecipe();
   const packagePath = join(recipe.root, "package.json");

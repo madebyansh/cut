@@ -11,7 +11,6 @@ import {
   realpath,
   stat,
   symlink,
-  unlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -50,6 +49,7 @@ const pinnedProvider = "huggingface-transformers-js";
 const pinnedModel = "Xenova/clip-vit-base-patch32";
 const pinnedRevision = "d15189d7028b43f1d3e65039190477f6af591c2a";
 const pinnedSelfTestSha256 = "ba7503358ab88be43b6e50d5d8a0f5367e22241208d832248ccb32209372aae7";
+const pinnedPackageLockSha256 = "305d9fe258383dd6ed3c55536ed19130d248c5f608ead471298f54f67f291b0c";
 const pinnedModelFiles = Object.freeze([
   Object.freeze({ locator: "config.json", role: "config", bytes: 4_524, sha256: "493ef57ff783e42d1530c91b53469b7fdf8db8a9c1408e86998fcb7899a4f495" }),
   Object.freeze({ locator: "onnx/text_model_quantized.onnx", role: "text-model", bytes: 64_504_507, sha256: "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a" }),
@@ -639,13 +639,31 @@ export async function installCutFootageLocalRuntime(request: CutFootageLocalInst
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let child: ReturnType<typeof spawn>;
-    let failure = false, stdoutBytes = 0, stderrBytes = 0, combinedBytes = 0;
-    let terminateTimer: NodeJS.Timeout | undefined;
+    let failure = false, settled = false, stdoutBytes = 0, stderrBytes = 0, combinedBytes = 0;
+    let terminateTimer: NodeJS.Timeout | undefined, drainTimer: NodeJS.Timeout | undefined, postExitTimer: NodeJS.Timeout | undefined;
+    const installerError = () => new CutFootageError("CUT_FOOTAGE_PUBLISH", "$installation", "the locked local footage runtime installer failed.");
+    const finish = (error?: CutFootageError) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(wallTimer); clearTimeout(terminateTimer); clearTimeout(drainTimer); clearTimeout(postExitTimer);
+      request.signal?.removeEventListener("abort", abort);
+      if (error) rejectPromise(error); else resolvePromise();
+    };
+    const signalTree = (signal: NodeJS.Signals) => {
+      const pid = child?.pid;
+      if (pid === undefined) return;
+      try { process.kill(-pid, signal); } catch { child.kill(signal); }
+    };
     const fail = () => {
       if (failure) return;
       failure = true;
-      child?.kill("SIGTERM");
-      terminateTimer = setTimeout(() => child?.kill("SIGKILL"), npmTerminateGraceMs);
+      clearTimeout(postExitTimer);
+      signalTree("SIGTERM");
+      terminateTimer = setTimeout(() => {
+        signalTree("SIGKILL");
+        child.stdout?.destroy(); child.stderr?.destroy();
+        drainTimer = setTimeout(() => finish(installerError()), 50);
+      }, npmTerminateGraceMs);
     };
     const abort = () => fail();
     const wallTimer = setTimeout(fail, npmInstallTimeoutMs);
@@ -662,7 +680,8 @@ export async function installCutFootageLocalRuntime(request: CutFootageLocalInst
         request.npmCacheRoot,
       ], {
         cwd: request.stagingRoot,
-        detached: false,
+        // A private process group is required to terminate npm lifecycle descendants on timeout/abort.
+        detached: true,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...request.environment },
@@ -683,11 +702,12 @@ export async function installCutFootageLocalRuntime(request: CutFootageLocalInst
       if (stderrBytes > maximumNpmOutputBytes || combinedBytes > maximumNpmCombinedOutputBytes) fail();
     });
     child.on("error", fail);
+    child.on("exit", (code, signal) => {
+      if (code !== 0 || signal !== null) fail();
+      else postExitTimer = setTimeout(fail, npmTerminateGraceMs);
+    });
     child.on("close", (code, signal) => {
-      clearTimeout(wallTimer); clearTimeout(terminateTimer);
-      request.signal?.removeEventListener("abort", abort);
-      if (!failure && code === 0 && signal === null) resolvePromise();
-      else rejectPromise(new CutFootageError("CUT_FOOTAGE_PUBLISH", "$installation", "the locked local footage runtime installer failed."));
+      if (!failure && code === 0 && signal === null) finish();
     });
   });
 }
@@ -817,6 +837,9 @@ async function loadRecipe(recipeRoot: string, stagingRoot: string, enforcePinned
   const packageJson = parseStrictPackageJson(await readFile(join(stagingRoot, "package.json")));
   const packageLock = parseStrictPackageJson(await readFile(join(stagingRoot, "package-lock.json")));
   validateRecipePackages(packageJson, packageLock);
+  if (enforcePinned && (await hashRegular(join(stagingRoot, "package-lock.json"))).sha256 !== pinnedPackageLockSha256) {
+    mismatch("the bundled local footage adapter lock does not match the audited dependency closure.");
+  }
   const model = parseModel(await readFile(join(stagingRoot, "model.json")));
   if (enforcePinned) requirePinnedModel(model);
   return Object.freeze({
@@ -864,21 +887,15 @@ async function publishVerifiedInstall(
   try { await beforePublish?.({ stagingRoot, target }); } catch { publishFailure("the verified local footage backend could not enter its create-only publication boundary."); }
   const payloadName = basename(stagingRoot);
   if (!payloadPattern.test(payloadName) || dirname(stagingRoot) !== dirname(target)) publishFailure("the verified local footage backend payload is invalid.");
-  let targetSnapshot: EntrySnapshot | undefined;
   try {
     const before = await lstat(stagingRoot);
     if (!before.isDirectory() || before.isSymbolicLink() || before.dev !== stagingSnapshot.dev || before.ino !== stagingSnapshot.ino) publishFailure("the verified local footage backend payload changed before publication.");
     await symlink(payloadName, target, "dir");
     const publishedLink = await lstat(target);
-    targetSnapshot = Object.freeze({ dev: publishedLink.dev, ino: publishedLink.ino });
     const [declaredTarget, after] = await Promise.all([readlink(target), lstat(stagingRoot)]);
     if (!publishedLink.isSymbolicLink() || declaredTarget !== payloadName || !after.isDirectory() || after.isSymbolicLink()
       || after.dev !== stagingSnapshot.dev || after.ino !== stagingSnapshot.ino) publishFailure("the verified local footage backend publication changed before commit.");
   } catch (error) {
-    if (targetSnapshot) try {
-      const metadata = await lstat(target), declaredTarget = await readlink(target);
-      if (metadata.dev === targetSnapshot.dev && metadata.ino === targetSnapshot.ino && declaredTarget === payloadName) await unlink(target);
-    } catch { /* Preserve a destination that changed or is no longer ours. */ }
     if (error instanceof CutFootageError) throw error;
     publishFailure("the verified local footage backend destination already exists.");
   }
@@ -969,10 +986,17 @@ export async function inspectCutFootageLocalInstall(options: CutFootageLocalInsp
     if (manifest.platform !== current.platform || manifest.architecture !== current.architecture) mismatch();
     const fixtureSnapshot = fixturePayloads.get(payload);
     const fixtureInstall = fixtureSnapshot?.dev === publication.payloadSnapshot.dev && fixtureSnapshot.ino === publication.payloadSnapshot.ino;
+    let bundledRecipeTree: CutFootageTreeIdentity | undefined;
     if (!fixtureInstall) {
       requirePinnedModel(manifest.model);
-      const bundledAdapter = resolve(__dirname, "../../../adapters/footage-local/local-clip-sidecar.mjs");
-      if ((await hashRegular(bundledAdapter)).sha256 !== manifest.adapterSha256) mismatch();
+      const bundledRoot = resolve(__dirname, "../../../adapters/footage-local");
+      const [bundledAdapter, bundledLock, recipeIdentity] = await Promise.all([
+        hashRegular(join(bundledRoot, "local-clip-sidecar.mjs")),
+        hashRegular(join(bundledRoot, "package-lock.json")),
+        selectedFileIdentity(bundledRoot, recipeFiles),
+      ]);
+      if (bundledAdapter.sha256 !== manifest.adapterSha256 || bundledLock.sha256 !== pinnedPackageLockSha256) mismatch();
+      bundledRecipeTree = recipeIdentity;
     }
     if ((await hashRegular(join(payload, "local-clip-sidecar.mjs"))).sha256 !== manifest.adapterSha256) mismatch();
     const modelRoot = modelRevisionPath(payload, manifest.model);
@@ -983,7 +1007,8 @@ export async function inspectCutFootageLocalInstall(options: CutFootageLocalInsp
       treeIdentity(modelRoot),
       treeIdentity(payload, new Set([manifestName])),
     ]);
-    if (!same(recipeTree, manifest.recipeTree) || !same(runtimeTree, manifest.runtimeTree) || !same(modelTree, manifest.modelTree) || !same(installationTree, manifest.installationTree)) mismatch();
+    if (!same(recipeTree, manifest.recipeTree) || !same(runtimeTree, manifest.runtimeTree) || !same(modelTree, manifest.modelTree) || !same(installationTree, manifest.installationTree)
+      || (bundledRecipeTree !== undefined && !same(recipeTree, bundledRecipeTree))) mismatch();
     if ((await hashRegular(join(payload, "local-clip-sidecar.mjs"))).sha256 !== manifest.adapterSha256) mismatch();
     await assertPublishedSnapshot(publication);
     const install = deepFreeze({ root: payload, modelRevisionRoot: modelRoot, sidecarPath: join(payload, "local-clip-sidecar.mjs"), manifest });
@@ -1018,7 +1043,7 @@ export async function startCutFootageLocalSidecar(options: CutFootageLocalStartO
   }
 }
 
-/** Installs one immutable local backend through a sibling stage and exclusive lock. */
+/** Installs one immutable local backend through a sibling payload and one create-only publication. */
 export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupOptions): Promise<CutFootageLocalSetupReport> {
   if (!options || typeof options !== "object" || Array.isArray(options) || options.backend !== "local") {
     footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$backend", "only the local footage backend is supported.");
@@ -1045,18 +1070,9 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     publishFailure("the footage home could not be prepared.");
   }
 
-  const lockPath = join(home, `${cutFootageLocalDirectoryName}.lock`), token = `${process.pid}-${randomUUID()}\n`;
   const stagingRoot = join(home, `.${cutFootageLocalDirectoryName}.payload-${process.pid}-${randomUUID()}`);
-  let lockHandle: Awaited<ReturnType<typeof open>> | undefined, lockSnapshot: EntrySnapshot | undefined, stagingSnapshot: EntrySnapshot | undefined;
+  let stagingSnapshot: EntrySnapshot | undefined;
   try {
-    try {
-      lockHandle = await open(lockPath, "wx", 0o600);
-      const metadata = await lockHandle.stat();
-      lockSnapshot = Object.freeze({ dev: metadata.dev, ino: metadata.ino });
-      await lockHandle.writeFile(token);
-      await lockHandle.close(); lockHandle = undefined;
-    } catch { publishFailure("another local footage setup already owns the installation lock."); }
-
     try { await lstat(target); mismatch(); } catch (error) {
       if (error instanceof CutFootageError) throw error;
       if (systemErrorCode(error) !== "ENOENT") mismatch();
@@ -1120,15 +1136,6 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
   } catch (error) {
     if (error instanceof CutFootageError) throw error;
     publishFailure("the local footage backend could not be installed.");
-  } finally {
-    await lockHandle?.close().catch(() => undefined);
-    // Node exposes no inode-bound recursive unlink. Preserve an unpublished payload rather than risk deleting a replacement pathname.
-    if (lockSnapshot) {
-      try {
-        const metadata = await lstat(lockPath);
-        if (metadata.dev === lockSnapshot.dev && metadata.ino === lockSnapshot.ino) await unlink(lockPath);
-      } catch { /* Never remove a lock we no longer own. */ }
-    }
   }
   return publishFailure("the local footage backend could not be installed.");
 }
