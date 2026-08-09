@@ -7,6 +7,8 @@ import {
   parseCutFootageExtract,
   parseCutFootageIndex,
   parseCutFootageSearch,
+  validateCutFootageExtractAgainstSearch,
+  validateCutFootageSearchAgainstIndex,
 } from "../lib/footage/contracts";
 
 const digest = (value: unknown) => createHash("sha256").update(stableJsonStringify(value)).digest("hex");
@@ -85,6 +87,34 @@ test("footage v1 decoders preserve canonical identities and exact rational wire 
   assert.deepEqual(search.matches[0]!.sourceSelection.range, range("0", "3"));
   assert.equal(extract.label, "candidate-only-not-cut-lock");
   assert.equal(extract.extractSha256, extractFixture().extractSha256);
+});
+
+test("footage report bindings prove selected chunks and extracts rather than trusting SHA-shaped links", () => {
+  const index = parseCutFootageIndex(JSON.stringify(indexFixture()));
+  const search = parseCutFootageSearch(JSON.stringify(searchFixture()));
+  const extract = parseCutFootageExtract(JSON.stringify(extractFixture()));
+  assert.equal(validateCutFootageSearchAgainstIndex(index, search).searchSha256, search.searchSha256);
+  assert.equal(validateCutFootageExtractAgainstSearch(search, extract).extractSha256, extract.extractSha256);
+
+  assert.throws(
+    () => validateCutFootageSearchAgainstIndex(index, { ...search, indexSha256: sha("f") }),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE",
+  );
+  const forgedSearch = { ...search, matches: [{ ...search.matches[0]!, chunkIds: ["harbour-001"] }] };
+  assert.throws(
+    () => validateCutFootageSearchAgainstIndex(index, forgedSearch),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_MATCH",
+  );
+  const forgedExtract = { ...extract, effectiveHandles: { head: time("0"), tail: time("0") } };
+  assert.throws(
+    () => validateCutFootageExtractAgainstSearch(search, forgedExtract),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_RANGE",
+  );
+  const falseEffectiveWire = signed({ ...extractFixture(), effectiveHandles: { head: time("0"), tail: time("0") } }, "extractSha256");
+  assert.throws(
+    () => parseCutFootageExtract(JSON.stringify(falseEffectiveWire)),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_RANGE",
+  );
 });
 
 test("footage v1 decoders fail closed on hostile shapes, stale identities, and invalid collections", () => {

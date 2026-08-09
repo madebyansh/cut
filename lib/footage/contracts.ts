@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { stableJsonStringify } from "../core/stable";
-import { maximumRationalDigits, rational, compareRational, divideRational, type Rational, zeroRational } from "../language/rational";
+import { maximumRationalDigits, rational, compareRational, divideRational, subtractRational, type Rational, zeroRational } from "../language/rational";
 import { parseStrictPackageJson } from "../package/json";
 import { CutFootageError, footageFail } from "./diagnostics";
 import type { CutFootageHandles, CutFootageRange } from "./range";
@@ -187,11 +187,39 @@ export function parseCutFootageSearch(input: string | Uint8Array): CutFootageSea
   return Object.freeze({ format: "cut-footage-search", version: 1, indexSha256: sha256(root.indexSha256, "$.indexSha256"), query: Object.freeze({ text: queryText, thresholdPpm: Number(query.thresholdPpm) }), matches: Object.freeze(matches), searchSha256 });
 }
 
+function sameRange(left: CutFootageRange, right: CutFootageRange) {
+  return left.semantics === right.semantics && compareRational(left.start, right.start) === 0 && compareRational(left.end, right.end) === 0;
+}
+
+function sameSelection(left: CutFootageSourceSelection, right: CutFootageSourceSelection) {
+  return left.locator === right.locator && left.sha256 === right.sha256 && left.streamIndex === right.streamIndex && sameRange(left.range, right.range);
+}
+
+export function validateCutFootageSearchAgainstIndex(index: CutFootageIndex, search: CutFootageSearch): CutFootageSearch {
+  if (search.indexSha256 !== index.indexSha256) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexSha256", "does not bind the supplied footage index.");
+  const chunks = new Map(index.chunks.map((chunk) => [chunk.id, chunk]));
+  for (const [matchIndex, match] of search.matches.entries()) {
+    const path = `$.matches[${matchIndex}]`, source = index.sources.find((candidate) => candidate.locator === match.sourceSelection.locator);
+    if (!source || source.sha256 !== match.sourceSelection.sha256 || !source.streams.some((stream) => stream.index === match.sourceSelection.streamIndex)) {
+      footageFail("CUT_FOOTAGE_MATCH", `${path}.sourceSelection`, "does not bind one indexed source and stream.");
+    }
+    for (const [chunkIndex, chunkId] of match.chunkIds.entries()) {
+      const chunk = chunks.get(chunkId);
+      if (!chunk || chunk.sourceLocator !== match.sourceSelection.locator || chunk.sourceSha256 !== match.sourceSelection.sha256 || chunk.streamIndex !== match.sourceSelection.streamIndex
+        || compareRational(match.sourceSelection.range.start, chunk.range.start) > 0 || compareRational(match.sourceSelection.range.end, chunk.range.end) < 0) {
+        footageFail("CUT_FOOTAGE_MATCH", `${path}.chunkIds[${chunkIndex}]`, "does not bind one selected-source chunk inside the reported source range.");
+      }
+    }
+  }
+  return search;
+}
+
 export function parseCutFootageExtract(input: string | Uint8Array): CutFootageExtract {
   const root = closed(decode(input), "$", ["format", "version", "searchSha256", "indexSha256", "matchId", "label", "sourceSelection", "requestedHandles", "effectiveHandles", "finalRange", "toolchain", "output", "extractSha256"]);
   if (root.format !== "cut-footage-extract" || root.version !== 1 || root.label !== "candidate-only-not-cut-lock") protocol("$", "must be cut-footage-extract v1 labelled candidate-only-not-cut-lock.");
   const selection = sourceSelection(root.sourceSelection, "$.sourceSelection"), requestedHandles = handles(root.requestedHandles, "$.requestedHandles"), effectiveHandles = handles(root.effectiveHandles, "$.effectiveHandles"), finalRange = rangeWire(root.finalRange, "$.finalRange");
   if (compareRational(effectiveHandles.head, requestedHandles.head) > 0 || compareRational(effectiveHandles.tail, requestedHandles.tail) > 0 || compareRational(finalRange.start, selection.range.start) > 0 || compareRational(finalRange.end, selection.range.end) < 0) footageFail("CUT_FOOTAGE_RANGE", "$.finalRange", "must contain the chosen source range with no more than requested handles.");
+  if (compareRational(effectiveHandles.head, subtractRational(selection.range.start, finalRange.start)) !== 0 || compareRational(effectiveHandles.tail, subtractRational(finalRange.end, selection.range.end)) !== 0) footageFail("CUT_FOOTAGE_RANGE", "$.effectiveHandles", "must equal the exact final-range distances around the chosen source range.");
   const toolchain = closed(root.toolchain, "$.toolchain", ["ffmpeg", "ffprobe"]), ffmpeg = closed(toolchain.ffmpeg, "$.toolchain.ffmpeg", ["name", "version"]), ffprobe = closed(toolchain.ffprobe, "$.toolchain.ffprobe", ["name", "version"]);
   if (ffmpeg.name !== "ffmpeg" || ffprobe.name !== "ffprobe") protocol("$.toolchain", "must identify ffmpeg and ffprobe exactly.");
   const output = closed(root.output, "$.output", ["locator", "bytes", "sha256", "streams"]);
@@ -200,6 +228,14 @@ export function parseCutFootageExtract(input: string | Uint8Array): CutFootageEx
   if (new Set(streams.map((stream) => stream.index)).size !== streams.length) protocol("$.output.streams", "must not contain duplicate stream indices.");
   const extractSha256 = verifiedIdentity(root, "extractSha256", "$");
   return Object.freeze({ format: "cut-footage-extract", version: 1, searchSha256: sha256(root.searchSha256, "$.searchSha256"), indexSha256: sha256(root.indexSha256, "$.indexSha256"), matchId: identifier(root.matchId, "$.matchId"), label: "candidate-only-not-cut-lock", sourceSelection: selection, requestedHandles, effectiveHandles, finalRange, toolchain: Object.freeze({ ffmpeg: Object.freeze({ name: "ffmpeg", version: text(ffmpeg.version, "$.toolchain.ffmpeg.version", 128) }), ffprobe: Object.freeze({ name: "ffprobe", version: text(ffprobe.version, "$.toolchain.ffprobe.version", 128) }) }), output: Object.freeze({ locator: locator(output.locator, "$.output.locator"), bytes: positiveInteger(output.bytes, "$.output.bytes"), sha256: sha256(output.sha256, "$.output.sha256"), streams: Object.freeze(streams) }), extractSha256 });
+}
+
+export function validateCutFootageExtractAgainstSearch(search: CutFootageSearch, extract: CutFootageExtract): CutFootageExtract {
+  if (extract.searchSha256 !== search.searchSha256 || extract.indexSha256 !== search.indexSha256) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.searchSha256", "does not bind the supplied footage search report and index.");
+  const match = search.matches.find((candidate) => candidate.id === extract.matchId);
+  if (!match || !sameSelection(match.sourceSelection, extract.sourceSelection)) footageFail("CUT_FOOTAGE_MATCH", "$.matchId", "does not bind one search match with the same source selection.");
+  if (compareRational(extract.effectiveHandles.head, subtractRational(extract.sourceSelection.range.start, extract.finalRange.start)) !== 0 || compareRational(extract.effectiveHandles.tail, subtractRational(extract.finalRange.end, extract.sourceSelection.range.end)) !== 0) footageFail("CUT_FOOTAGE_RANGE", "$.effectiveHandles", "must equal the exact final-range distances around the selected match.");
+  return extract;
 }
 
 async function loadFile<T>(path: string, parse: (input: Uint8Array) => T): Promise<T> {
