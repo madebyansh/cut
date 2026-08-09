@@ -8,10 +8,9 @@ import {
   readdir,
   readlink,
   realpath,
-  rename,
-  rmdir,
   rm,
   stat,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -40,10 +39,19 @@ const maximumTreeFiles = 100_000;
 const maximumTreeBytes = 2 * 1024 * 1024 * 1024;
 const maximumTreeFileBytes = 512 * 1024 * 1024;
 const maximumTreeDepth = 64;
+const pinnedProvider = "huggingface-transformers-js";
 const pinnedModel = "Xenova/clip-vit-base-patch32";
 const pinnedRevision = "d15189d7028b43f1d3e65039190477f6af591c2a";
-const pinnedTextGraph = Object.freeze({ locator: "onnx/text_model_quantized.onnx", bytes: 64_504_507, sha256: "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a" });
-const pinnedVisionGraph = Object.freeze({ locator: "onnx/vision_model_quantized.onnx", bytes: 89_117_001, sha256: "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299" });
+const pinnedSelfTestSha256 = "ba7503358ab88be43b6e50d5d8a0f5367e22241208d832248ccb32209372aae7";
+const pinnedModelFiles = Object.freeze([
+  Object.freeze({ locator: "config.json", role: "config", bytes: 4_524, sha256: "493ef57ff783e42d1530c91b53469b7fdf8db8a9c1408e86998fcb7899a4f495" }),
+  Object.freeze({ locator: "onnx/text_model_quantized.onnx", role: "text-model", bytes: 64_504_507, sha256: "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a" }),
+  Object.freeze({ locator: "onnx/vision_model_quantized.onnx", role: "vision-model", bytes: 89_117_001, sha256: "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299" }),
+  Object.freeze({ locator: "preprocessor_config.json", role: "preprocessor", bytes: 520, sha256: "6f638fb9401a6d6296feff533ee7efe657b787c49f954f82f5906b36ef2a1b1f" }),
+  Object.freeze({ locator: "tokenizer.json", role: "tokenizer", bytes: 2_224_119, sha256: "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd" }),
+  Object.freeze({ locator: "tokenizer_config.json", role: "tokenizer-config", bytes: 775, sha256: "60ba2912bc6344c94bc16bbdec27fa1209409167b6f2fdf3cfe9e65462ea3967" }),
+]);
+const payloadPattern = /^\.local-clip-v1\.payload-[1-9][0-9]*-[a-f0-9-]{36}$/u;
 
 export type ResolveCutFootageHomeOptions = Readonly<{
   explicitHome?: string;
@@ -167,6 +175,7 @@ type TreeEntry = Readonly<{
   sha256?: string;
   target?: string;
 }>;
+type EntrySnapshot = Readonly<{ dev: number | bigint; ino: number | bigint }>;
 
 function systemErrorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
@@ -422,10 +431,9 @@ function parseModel(input: string | Uint8Array): CutFootageLocalModel {
 }
 
 function requirePinnedModel(model: CutFootageLocalModel) {
-  const byRole = new Map(model.files.map((file) => [file.role, file]));
-  if (model.model !== pinnedModel || model.revision !== pinnedRevision || model.dtype !== "q8" || model.device !== "cpu" || model.dimensions !== 512
-    || !same(byRole.get("text"), { ...pinnedTextGraph, role: "text" })
-    || !same(byRole.get("vision"), { ...pinnedVisionGraph, role: "vision" })) {
+  if (model.provider !== pinnedProvider || model.model !== pinnedModel || model.revision !== pinnedRevision
+    || model.dtype !== "q8" || model.device !== "cpu" || model.dimensions !== 512
+    || model.selfTestSha256 !== pinnedSelfTestSha256 || !same(model.files, pinnedModelFiles)) {
     mismatch("the bundled local footage model recipe is not the pinned CLIP backend.");
   }
 }
@@ -613,45 +621,60 @@ function validateRecipePackages(packageJson: unknown, packageLock: unknown) {
   if (transformers?.version !== "4.2.0" || ort?.version !== "1.24.3" || transformerDependencies["onnxruntime-node"] !== "1.24.3") mismatch("the local footage adapter lock is not pinned to its verified runtime.");
 }
 
-/** Publishes a logically atomic installation: the verified manifest is the final create-only commit marker. */
+/** Publishes one verified immutable payload through a single create-only relative symlink. */
 async function publishVerifiedInstall(
   stagingRoot: string,
   target: string,
+  stagingSnapshot: EntrySnapshot,
   beforePublish?: CutFootageLocalOperations["beforePublish"],
 ) {
   try { await beforePublish?.({ stagingRoot, target }); } catch { publishFailure("the verified local footage backend could not enter its create-only publication boundary."); }
-  let targetSnapshot: Readonly<{ dev: number | bigint; ino: number | bigint }>;
+  const payloadName = basename(stagingRoot);
+  if (!payloadPattern.test(payloadName) || dirname(stagingRoot) !== dirname(target)) publishFailure("the verified local footage backend payload is invalid.");
+  let targetSnapshot: EntrySnapshot | undefined;
   try {
-    await mkdir(target, { mode: 0o700 });
-    const metadata = await lstat(target);
-    targetSnapshot = Object.freeze({ dev: metadata.dev, ino: metadata.ino });
-  } catch { publishFailure("the verified local footage backend destination already exists."); }
-
-  const moved: string[] = [];
-  try {
-    const names = (await readdir(stagingRoot)).sort(compareText);
-    if (!names.includes(manifestName)) publishFailure("the verified local footage backend has no commit marker.");
-    for (const name of names) {
-      if (name === manifestName) continue;
-      await rename(join(stagingRoot, name), join(target, name));
-      moved.push(name);
-    }
-    const observed = (await readdir(target)).sort(compareText);
-    if (!same(observed, [...moved].sort(compareText))) publishFailure("the verified local footage backend destination changed during publication.");
-    await rename(join(stagingRoot, manifestName), join(target, manifestName));
-    await rmdir(stagingRoot).catch(() => undefined);
-    return;
+    const before = await lstat(stagingRoot);
+    if (!before.isDirectory() || before.isSymbolicLink() || before.dev !== stagingSnapshot.dev || before.ino !== stagingSnapshot.ino) publishFailure("the verified local footage backend payload changed before publication.");
+    await symlink(payloadName, target, "dir");
+    const publishedLink = await lstat(target);
+    targetSnapshot = Object.freeze({ dev: publishedLink.dev, ino: publishedLink.ino });
+    const [declaredTarget, after] = await Promise.all([readlink(target), lstat(stagingRoot)]);
+    if (!publishedLink.isSymbolicLink() || declaredTarget !== payloadName || !after.isDirectory() || after.isSymbolicLink()
+      || after.dev !== stagingSnapshot.dev || after.ino !== stagingSnapshot.ino) publishFailure("the verified local footage backend publication changed before commit.");
   } catch (error) {
-    for (const name of moved.reverse()) {
-      await rename(join(target, name), join(stagingRoot, name)).catch(() => undefined);
-    }
-    try {
-      const metadata = await lstat(target), names = await readdir(target);
-      if (metadata.dev === targetSnapshot.dev && metadata.ino === targetSnapshot.ino && names.length === 0) await rmdir(target);
+    if (targetSnapshot) try {
+      const metadata = await lstat(target), declaredTarget = await readlink(target);
+      if (metadata.dev === targetSnapshot.dev && metadata.ino === targetSnapshot.ino && declaredTarget === payloadName) await unlink(target);
     } catch { /* Preserve a destination that changed or is no longer ours. */ }
     if (error instanceof CutFootageError) throw error;
-    publishFailure("the verified local footage backend could not be published without replacing another entry.");
+    publishFailure("the verified local footage backend destination already exists.");
   }
+}
+
+async function resolvePublishedPayload(home: string, target: string) {
+  let before, declaredTarget: string;
+  try {
+    before = await lstat(target);
+    if (!before.isSymbolicLink()) mismatch();
+    declaredTarget = await readlink(target);
+  } catch (error) {
+    if (systemErrorCode(error) === "ENOENT") missing();
+    if (error instanceof CutFootageError) throw error;
+    mismatch();
+  }
+  if (!payloadPattern.test(declaredTarget) || basename(declaredTarget) !== declaredTarget) mismatch();
+  const payload = resolve(home, declaredTarget);
+  if (dirname(payload) !== home) mismatch();
+  try {
+    const payloadMetadata = await lstat(payload), canonicalHome = await realpath(home), canonicalPayload = await realpath(payload);
+    const after = await lstat(target), afterTarget = await readlink(target);
+    if (!payloadMetadata.isDirectory() || payloadMetadata.isSymbolicLink() || !inside(canonicalHome, canonicalPayload)
+      || before.dev !== after.dev || before.ino !== after.ino || declaredTarget !== afterTarget) mismatch();
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    mismatch();
+  }
+  return payload;
 }
 
 function setupReport(status: "installed" | "ready", install: CutFootageLocalInstall): CutFootageLocalSetupReport {
@@ -673,22 +696,20 @@ export function cutFootageBackendIdentityFromInstall(install: CutFootageLocalIns
 export async function inspectCutFootageLocalInstall(options: CutFootageLocalInspectOptions = {}): Promise<CutFootageLocalInstall> {
   const home = resolveCutFootageHome({ explicitHome: options.home, homeDirectory: options.homeDirectory, environment: options.environment });
   const target = join(home, cutFootageLocalDirectoryName), current = platformIdentity(options);
-  let metadata;
-  try { metadata = await lstat(target); } catch (error) { if (systemErrorCode(error) === "ENOENT") missing(); mismatch(); }
-  if (!metadata.isDirectory() || metadata.isSymbolicLink()) mismatch();
+  const payload = await resolvePublishedPayload(home, target);
   try {
-    const manifest = parseInstallManifest(await readBoundedRegular(join(target, manifestName), maximumManifestBytes));
+    const manifest = parseInstallManifest(await readBoundedRegular(join(payload, manifestName), maximumManifestBytes));
     if (manifest.platform !== current.platform || manifest.architecture !== current.architecture) mismatch();
-    const modelRoot = modelRevisionPath(target, manifest.model);
+    const modelRoot = modelRevisionPath(payload, manifest.model);
     await verifyExpectedModelFiles(modelRoot, manifest.model);
     const [recipeTree, runtimeTree, modelTree, installationTree] = await Promise.all([
-      selectedFileIdentity(target, recipeFiles),
-      treeIdentity(join(target, "node_modules")),
+      selectedFileIdentity(payload, recipeFiles),
+      treeIdentity(join(payload, "node_modules")),
       treeIdentity(modelRoot),
-      treeIdentity(target, new Set([manifestName])),
+      treeIdentity(payload, new Set([manifestName])),
     ]);
     if (!same(recipeTree, manifest.recipeTree) || !same(runtimeTree, manifest.runtimeTree) || !same(modelTree, manifest.modelTree) || !same(installationTree, manifest.installationTree)) mismatch();
-    return deepFreeze({ root: target, modelRevisionRoot: modelRoot, sidecarPath: join(target, "local-clip-sidecar.mjs"), manifest });
+    return deepFreeze({ root: payload, modelRevisionRoot: modelRoot, sidecarPath: join(payload, "local-clip-sidecar.mjs"), manifest });
   } catch (error) {
     if (error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_MISSING") throw error;
     mismatch();
@@ -741,8 +762,8 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
   }
 
   const lockPath = join(home, `${cutFootageLocalDirectoryName}.lock`), token = `${process.pid}-${randomUUID()}\n`;
-  const stagingRoot = join(home, `.${cutFootageLocalDirectoryName}.staging-${process.pid}-${randomUUID()}`);
-  let lockHandle: Awaited<ReturnType<typeof open>> | undefined, lockSnapshot: Readonly<{ dev: number | bigint; ino: number | bigint }> | undefined;
+  const stagingRoot = join(home, `.${cutFootageLocalDirectoryName}.payload-${process.pid}-${randomUUID()}`);
+  let lockHandle: Awaited<ReturnType<typeof open>> | undefined, lockSnapshot: EntrySnapshot | undefined, stagingSnapshot: EntrySnapshot | undefined;
   let stagingCreated = false, published = false;
   try {
     try {
@@ -762,6 +783,8 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     const fixtureRecipe = options.recipeRoot !== undefined;
     if (fixtureRecipe && options.operations === undefined) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$recipe", "a custom footage recipe is permitted only with injected test operations.");
     await mkdir(stagingRoot, { mode: 0o700 }); stagingCreated = true;
+    const stagingMetadata = await lstat(stagingRoot);
+    stagingSnapshot = Object.freeze({ dev: stagingMetadata.dev, ino: stagingMetadata.ino });
     const recipe = await loadRecipe(recipeRoot, stagingRoot, !fixtureRecipe);
     const npmExecutable = options.npmExecutable ?? process.execPath;
     if (!isAbsolute(npmExecutable) || normalize(npmExecutable) !== npmExecutable) publishFailure("the npm executable is invalid.");
@@ -799,7 +822,7 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     });
     const manifest = deepFreeze({ ...body, identitySha256: createHash("sha256").update(manifestBody(body)).digest("hex") });
     await writeFile(join(stagingRoot, manifestName), `${stableJsonStringify(manifest)}\n`, { flag: "wx", mode: 0o600 });
-    await publishVerifiedInstall(stagingRoot, target, operations.beforePublish); published = true;
+    await publishVerifiedInstall(stagingRoot, target, stagingSnapshot, operations.beforePublish); published = true;
     const install = await inspectCutFootageLocalInstall({ ...options, home });
     return setupReport("installed", install);
   } catch (error) {
@@ -807,7 +830,12 @@ export async function setupCutFootageLocalBackend(options: CutFootageLocalSetupO
     publishFailure("the local footage backend could not be installed.");
   } finally {
     await lockHandle?.close().catch(() => undefined);
-    if (stagingCreated && !published) await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    if (stagingCreated && !published && stagingSnapshot) try {
+      const metadata = await lstat(stagingRoot);
+      if (metadata.isDirectory() && !metadata.isSymbolicLink() && metadata.dev === stagingSnapshot.dev && metadata.ino === stagingSnapshot.ino) {
+        await rm(stagingRoot, { recursive: true, force: true });
+      }
+    } catch { /* Remove only the exact payload directory created by this invocation. */ }
     if (lockSnapshot) {
       try {
         const metadata = await lstat(lockPath);

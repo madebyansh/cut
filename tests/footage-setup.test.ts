@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -158,12 +158,14 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
   assert.equal(JSON.stringify(fixture.report).includes(fixture.home), false);
   assert.deepEqual(fixture.launches.map((launch) => launch.mode), ["setup", "offline"]);
   assert.equal(fixture.launches[0]?.environment.CUT_FOOTAGE_MODEL_DIR, fixture.launches[0]?.modelRevisionRoot);
-  assert.equal(fixture.launches[0]?.modelRevisionRoot.includes(".local-clip-v1.staging-"), true);
+  assert.equal(fixture.launches[0]?.modelRevisionRoot.includes(".local-clip-v1.payload-"), true);
   assert.equal(fixture.launches[0]?.modelRevisionRoot.endsWith("/models/fixture/clip/r1"), true);
   assert.equal(fixture.launches[1]?.environment.CUT_FOOTAGE_MODEL_DIR, fixture.launches[1]?.modelRevisionRoot);
   const names = await readdir(fixture.home);
   assert.equal(names.includes("local-clip-v1"), true);
   assert.equal(names.some((name) => name.includes("staging") || name.endsWith(".lock")), false);
+  assert.equal((await lstat(fixture.installationRoot)).isSymbolicLink(), true);
+  assert.match(await readlink(fixture.installationRoot), /^\.local-clip-v1\.payload-[1-9][0-9]*-[a-f0-9-]{36}$/u);
   assert.ok(JSON.parse(await readFile(join(fixture.installationRoot, "install-manifest.json"), "utf8")));
 
   let installedAgain = false;
@@ -195,6 +197,27 @@ test("setup failure removes only its lock and staging directory and does not lea
       && !error.message.includes("super-secret") && !error.message.includes(home),
   );
   assert.deepEqual(await readdir(home), []);
+});
+
+test("setup cleanup never deletes a payload pathname whose inode was replaced", async () => {
+  const home = join(await mkdtemp(join(tmpdir(), "cut-footage-cleanup-race-")), "footage");
+  const recipe = await fakeRecipe();
+  await assert.rejects(setupCutFootageLocalBackend({
+    backend: "local", home, recipeRoot: recipe.root, npmExecutable: process.execPath,
+    platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+    operations: {
+      async installRuntime({ stagingRoot }) {
+        await rename(stagingRoot, `${stagingRoot}.moved`);
+        await mkdir(stagingRoot);
+        await writeFile(join(stagingRoot, "preserve-me"), "replacement inode\n");
+        throw new Error("injected failure");
+      },
+      async startSidecar() { throw new Error("unreachable"); },
+    },
+  }), footageError("CUT_FOOTAGE_PUBLISH"));
+  const replacement = (await readdir(home)).find((name) => name.startsWith(".local-clip-v1.payload-") && !name.endsWith(".moved"));
+  assert.ok(replacement);
+  assert.equal(await readFile(join(home, replacement, "preserve-me"), "utf8"), "replacement inode\n");
 });
 
 test("setup lock contention and an invalid immutable install fail without deleting either", async () => {
