@@ -106,7 +106,7 @@ export type CutImageProbe = {
   };
 };
 
-export type ProbeBudget = { maxFileBytes?: number; maxOutputBytes?: number; timeoutMs?: number };
+export type ProbeBudget = { maxFileBytes?: number; maxOutputBytes?: number; timeoutMs?: number; signal?: AbortSignal };
 export type ProbeNativeExecutables = Readonly<{
   ffmpeg?: string;
   ffprobe?: string;
@@ -212,9 +212,15 @@ async function spawnProbeNativeProcess(
   return Object.freeze({ child, terminate });
 }
 
-function probeBudget(options: ProbeBudget): Required<ProbeBudget> {
-  const result = { ...DEFAULT_BUDGET, ...options };
-  for (const key of Object.keys(result) as Array<keyof Required<ProbeBudget>>) {
+type ResolvedProbeBudget = Required<Omit<ProbeBudget, "signal">>;
+
+function probeBudget(options: ProbeBudget): ResolvedProbeBudget {
+  const result: ResolvedProbeBudget = {
+    maxFileBytes: options.maxFileBytes ?? DEFAULT_BUDGET.maxFileBytes,
+    maxOutputBytes: options.maxOutputBytes ?? DEFAULT_BUDGET.maxOutputBytes,
+    timeoutMs: options.timeoutMs ?? DEFAULT_BUDGET.timeoutMs,
+  };
+  for (const key of Object.keys(result) as Array<keyof ResolvedProbeBudget>) {
     const value = result[key];
     if (!Number.isSafeInteger(value) || value <= 0 || value > HARD_BUDGET[key]) {
       throw new CutProjectError(
@@ -375,7 +381,7 @@ async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: n
 async function ffprobe(
   path: string,
   sourceFd: number,
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   executable = "ffprobe",
   execution?: ProbeNativeProcessExecution,
 ) {
@@ -473,7 +479,7 @@ async function ffmpegDecodedAudioPcmIdentity(
   path: string,
   sourceFd: number,
   stream: { index: number; channels: number },
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   executable = "ffmpeg",
   execution?: ProbeNativeProcessExecution,
 ) {
@@ -1236,7 +1242,7 @@ async function ffprobeDecodedAudioSamples(
   path: string,
   sourceFd: number,
   stream: { index: number; timeBase: Rational; sampleRate: number; channels: number; duration?: Rational },
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   pcm: { sampleCount: string; sha256: string },
   executable = "ffprobe",
   execution?: ProbeNativeProcessExecution,
@@ -1463,7 +1469,7 @@ async function ffprobeDecodedVideoCadence(
   path: string,
   sourceFd: number,
   stream: { index: number; timeBase: Rational; start: Rational; frameRates: Rational[] },
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   executable = "ffprobe",
   execution?: ProbeNativeProcessExecution,
 ): Promise<CutDecodedVideoCadence> {
@@ -1981,7 +1987,7 @@ async function probeFileIdentity(projectRoot: string, locator: string, options: 
     if (initial.size > BigInt(budget.maxFileBytes) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {
       throw new CutProjectError("CUTP2006", `Resource exceeds the ${budget.maxFileBytes}-byte lock budget.`, path);
     }
-    const bytes = Number(initial.size), digest = await sha256(handle, bytes);
+    const bytes = Number(initial.size), digest = await sha256(handle, bytes, options.signal);
     const [handleFinal, pathFinal] = await Promise.all([handle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(handleFinal), sourceSnapshot(pathFinal)], path);
     await assertStableLocator(projectRoot, safeLocator, path);

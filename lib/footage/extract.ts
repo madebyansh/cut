@@ -468,7 +468,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
     let version = "", ffmpegArguments: string[] = [], stageOutput = "", stageManifest = "";
     try {
       await runExtractionHook(options.signal, options.__testHooks?.beforeSourceProbe, { maxFileBytes: maximumIndexedSourceBytes });
-      initialBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
+      initialBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes, signal: options.signal });
       abortIfRequested(options.signal);
       initialMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
         authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
@@ -547,7 +547,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       if (!Number.isSafeInteger(heldStageBytes) || heldStageBytes < 1 || heldStageBytes > maximumExtractBytes) {
         footageFail("CUT_FOOTAGE_PUBLISH", "$.output.bytes", "the staged extraction is empty or exceeds its byte bound.");
       }
-      outputBytes = await probeProjectBytes(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes });
+      outputBytes = await probeProjectBytes(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes, signal: options.signal });
       if (outputBytes.file.bytes !== heldStageBytes || outputBytes.file.sha256 !== heldStageSha) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed during byte verification.");
       abortIfRequested(options.signal);
       outputMedia = await probeProjectMedia(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes }, { ffprobe: ffprobe.executablePath }, {
@@ -571,7 +571,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
         footageFail("CUT_FOOTAGE_RANGE", "$.output", "the decoded output frame count or exact duration differs from the selected range.");
       }
       abortIfRequested(options.signal);
-      const postBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
+      const postBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes, signal: options.signal });
       const postMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
         authority: ffprobe, collector: ffprobeCollector, signal: options.signal, terminateProcessTree: true,
         context: mediaContext(4, "media-metadata", indexedSource),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -501,6 +501,53 @@ test("indexed source probes retain the 100 GiB admission bound while encoded out
   const fsIndex = encodedArguments.indexOf("-fs");
   assert.notEqual(fsIndex, -1);
   assert.equal(encodedArguments[fsIndex + 1], String(8 * 1024 * 1024 * 1024));
+});
+
+test("cancellation during a slow multi-chunk source byte probe stops hashing at one read and stays path-free", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await workflowFixture({ async writeSource(path) {
+    await copyFile(resolve("examples/media/demo.mp4"), path);
+    await truncate(path, 8 * 1024 * 1024);
+  } });
+  const controller = new AbortController(), probeHandle = await open(fixture.sourcePath, "r");
+  const prototype = Object.getPrototypeOf(probeHandle) as object;
+  const originalRead = Reflect.get(prototype, "read") as unknown;
+  await probeHandle.close();
+  assert.equal(typeof originalRead, "function");
+  const controlledHandles = new WeakSet<object>();
+  let interceptedReads = 0, armed = false, controlledHandleSelected = false;
+  try {
+    await assert.rejects(extractProjectFootage({
+      projectRoot: fixture.root,
+      searchLocator: ".cut/footage/search.json",
+      outputLocator: "selects/cancel-byte-hash.mp4",
+      selector: { rank: 1 },
+      signal: controller.signal,
+      __testHooks: { beforeSourceProbe() {
+        armed = true;
+        Reflect.set(prototype, "read", async function(this: unknown, ...args: unknown[]) {
+          if (!controlledHandleSelected && typeof this === "object" && this !== null) {
+            controlledHandles.add(this);
+            controlledHandleSelected = true;
+          }
+          if (typeof this === "object" && this !== null && controlledHandles.has(this)) {
+            interceptedReads += 1;
+            if (interceptedReads === 1) {
+              await new Promise((accept) => setTimeout(accept, 25));
+              controller.abort();
+            }
+          }
+          return Reflect.apply(originalRead as (...values: unknown[]) => unknown, this, args);
+        });
+      } },
+    }), (error: unknown) => error instanceof CutFootageError
+      && error.code === "CUT_FOOTAGE_PUBLISH" && error.path === "$signal"
+      && !error.message.includes(fixture.root) && !error.message.includes(fixture.sourcePath));
+  } finally {
+    Reflect.set(prototype, "read", originalRead);
+  }
+  assert.equal(armed, true);
+  assert.equal(interceptedReads, 1, "the cancelled byte probe continued reading source chunks");
+  await assert.rejects(lstat(join(fixture.root, "selects/cancel-byte-hash.mp4")), { code: "ENOENT" });
 });
 
 test("destination parent replacement is rejected before staging, at each promotion, and after publication without touching foreign sentinels", { timeout: 180_000, skip: process.platform === "win32" }, async () => {
