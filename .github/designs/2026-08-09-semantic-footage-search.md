@@ -45,7 +45,7 @@ The implementation will establish the complete CUT-owned boundary without depend
 - a stable handoff object that live preview can consume later
 - macOS and Linux smoke coverage without adding ML packages to default npm dependencies
 
-The heavyweight local-model package is a follow-up because it has its own Python, Metal, CUDA, model-download, and quality-validation surface. PR #3 includes the real adapter protocol and process boundary, not a fake claim that npm alone performs semantic inference. Image queries, anomaly/highlight discovery, hosted backends, VLM reranking, automatic timeline mutation, and a persistent player are also follow-up work. They must fit the same manifests without changing the v1 contract.
+The heavyweight local-model package is a follow-up because it has its own Python, Metal, CUDA, model-download, and quality-validation surface. The implementation includes the real adapter protocol and process boundary, not a fake claim that npm alone performs semantic inference. Image queries, anomaly/highlight discovery, hosted backends, VLM reranking, automatic timeline mutation, and a persistent player are also follow-up work. They must fit the same manifests without changing the v1 contract.
 
 The quarantined legacy `lib/core/indexer.ts` is not promoted. Its floating-point seconds, absolute roots, mutable JSON, and API-coupled analysis do not meet these contracts.
 
