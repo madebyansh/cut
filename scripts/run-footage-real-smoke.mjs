@@ -66,8 +66,11 @@ export function createFootageRealSmokePlan(options) {
     cutStep("index", ["footage", "index", "media", "--out", ".cut/footage/index.json", "--json"], "index.json", 30 * 60_000),
     cutStep("search-first", ["footage", "search", ".cut/footage/index.json", "--query", "a dog outdoors", "--out", ".cut/footage/search.json", "--json"], "search-first.json", 10 * 60_000),
     cutStep("search-second", ["footage", "search", ".cut/footage/index.json", "--query", "a dog outdoors", "--out", ".cut/footage/search.json", "--json"], "search-second.json", 10 * 60_000),
-    cutStep("extract", ["footage", "extract", ".cut/footage/search.json", "--match", "1", "--out", "selects/dog.mp4", "--json"], "extract.json", 10 * 60_000),
-    cutStep("extract-no-clobber", ["footage", "extract", ".cut/footage/search.json", "--match", "1", "--out", "selects/dog.mp4", "--json"], "extract-no-clobber.json", 2 * 60_000, {
+    cutStep("extract", ["footage", "extract", ".cut/footage/search.json", "--match", "__CUT_FIRST_MATCH_ID__", "--handles", "500ms", "--out", "selects/dog.mp4", "--json"], "extract.json", 10 * 60_000, {
+      matchIdFrom: resolve(project, ".cut/footage/search.json"),
+    }),
+    cutStep("extract-no-clobber", ["footage", "extract", ".cut/footage/search.json", "--match", "__CUT_FIRST_MATCH_ID__", "--handles", "500ms", "--out", "selects/dog.mp4", "--json"], "extract-no-clobber.json", 2 * 60_000, {
+      matchIdFrom: resolve(project, ".cut/footage/search.json"),
       expectedExit: "failure",
       expectedDiagnostic: Object.freeze({ format: "cut-cli-diagnostics", command: "footage extract", code: "CUT_FOOTAGE_OUTPUT_EXISTS" }),
       preserveOutputs: Object.freeze([
@@ -126,20 +129,52 @@ function hasExpectedDiagnostic(result, expected) {
     && report.diagnostics.length === 1 && report.diagnostics[0]?.code === expected.code && report.diagnostics[0]?.severity === "error";
 }
 
+async function materializeStep(item) {
+  if (!item.matchIdFrom) return item;
+  let search;
+  try {
+    const bytes = await readFile(item.matchIdFrom);
+    if (bytes.byteLength < 1 || bytes.byteLength > 4 * 1024 * 1024) throw new Error("bounded search report required");
+    search = JSON.parse(bytes.toString("utf8"));
+  } catch { throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} could not read one canonical first match ID`); }
+  const id = search?.matches?.[0]?.id;
+  if (typeof id !== "string" || !/^match-[a-f0-9]{64}$/u.test(id)) {
+    throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} did not receive one canonical first match ID`);
+  }
+  const occurrences = item.args.filter((argument) => argument === "__CUT_FIRST_MATCH_ID__").length;
+  if (occurrences !== 1) throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} has an invalid stable-match template`);
+  return Object.freeze({ ...item, args: Object.freeze(item.args.map((argument) => argument === "__CUT_FIRST_MATCH_ID__" ? id : argument)) });
+}
+
+function preservedIdentity(metadata) {
+  return [metadata.dev, metadata.ino, metadata.size, metadata.mtimeNs, metadata.ctimeNs].map(String).join(":");
+}
+
+async function snapshotPreservedOutput(path) {
+  const before = await lstat(path, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("CUT_FOOTAGE_REAL_SMOKE: protected extraction output is not a regular file");
+  const bytes = await readFile(path), after = await lstat(path, { bigint: true });
+  if (preservedIdentity(before) !== preservedIdentity(after) || BigInt(bytes.byteLength) !== before.size) {
+    throw new Error("CUT_FOOTAGE_REAL_SMOKE: protected extraction output changed during its snapshot");
+  }
+  return Object.freeze({ identity: preservedIdentity(before), bytes });
+}
+
 export async function executeFootageRealSmokePlan(plan, operations) {
   if (!Array.isArray(plan) || plan.length < 1 || plan.length > 64) throw new Error("CUT_FOOTAGE_REAL_SMOKE: execution plan is invalid");
   if (!operations || typeof operations.execute !== "function") throw new Error("CUT_FOOTAGE_REAL_SMOKE: process executor is required");
   for (const item of plan) {
-    const protectedBytes = new Map();
-    for (const path of item.preserveOutputs ?? []) protectedBytes.set(path, await readFile(path));
-    const result = executionResult(await operations.execute(item), item.name);
+    const materialized = await materializeStep(item);
+    const protectedOutputs = new Map();
+    for (const path of item.preserveOutputs ?? []) protectedOutputs.set(path, await snapshotPreservedOutput(path));
+    const result = executionResult(await operations.execute(materialized), item.name);
     if (item.reportPath) {
       await mkdir(dirname(item.reportPath), { recursive: true });
       await writeFile(item.reportPath, result.stdout, { encoding: "utf8", flag: "wx" });
     }
-    for (const [path, before] of protectedBytes) {
-      const after = await readFile(path);
-      if (!before.equals(after)) throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} changed an existing output`);
+    for (const [path, before] of protectedOutputs) {
+      const after = await snapshotPreservedOutput(path);
+      if (before.identity !== after.identity || !before.bytes.equals(after.bytes)) throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} changed an existing output`);
     }
     if (item.expectedExit === "failure") {
       if (result.exitCode === 0) throw new Error(`CUT_FOOTAGE_REAL_SMOKE: ${item.name} was expected to fail`);

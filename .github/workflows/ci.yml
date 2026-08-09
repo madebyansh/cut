@@ -38,6 +38,7 @@ jobs:
           version="$(node -p 'require("./package.json").version')"
           tarball="$pack_dir/cut-lang-$version.tgz"
           npm pack --json --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-package-footprint.mjs" "$reports/npm-pack.json"
           test -s "$tarball"
           cd "$consumer"
           npm init --yes > /dev/null
@@ -81,6 +82,7 @@ jobs:
           version="$(node -p 'require("./package.json").version')"
           tarball="$pack_dir/cut-lang-$version.tgz"
           npm pack --json --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-package-footprint.mjs" "$reports/npm-pack.json"
           test -s "$tarball"
           cd "$consumer"
           npm init --yes > /dev/null
@@ -164,6 +166,7 @@ jobs:
           version="$(node -p 'require("./package.json").version')"
           tarball="$pack_dir/cut-lang-$version.tgz"
           npm pack --json --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-package-footprint.mjs" "$reports/npm-pack.json"
           test -s "$tarball"
           cd "$consumer"
           npm init --yes > /dev/null

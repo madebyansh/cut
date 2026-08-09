@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -55,7 +55,8 @@ test("real smoke plan allows network only for the first setup and drives the ins
   assert.equal(plan[5].cwd, resolve(root, "project"));
   assert.deepEqual(plan[5].args, ["footage", "index", "media", "--out", ".cut/footage/index.json", "--json"]);
   assert.deepEqual(plan[6].args, ["footage", "search", ".cut/footage/index.json", "--query", "a dog outdoors", "--out", ".cut/footage/search.json", "--json"]);
-  assert.deepEqual(plan[8].args, ["footage", "extract", ".cut/footage/search.json", "--match", "1", "--out", "selects/dog.mp4", "--json"]);
+  assert.deepEqual(plan[8].args, ["footage", "extract", ".cut/footage/search.json", "--match", "__CUT_FIRST_MATCH_ID__", "--handles", "500ms", "--out", "selects/dog.mp4", "--json"]);
+  assert.equal(plan[8].matchIdFrom, resolve(root, "project/.cut/footage/search.json"));
 });
 
 test("real smoke plan rejects relative or overlapping private roots", () => {
@@ -115,6 +116,30 @@ test("real smoke executor rejects a successful no-clobber probe or a changed pro
     await writeFile(output, "changed");
     return { exitCode: 1, stdout: "", stderr: "" };
   } }), /changed an existing output/u);
+  await writeFile(output, "before");
+  await assert.rejects(executeFootageRealSmokePlan([failureStep], { execute: async () => {
+    await unlink(output);
+    await writeFile(output, "before");
+    return { exitCode: 1, stdout: "{\"format\":\"cut-cli-diagnostics\",\"version\":1,\"command\":\"footage extract\",\"status\":\"fail\",\"diagnostics\":[{\"code\":\"CUT_FOOTAGE_OUTPUT_EXISTS\",\"severity\":\"error\"}]}\n", stderr: "" };
+  } }), /changed an existing output/u);
+});
+
+test("real smoke executor resolves the canonical stable match ID before invoking extraction", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "cut-footage-runner-match-"));
+  const searchPath = join(sandbox, "search.json"), id = `match-${"a".repeat(64)}`;
+  await writeFile(searchPath, `${JSON.stringify({ matches: [{ id }] })}\n`);
+  const template = Object.freeze({
+    name: "extract", command: "/bin/true", args: Object.freeze(["--match", "__CUT_FIRST_MATCH_ID__", "--handles", "500ms"]),
+    cwd: sandbox, environment: Object.freeze({}), matchIdFrom: searchPath,
+  });
+  await executeFootageRealSmokePlan([template], { execute: async (step) => {
+    assert.deepEqual(step.args, ["--match", id, "--handles", "500ms"]);
+    return { exitCode: 0, stdout: "", stderr: "" };
+  } });
+  await writeFile(searchPath, `${JSON.stringify({ matches: [{ id: "match-not-canonical" }] })}\n`);
+  await assert.rejects(executeFootageRealSmokePlan([template], { execute: async () => {
+    assert.fail("malformed match ID reached the process boundary");
+  } }), /canonical first match ID/u);
 });
 
 test("real smoke runner starts from empty roots, protects the CUT project, and returns the final assertion", async () => {
@@ -138,6 +163,9 @@ test("real smoke runner starts from empty roots, protects the CUT project, and r
   const report = await runFootageRealSmoke(options, {
     async execute(step) {
       seen.push(step.name);
+      if (step.name === "search-second") {
+        await writeFile(join(options.projectRoot, ".cut/footage/search.json"), `${JSON.stringify({ matches: [{ id: `match-${"a".repeat(64)}` }] })}\n`);
+      }
       if (step.name === "extract") {
         await writeFile(join(options.projectRoot, "selects/dog.mp4"), "clip");
         await writeFile(join(options.projectRoot, "selects/dog.mp4.cut-footage.json"), "manifest");
@@ -229,6 +257,9 @@ test("real smoke runner rejects setup that rewrites the installed CUT package", 
   await assert.rejects(runFootageRealSmoke(options, {
     async execute(step) {
       if (step.name === "setup-first") await writeFile(join(packageRoot, "package.json"), "{\"name\":\"cut-lang\",\"changed\":true}\n");
+      if (step.name === "search-second") {
+        await writeFile(join(options.projectRoot, ".cut/footage/search.json"), `${JSON.stringify({ matches: [{ id: `match-${"a".repeat(64)}` }] })}\n`);
+      }
       if (step.name === "extract") {
         await writeFile(join(options.projectRoot, "selects/dog.mp4"), "clip");
         await writeFile(join(options.projectRoot, "selects/dog.mp4.cut-footage.json"), "manifest");

@@ -57,15 +57,18 @@ async function fixture() {
   const extract = signed({
     format: "cut-footage-extract", version: 1, searchSha256: search.searchSha256, indexSha256: index.indexSha256,
     matchId: "match-dog", label: "candidate-only-not-cut-lock", sourceSelection: search.matches[0].sourceSelection,
-    requestedHandles: { head: rational("0"), tail: rational("0") }, effectiveHandles: { head: rational("0"), tail: rational("0") }, finalRange: range("0", "2"),
+    requestedHandles: { head: rational("1", "2"), tail: rational("1", "2") }, effectiveHandles: { head: rational("0"), tail: rational("0") }, finalRange: range("0", "2"),
     toolchain: { ffmpeg: { name: "ffmpeg", version: "7.1" }, ffprobe: { name: "ffprobe", version: "7.1" } },
     output: { locator: "selects/dog.mp4", bytes: clip.length, sha256: sha256(clip), streams: [{ index: 0, type: "video", codec: "h264" }] },
   }, "extractSha256");
   await Promise.all([
     writeFile(join(project, ".cut/footage/index.json"), `${JSON.stringify(canonical(index))}\n`),
+    writeFile(join(reports, "index.json"), `${JSON.stringify(canonical(index))}\n`),
     writeFile(join(project, ".cut/footage/search.json"), `${JSON.stringify(canonical(search))}\n`),
     writeFile(join(reports, "search-first.json"), `${JSON.stringify(canonical(search))}\n`),
+    writeFile(join(reports, "search-second.json"), `${JSON.stringify(canonical(search))}\n`),
     writeFile(join(project, "selects/dog.mp4.cut-footage.json"), `${JSON.stringify(canonical(extract))}\n`),
+    writeFile(join(reports, "extract.json"), `${JSON.stringify(canonical(extract))}\n`),
     writeFile(join(reports, "protected.json"), JSON.stringify({ "main.cut": sha256(main), "cut.lock": sha256(lock) })),
     writeFile(join(reports, "extract-ffprobe.json"), JSON.stringify({ streams: [{ index: 0, codec_name: "h264", codec_type: "video" }], format: { format_name: "mov,mp4,m4a,3gp,3g2,mj2", duration: "2.000000" } })),
   ]);
@@ -102,6 +105,9 @@ test("real smoke assertion rejects wrong ranking, stale extraction, model drift,
     async (value) => { await writeFile(join(value.project, "selects/dog.mp4"), "changed"); },
     async (value) => { const path = join(value.home, ".payload/install-manifest.json"); const manifest = JSON.parse(await (await import("node:fs/promises")).readFile(path)); manifest.model.revision = "wrong"; await writeFile(path, JSON.stringify(manifest)); },
     async (value) => { await writeFile(join(value.project, "main.cut"), "changed"); },
+    async (value) => { await writeFile(join(value.reports, "index.json"), "{}\n"); },
+    async (value) => { await writeFile(join(value.reports, "search-second.json"), "{}\n"); },
+    async (value) => { await writeFile(join(value.reports, "extract.json"), "{}\n"); },
   ]) {
     const value = await fixture(); await mutate(value);
     await assert.rejects(assertFootageRealSmoke(value.project, value.reports, value.home), /CUT_FOOTAGE_REAL_SMOKE/u);

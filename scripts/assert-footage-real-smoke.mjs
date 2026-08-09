@@ -141,7 +141,11 @@ async function rejectResidue(root) {
 export async function assertFootageRealSmoke(projectRoot, reportsRoot, footageHome) {
   const project = await realpath(resolve(projectRoot)), reports = await realpath(resolve(reportsRoot)), home = await realpath(resolve(footageHome));
   await verifySetup(reports, home);
-  const indexLoaded = await json(resolve(project, ".cut/footage/index.json"), "index.json", true), index = indexLoaded.value;
+  const [indexLoaded, indexReport] = await Promise.all([
+    json(resolve(project, ".cut/footage/index.json"), "index.json", true),
+    json(resolve(reports, "index.json"), "index command report", true),
+  ]), index = indexLoaded.value;
+  if (!indexLoaded.bytes.equals(indexReport.bytes)) fail("index command JSON differs from its published artifact");
   verifySigned(index, "indexSha256", "index");
   if (index.format !== "cut-footage-index" || index.version !== 1 || index.root !== "media" || !same(index.backend, backendIdentity)
     || !Array.isArray(index.sources) || index.sources.length !== 2 || !Array.isArray(index.chunks) || index.chunks.length < 2) fail("index does not prove two sources on the pinned backend");
@@ -152,11 +156,12 @@ export async function assertFootageRealSmoke(projectRoot, reportsRoot, footageHo
   const vector = await fileEvidence(contained(project, index.vectorArtifact?.locator, "vector artifact"), "vector artifact");
   if (vector.bytes !== index.vectorArtifact.bytes || vector.sha256 !== index.vectorArtifact.sha256) fail("vector artifact does not match the index");
 
-  const [firstSearch, currentSearch] = await Promise.all([
+  const [firstSearch, secondSearch, currentSearch] = await Promise.all([
     json(resolve(reports, "search-first.json"), "search-first.json", true),
+    json(resolve(reports, "search-second.json"), "search-second.json", true),
     json(resolve(project, ".cut/footage/search.json"), "search.json", true),
   ]);
-  if (!firstSearch.bytes.equals(currentSearch.bytes)) fail("repeated offline search was not byte-stable");
+  if (!firstSearch.bytes.equals(currentSearch.bytes) || !secondSearch.bytes.equals(currentSearch.bytes)) fail("repeated offline search or CLI JSON was not byte-stable");
   const search = currentSearch.value;
   verifySigned(search, "searchSha256", "search");
   if (search.format !== "cut-footage-search" || search.version !== 1 || search.indexLocator !== ".cut/footage/index.json" || search.indexSha256 !== index.indexSha256
@@ -166,11 +171,17 @@ export async function assertFootageRealSmoke(projectRoot, reportsRoot, footageHo
   const marginPpm = first.scorePpm - next;
   if (marginPpm < minimumMarginPpm) fail(`semantic rank margin ${marginPpm} is below ${minimumMarginPpm}`);
 
-  const extractLoaded = await json(resolve(project, "selects/dog.mp4.cut-footage.json"), "extract manifest", true), extract = extractLoaded.value;
+  const [extractLoaded, extractReport] = await Promise.all([
+    json(resolve(project, "selects/dog.mp4.cut-footage.json"), "extract manifest", true),
+    json(resolve(reports, "extract.json"), "extract command report", true),
+  ]), extract = extractLoaded.value;
+  if (!extractLoaded.bytes.equals(extractReport.bytes)) fail("extract command JSON differs from its published manifest");
   verifySigned(extract, "extractSha256", "extract");
   if (extract.format !== "cut-footage-extract" || extract.version !== 1 || extract.label !== "candidate-only-not-cut-lock"
     || extract.searchSha256 !== search.searchSha256 || extract.indexSha256 !== index.indexSha256 || extract.matchId !== first.id
     || !same(extract.sourceSelection, first.sourceSelection) || extract.output?.locator !== "selects/dog.mp4") fail("extract manifest does not bind the first search match");
+  if (rationalNumber(extract.requestedHandles?.head, "requestedHandles.head") !== 0.5
+    || rationalNumber(extract.requestedHandles?.tail, "requestedHandles.tail") !== 0.5) fail("extract did not exercise the exact installed handle path");
   const clip = await fileEvidence(resolve(project, "selects/dog.mp4"), "extracted clip");
   if (clip.bytes !== extract.output.bytes || clip.sha256 !== extract.output.sha256) fail("extracted clip does not match its manifest");
   if (!Array.isArray(extract.output.streams) || extract.output.streams.length !== 1 || extract.output.streams[0]?.index !== 0
