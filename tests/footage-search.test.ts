@@ -450,3 +450,27 @@ test("vector and source revalidation failures stay in one stable path-free searc
     assert.equal(caught.message.includes(fixture.root), false, missing);
   }
 });
+
+test("a vector removed while the sidecar starts stays inside the stable path-free search boundary", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture();
+  const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+  let closed = 0, caught: unknown;
+  try {
+    await searchProjectFootage({
+      projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator: ".cut/footage/search.json",
+      query: "dog", backendInstall: fixture.install,
+      __testHooks: {
+        async startSidecar() {
+          await rm(join(fixture.root, fixture.vectorLocator));
+          return searchSession(fixture.handshake, candidates, () => { closed += 1; });
+        },
+      },
+    });
+  } catch (error) { caught = error; }
+  assert.equal(closed, 1);
+  assert.ok(caught instanceof CutFootageError);
+  assert.equal(caught.code, "CUT_FOOTAGE_INDEX_STALE");
+  assert.equal(caught.path, "$.indexLocator");
+  assert.equal(caught.message, "CUT_FOOTAGE_INDEX_STALE at $.indexLocator: the footage index vector and source authority could not be revalidated safely.");
+  assert.equal(caught.message.includes(fixture.root), false);
+});

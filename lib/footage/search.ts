@@ -236,6 +236,13 @@ async function revalidateSearchIndex(projectRoot: string, index: CutFootageIndex
   }
 }
 
+async function resolveSearchVectorArtifact(projectRoot: string, index: CutFootageIndex) {
+  try { return await resolveProjectFile(projectRoot, index.vectorArtifact.locator); }
+  catch {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
+  }
+}
+
 async function loadSearchIndex(projectRoot: string, indexLocator: string) {
   try {
     const path = await resolveProjectFile(projectRoot, indexLocator);
@@ -313,7 +320,7 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
       footageFail("CUT_FOOTAGE_MODEL_MISMATCH", "$backend", "the running local footage backend does not match the index identity.");
     }
     candidates = await session.searchText({
-      artifact: { path: await resolveProjectFile(projectRoot, index.vectorArtifact.locator), bytes: index.vectorArtifact.bytes, sha256: index.vectorArtifact.sha256 },
+      artifact: { path: await resolveSearchVectorArtifact(projectRoot, index), bytes: index.vectorArtifact.bytes, sha256: index.vectorArtifact.sha256 },
       query,
     });
   } catch (error) { operationError = error; }
