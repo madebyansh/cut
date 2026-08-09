@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { createCutProject } from "../lib/project";
+import { runFfmpeg } from "../lib/runtime/reference/ffmpeg";
 import { CutFootageError } from "../lib/footage/diagnostics";
 import {
   encodeCutFootageVectorArtifact,
@@ -13,6 +14,7 @@ import {
   type CutFootageIndexBackend,
   type CutFootageVectorArtifact,
   type FootageFrameBatchRequest,
+  type FootageIndexerTestHooks,
 } from "../lib/footage/indexer";
 import type { CutFootageSidecarHandshake } from "../lib/footage/sidecar";
 
@@ -137,6 +139,196 @@ test("CUTFVEC1 codec accepts exact sorted unit 512-d records and rejects malform
   }
   assert.throws(() => parseCutFootageVectorArtifact(encoded, { dimensions: 4, chunkIds: ["chunk-a", "chunk-b"] }), /dimensions/u);
   assert.throws(() => parseCutFootageVectorArtifact(encoded, { dimensions, chunkIds: ["wrong", "chunk-b"] }), /chunk ids/u);
+});
+
+test("CUTFVEC1 rejects signed negative zero and empty record sets", () => {
+  const negativeZero = Buffer.from(encodeCutFootageVectorArtifact(artifact(["chunk-a"])));
+  const firstFloat = 48 + 2 + Buffer.byteLength("chunk-a");
+  negativeZero.writeUInt32LE(0x8000_0000, firstFloat + 4);
+  assert.throws(
+    () => parseCutFootageVectorArtifact(negativeZero, { dimensions, chunkIds: ["chunk-a"] }),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL",
+  );
+
+  const empty = Buffer.alloc(48);
+  empty.write("CUTFVEC1", 0, "ascii");
+  empty.writeUInt32LE(dimensions, 8);
+  Buffer.from(digest("e"), "hex").copy(empty, 16);
+  assert.throws(
+    () => parseCutFootageVectorArtifact(empty, { dimensions, chunkIds: [] }),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL",
+  );
+  assert.throws(
+    () => encodeCutFootageVectorArtifact({ dimensions, planSha256: digest("e"), records: [] }),
+    (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL",
+  );
+});
+
+test("FFmpeg frame batches isolate one first frame per planned window before numbering", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  const calls: FootageFrameBatchRequest[] = [];
+  await indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook(calls) },
+  });
+  assert.ok(calls.length > 0);
+  for (const call of calls) {
+    const filterIndex = call.arguments.indexOf("-vf");
+    assert.notEqual(filterIndex, -1);
+    const filter = call.arguments[filterIndex + 1]!;
+    assert.equal(filter.match(/trim=end_frame=1/gu)?.length, call.samplePoints.length);
+    assert.match(filter, new RegExp(`split=${call.samplePoints.length}(?:\\[|;)`, "u"));
+    assert.match(filter, new RegExp(`concat=n=${call.samplePoints.length}:v=1:a=0`, "u"));
+  }
+});
+
+test("VFR duplicate frames cannot hide a later missing planned window", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false), sourcePath = join(fixture.root, "media/a.mp4");
+  await runFfmpeg([
+    "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=30:duration=0.2",
+    "-vf", "settb=1/1000,setpts=if(eq(N\\,0)\\,0\\,if(eq(N\\,1)\\,500\\,if(eq(N\\,2)\\,510\\,if(eq(N\\,3)\\,1000\\,if(eq(N\\,4)\\,2000\\,3000)))))",
+    "-fps_mode", "vfr", "-c:v", "libx264", "-x264-params", "force-cfr=0", "-pix_fmt", "yuv420p", "-y", sourcePath,
+  ]);
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_UNSUPPORTED_MEDIA");
+  assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors")), []);
+});
+
+test("abort kills the complete FFmpeg process group and returns one private stable error", { timeout: 10_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  const pidPath = join(fixture.root, ".cut/ffmpeg-grandchild.pid"), executable = join(fixture.root, ".cut/hanging-ffmpeg.mjs");
+  await writeFile(executable, `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setTimeout(()=>process.exit(0),2000)"], { stdio:["ignore","ignore","inherit"] });
+writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+setTimeout(() => process.exit(0), 2000);
+`, { flag: "wx", mode: 0o700 });
+  await chmod(executable, 0o700);
+  const controller = new AbortController();
+  const operation = indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: executable, signal: controller.signal,
+  });
+  void operation.catch(() => undefined);
+  const deadline = Date.now() + 3_000;
+  let grandchildPid: number | undefined;
+  while (Date.now() < deadline && grandchildPid === undefined) {
+    try { grandchildPid = Number(await readFile(pidPath, "utf8")); }
+    catch { await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }
+  }
+  assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid! > 0);
+  const abortStarted = Date.now(); controller.abort();
+  await assert.rejects(operation, (error: unknown) => error instanceof CutFootageError
+    && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL"
+    && error.path === "$signal"
+    && !error.message.includes(fixture.root));
+  assert.ok(Date.now() - abortStarted < 2_000);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  assert.throws(() => process.kill(grandchildPid!, 0), (error: unknown) => error !== null && typeof error === "object" && "code" in error && error.code === "ESRCH");
+  assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors") || name.includes("staging")), []);
+});
+
+test("indexing maps local I/O failures to stable footage errors without absolute paths", { skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  const missingRoot = join(fixture.root, "private-missing-project");
+  await assert.rejects(indexProjectFootage({
+    projectRoot: missingRoot, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook([]) },
+  }), (error: unknown) => error instanceof CutFootageError
+    && error.code === "CUT_FOOTAGE_PUBLISH"
+    && !error.message.includes(missingRoot)
+    && !error.message.includes(fixture.root));
+});
+
+test("staging cleanup preserves a replacement directory and keeps the error path private", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  const outputRoot = join(fixture.root, ".cut/footage");
+  let replacementLeaf = "";
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath,
+    __testHooks: {
+      runFrameBatch: frameHook([]),
+      async beforeSourceRecheck() {
+        const stagingName = (await readdir(outputRoot)).find((name) => name.includes("cut-footage-staging"));
+        assert.ok(stagingName);
+        const stagingPath = join(outputRoot, stagingName);
+        await rename(stagingPath, `${stagingPath}.owned`);
+        await mkdir(stagingPath, { mode: 0o700 });
+        replacementLeaf = join(stagingPath, "foreign-data");
+        await writeFile(replacementLeaf, "preserve replacement\n", { flag: "wx" });
+        throw new Error("private cleanup trigger");
+      },
+    },
+  }), (error: unknown) => error instanceof CutFootageError
+    && error.code === "CUT_FOOTAGE_PUBLISH"
+    && !error.message.includes(fixture.root)
+    && !error.message.includes("private cleanup trigger"));
+  assert.equal(await readFile(replacementLeaf, "utf8"), "preserve replacement\n");
+});
+
+test("publication compare-and-swap preserves a concurrent valid footage pair", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  await indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook([]) },
+  });
+  await appendFile(join(fixture.root, "media/a.mp4"), Buffer.from([0]));
+  const indexPath = join(fixture.root, fixture.output), vectorPath = join(fixture.root, ".cut/footage/index.vectors");
+  let concurrentPair: readonly Buffer[] | undefined;
+  let raced = false;
+  const hooks = {
+    runFrameBatch: frameHook([]),
+    publication: {
+      async fault(point) {
+        if (raced || point.phase !== "backup" || point.timing !== "before" || point.index !== 0) return;
+        raced = true;
+        await indexProjectFootage({
+          projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script, "c"),
+          ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook([]) },
+        });
+        concurrentPair = await Promise.all([readFile(indexPath), readFile(vectorPath)]);
+      },
+    },
+  } as FootageIndexerTestHooks;
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: hooks,
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH" && !error.message.includes(fixture.root));
+  assert.ok(concurrentPair);
+  assert.deepEqual(await Promise.all([readFile(indexPath), readFile(vectorPath)]), concurrentPair);
+});
+
+test("a source changed and byte-restored during inference is still rejected as stale", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false);
+  const sourcePath = join(fixture.root, "media/a.mp4"), original = await readFile(sourcePath);
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath,
+    __testHooks: {
+      runFrameBatch: frameHook([]),
+      async afterFrames() { await appendFile(sourcePath, Buffer.from([0])); },
+      async beforeSourceRecheck() { await writeFile(sourcePath, original); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
+  assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors")), []);
+});
+
+test("a source changed after the multi-source hash pass cannot enter the published index", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(true);
+  const sourcePath = join(fixture.root, "media/a.mp4");
+  const hooks = {
+    runFrameBatch: frameHook([]),
+    async beforePublication() { await appendFile(sourcePath, Buffer.from([0])); },
+  } as FootageIndexerTestHooks;
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: hooks,
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
+  assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors")), []);
 });
 
 test("index workflow publishes a strict pair, then reuses every chunk byte-identically without starting inference", { timeout: 30_000, skip: process.platform === "win32" }, async () => {

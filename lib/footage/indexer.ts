@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve, sep } from "node:path";
 import { stableJsonStringify } from "../core/stable";
@@ -9,11 +9,12 @@ import {
   createReferenceNativeProcessCollector,
 } from "../project/native-process-authority";
 import { resolveProjectFile, validateProjectLocator } from "../project/manifest";
-import { probeProjectBytes } from "../project/probe";
 import {
   ensureProjectWriteDirectory,
   publishStagedFileTransaction,
   publishStagedFileTransactionForTest,
+  snapshotStagedFileDestination,
+  type StagedFileDestinationSnapshot,
   type StagedFilePublication,
   type StagedFileTransactionTestHooks,
 } from "../project/write-boundary";
@@ -46,6 +47,7 @@ const maximumVectorBytes = 512 * 1024 * 1024;
 const maximumFrameBytes = 4 * 1024 * 1024;
 const maximumStagedFrameBytes = 512 * 1024 * 1024;
 const maximumSamplesPerFfmpegBatch = 128;
+const sourceHashBufferBytes = 1024 * 1024;
 const unitVectorTolerance = 1e-4;
 const identifierPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const shaPattern = /^[a-f0-9]{64}$/u;
@@ -84,6 +86,7 @@ export type FootageIndexerTestHooks = Readonly<{
   runFrameBatch?: (request: FootageFrameBatchRequest) => Promise<void>;
   afterFrames?: (plan: FootagePlan) => void | Promise<void>;
   beforeSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
+  beforePublication?: (plan: FootagePlan) => void | Promise<void>;
   publication?: StagedFileTransactionTestHooks;
 }>;
 
@@ -95,6 +98,15 @@ type FileEvidence = Readonly<{
   size: bigint;
   mtimeNs: bigint;
   ctimeNs: bigint;
+}>;
+
+type DirectoryEvidence = Readonly<{ dev: bigint; ino: bigint }>;
+
+type PlannedSourceSnapshot = Readonly<{
+  projectRoot: string;
+  locator: string;
+  path: string;
+  evidence: FileEvidence;
 }>;
 
 type PriorPair = Readonly<{
@@ -130,6 +142,123 @@ function abortIfRequested(signal: AbortSignal | undefined) {
   if (signal?.aborted) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$signal", "the footage index operation was cancelled.");
 }
 
+function systemErrorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+function sameSourceMetadata(metadata: BigIntStats, expected: FileEvidence) {
+  return metadata.isFile() && !metadata.isSymbolicLink()
+    && metadata.dev === expected.dev && metadata.ino === expected.ino && metadata.size === expected.size
+    && metadata.mtimeNs === expected.mtimeNs && metadata.ctimeNs === expected.ctimeNs;
+}
+
+async function hashSourceHandle(handle: Awaited<ReturnType<typeof open>>, expectedBytes: number, locator: string, signal?: AbortSignal) {
+  const digest = createHash("sha256"), buffer = Buffer.allocUnsafe(sourceHashBufferBytes);
+  let position = 0;
+  while (position < expectedBytes) {
+    abortIfRequested(signal);
+    const length = Math.min(buffer.byteLength, expectedBytes - position);
+    const { bytesRead } = await handle.read(buffer, 0, length, position);
+    if (bytesRead < 1) footageFail("CUT_FOOTAGE_INDEX_STALE", locator, "was truncated while its pinned bytes were being verified.");
+    digest.update(buffer.subarray(0, bytesRead)); position += bytesRead;
+  }
+  if ((await handle.read(buffer, 0, 1, expectedBytes)).bytesRead !== 0) {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", locator, "grew while its pinned bytes were being verified.");
+  }
+  abortIfRequested(signal);
+  return digest.digest("hex");
+}
+
+async function verifySourcePath(snapshot: PlannedSourceSnapshot) {
+  try {
+    const [path, metadata] = await Promise.all([
+      resolveProjectFile(snapshot.projectRoot, snapshot.locator),
+      lstat(snapshot.path, { bigint: true }),
+    ]);
+    if (path !== snapshot.path || !sameSourceMetadata(metadata, snapshot.evidence)) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "changed while the footage index was being built.");
+    }
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "could not be revalidated through its pinned project locator.");
+  }
+}
+
+async function capturePlannedSourceSnapshots(projectRoot: string, plan: FootagePlan) {
+  const snapshots = new Map<string, PlannedSourceSnapshot>();
+  for (const source of plan.sources) {
+    const locator = source.source.locator;
+    try {
+      const path = await resolveProjectFile(projectRoot, locator);
+      const metadata = await lstat(path, { bigint: true });
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size !== BigInt(source.source.bytes)) {
+        footageFail("CUT_FOOTAGE_INDEX_STALE", locator, "changed before its pinned source snapshot could be captured.");
+      }
+      snapshots.set(locator, Object.freeze({
+        projectRoot, locator, path,
+        evidence: Object.freeze({
+          bytes: source.source.bytes, sha256: source.source.sha256,
+          dev: metadata.dev, ino: metadata.ino, size: metadata.size, mtimeNs: metadata.mtimeNs, ctimeNs: metadata.ctimeNs,
+        }),
+      }));
+    } catch (error) {
+      if (error instanceof CutFootageError) throw error;
+      footageFail("CUT_FOOTAGE_INDEX_STALE", locator, "could not be captured as one stable regular no-follow source.");
+    }
+  }
+  return snapshots as ReadonlyMap<string, PlannedSourceSnapshot>;
+}
+
+async function openVerifiedSource(snapshot: PlannedSourceSnapshot, signal?: AbortSignal) {
+  if (typeof fsConstants.O_NOFOLLOW !== "number") {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "the host cannot pin a no-follow source handle.");
+  }
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(snapshot.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const before = await handle.stat({ bigint: true });
+    if (!sameSourceMetadata(before, snapshot.evidence)) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "changed before its pinned source handle was opened.");
+    }
+    const digest = await hashSourceHandle(handle, snapshot.evidence.bytes, snapshot.locator, signal);
+    const after = await handle.stat({ bigint: true });
+    if (digest !== snapshot.evidence.sha256 || !sameSourceMetadata(after, snapshot.evidence)) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "changed while its pinned source bytes were being verified.");
+    }
+    await verifySourcePath(snapshot);
+    return handle;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "could not be opened as one stable regular no-follow source.");
+  }
+}
+
+async function verifyOpenSource(snapshot: PlannedSourceSnapshot, handle: Awaited<ReturnType<typeof open>>, signal?: AbortSignal) {
+  try {
+    abortIfRequested(signal);
+    const metadata = await handle.stat({ bigint: true });
+    if (!sameSourceMetadata(metadata, snapshot.evidence)) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "changed while its pinned source handle was in use.");
+    }
+    await verifySourcePath(snapshot);
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", snapshot.locator, "could not be revalidated after pinned source use.");
+  }
+}
+
+async function verifyPlannedSourceHashes(snapshots: ReadonlyMap<string, PlannedSourceSnapshot>, signal?: AbortSignal) {
+  for (const snapshot of snapshots.values()) {
+    const handle = await openVerifiedSource(snapshot, signal);
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function verifyPlannedSourceMetadata(snapshots: ReadonlyMap<string, PlannedSourceSnapshot>) {
+  for (const snapshot of snapshots.values()) await verifySourcePath(snapshot);
+}
+
 function modelIdentity(handshake: CutFootageSidecarStart["expectedHandshake"]): FootageBackendIdentity {
   const required = ["format", "version", "protocolVersion", "provider", "model", "revision", "dimensions", "normalization", "modalities", "hardware", "adapterSha256", "selfTestSha256"];
   if (!handshake || typeof handshake !== "object" || Array.isArray(handshake)
@@ -163,8 +292,8 @@ function checkedDimensions(value: unknown) {
 }
 
 function checkedChunkIds(values: readonly string[]) {
-  if (!Array.isArray(values) || values.length > cutFootageLimits.maximumChunks) {
-    footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$vector.chunkIds", "must be one bounded chunk-id array.");
+  if (!Array.isArray(values) || values.length < 1 || values.length > cutFootageLimits.maximumChunks) {
+    footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$vector.chunkIds", "must be one non-empty bounded chunk-id array.");
   }
   const result = values.map((value) => {
     if (typeof value !== "string" || !identifierPattern.test(value)) {
@@ -221,7 +350,7 @@ export function parseCutFootageVectorArtifact(
     let squaredNorm = 0;
     for (let dimension = 0; dimension < dimensions; dimension += 1) {
       const value = bytes.readFloatLE(offset); offset += 4;
-      if (!Number.isFinite(value)) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$vector.records", "contains one non-finite float32 value.");
+      if (!Number.isFinite(value) || Object.is(value, -0)) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$vector.records", "contains one non-canonical float32 value.");
       vector[dimension] = value;
       squaredNorm += value * value;
     }
@@ -236,7 +365,7 @@ export function parseCutFootageVectorArtifact(
 
 function encodeRecords(dimensions: number, planSha256: string, records: readonly MergeRecord[]) {
   const safeDimensions = checkedDimensions(dimensions), sorted = [...records].sort((left, right) => bytewise(left.chunkId, right.chunkId));
-  if (!shaPattern.test(planSha256) || sorted.length > cutFootageLimits.maximumChunks || new Set(sorted.map((record) => record.chunkId)).size !== sorted.length) {
+  if (!shaPattern.test(planSha256) || sorted.length < 1 || sorted.length > cutFootageLimits.maximumChunks || new Set(sorted.map((record) => record.chunkId)).size !== sorted.length) {
     footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$vector", "cannot encode malformed vector evidence.");
   }
   let bytes = vectorHeaderBytes;
@@ -322,6 +451,17 @@ async function optionalMetadata(path: string) {
   }
 }
 
+async function cleanupStagingDirectory(path: string, expected: DirectoryEvidence) {
+  let current: Awaited<ReturnType<typeof lstat>>;
+  try { current = await lstat(path, { bigint: true }); }
+  catch (error) {
+    if (systemErrorCode(error) === "ENOENT") return;
+    return;
+  }
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== expected.dev || current.ino !== expected.ino) return;
+  await rm(path, { recursive: true, force: true }).catch(() => undefined);
+}
+
 async function loadPriorPair(
   rootLocator: string,
   vectorLocator: string,
@@ -375,6 +515,24 @@ async function recheckPriorPair(prior: PriorPair | undefined, indexPath: string,
   }
 }
 
+function matchesPriorDestination(snapshot: StagedFileDestinationSnapshot, evidence: FileEvidence) {
+  return snapshot.state === "present" && snapshot.kind === "file"
+    && BigInt(snapshot.dev) === evidence.dev && BigInt(snapshot.ino) === evidence.ino;
+}
+
+async function publicationDestinationSnapshots(prior: PriorPair | undefined, indexPath: string, vectorPath: string) {
+  const [index, vector] = await Promise.all([
+    snapshotStagedFileDestination(indexPath),
+    snapshotStagedFileDestination(vectorPath),
+  ]);
+  if (prior
+    ? !matchesPriorDestination(index, prior.indexEvidence) || !matchesPriorDestination(vector, prior.vectorEvidence)
+    : index.state !== "absent" || vector.state !== "absent") {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$output", "the verified footage destinations changed before publication admission.");
+  }
+  return Object.freeze({ index, vector });
+}
+
 function rationalExpression(value: Rational) {
   return `${value.numerator}/${value.denominator}`;
 }
@@ -399,11 +557,17 @@ function ffmpegFrameArguments(
   grid: Rational,
   outputPattern: string,
 ) {
-  const selection = points.map((point) => {
+  const selections = points.map((point) => {
     const end = addRational(point, grid);
     return `gte(t\\,${rationalExpression(point)})*lt(t\\,${rationalExpression(end)})`;
-  }).join("+");
-  const filter = `setpts=PTS-STARTPTS,select=${selection},scale=224:224:force_original_aspect_ratio=decrease:flags=lanczos,pad=224:224:(ow-iw)/2:(oh-ih)/2:black,format=rgb24`;
+  });
+  const inputs = selections.map((_selection, index) => `[window-${String(index).padStart(3, "0")}]`).join("");
+  const outputs = selections.map((_selection, index) => `[sample-${String(index).padStart(3, "0")}]`).join("");
+  const branches = selections.map((selection, index) => {
+    const suffix = String(index).padStart(3, "0");
+    return `[window-${suffix}]select=${selection},trim=end_frame=1,setpts=PTS-STARTPTS[sample-${suffix}]`;
+  }).join(";");
+  const filter = `setpts=PTS-STARTPTS,split=${points.length}${inputs};${branches};${outputs}concat=n=${points.length}:v=1:a=0,setpts=N*(${rationalExpression(grid)})/TB,scale=224:224:force_original_aspect_ratio=decrease:flags=lanczos,pad=224:224:(ow-iw)/2:(oh-ih)/2:black,format=rgb24`;
   return Object.freeze([
     "-nostdin", "-v", "error", "-i", sourcePath,
     "-map", `0:${streamIndex}`, "-an", "-sn", "-dn",
@@ -417,6 +581,7 @@ async function extractChangedFrames(options: Readonly<{
   plan: FootagePlan;
   changedChunkIds: readonly string[];
   stagingRoot: string;
+  sources: ReadonlyMap<string, PlannedSourceSnapshot>;
   ffmpegExecutable?: string;
   signal?: AbortSignal;
   hooks?: FootageIndexerTestHooks;
@@ -440,52 +605,66 @@ async function extractChangedFrames(options: Readonly<{
     for (const group of [...groups.values()].sort((left, right) => bytewise(left.source.source.locator, right.source.source.locator) || left.source.selectedStreamIndex - right.source.selectedStreamIndex)) {
       abortIfRequested(options.signal);
       const unique = [...new Map(group.points.map((point) => [`${point.numerator}/${point.denominator}`, point])).values()].sort(compareTime);
-      const sourcePath = await resolveProjectFile(options.projectRoot, group.source.source.locator);
-      for (let start = 0; start < unique.length; start += maximumSamplesPerFfmpegBatch) {
-        abortIfRequested(options.signal);
-        const batch = unique.slice(start, start + maximumSamplesPerFfmpegBatch);
-        const batchRoot = resolve(framesRoot, `batch-${String(ordinal).padStart(6, "0")}`);
-        await mkdir(batchRoot, { mode: 0o700 });
-        const outputPattern = resolve(batchRoot, "%06d.png");
-        const outputPaths = batch.map((_point, index) => resolve(batchRoot, `${String(index).padStart(6, "0")}.png`));
-        const args = ffmpegFrameArguments(sourcePath, group.source.selectedStreamIndex, batch, group.source.grid, outputPattern);
-        const execution: ReferenceMediaNativeProcessExecution = Object.freeze({
-          authority, collector,
-          context: Object.freeze({
-            ordinal, operation: "footage-frame-sample", resourceId: group.source.source.locator,
-            resourceSha256: group.source.source.sha256, resourceBytes: group.source.source.bytes,
-            variant: "master", streamIndex: group.source.selectedStreamIndex,
-          }),
-        });
-        const request = Object.freeze({
-          executable: authority.executablePath, arguments: args, sourceLocator: group.source.source.locator,
-          streamIndex: group.source.selectedStreamIndex, samplePoints: Object.freeze(batch), outputPaths: Object.freeze(outputPaths), execution,
-        });
-        try {
-          if (options.hooks?.runFrameBatch) await options.hooks.runFrameBatch(request);
-          else await runBoundReferenceFfmpeg(authority.executablePath, [...args], 10 * 60_000, { stderrBytes: 256 * 1024, totalBytes: 256 * 1024 }, execution);
-        } catch {
-          footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", group.source.source.locator, "could not produce the exact deterministic frame sample batch.");
+      const source = options.sources.get(group.source.source.locator);
+      if (!source) footageFail("CUT_FOOTAGE_INDEX_STALE", group.source.source.locator, "lost its pinned source snapshot before frame extraction.");
+      const sourceHandle = await openVerifiedSource(source, options.signal);
+      try {
+        const sourcePath = "/dev/fd/3";
+        for (let start = 0; start < unique.length; start += maximumSamplesPerFfmpegBatch) {
+          abortIfRequested(options.signal);
+          const batch = unique.slice(start, start + maximumSamplesPerFfmpegBatch);
+          const batchRoot = resolve(framesRoot, `batch-${String(ordinal).padStart(6, "0")}`);
+          await mkdir(batchRoot, { mode: 0o700 });
+          const outputPattern = resolve(batchRoot, "%06d.png");
+          const outputPaths = batch.map((_point, index) => resolve(batchRoot, `${String(index).padStart(6, "0")}.png`));
+          const args = ffmpegFrameArguments(sourcePath, group.source.selectedStreamIndex, batch, group.source.grid, outputPattern);
+          const execution: ReferenceMediaNativeProcessExecution = Object.freeze({
+            authority, collector,
+            context: Object.freeze({
+              ordinal, operation: "footage-frame-sample", resourceId: group.source.source.locator,
+              resourceSha256: group.source.source.sha256, resourceBytes: group.source.source.bytes,
+              variant: "master", streamIndex: group.source.selectedStreamIndex,
+            }),
+          });
+          const request = Object.freeze({
+            executable: authority.executablePath, arguments: args, sourceLocator: group.source.source.locator,
+            streamIndex: group.source.selectedStreamIndex, samplePoints: Object.freeze(batch), outputPaths: Object.freeze(outputPaths), execution,
+          });
+          try {
+            if (options.hooks?.runFrameBatch) await options.hooks.runFrameBatch(request);
+            else await runBoundReferenceFfmpeg(
+              authority.executablePath,
+              [...args],
+              10 * 60_000,
+              { stderrBytes: 256 * 1024, totalBytes: 256 * 1024 },
+              execution,
+              { ...(options.signal === undefined ? {} : { signal: options.signal }), inheritedFileDescriptors: [sourceHandle.fd], terminateProcessTree: true, terminationGraceMs: 250 },
+            );
+          } catch {
+            abortIfRequested(options.signal);
+            footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", group.source.source.locator, "could not produce the exact deterministic frame sample batch.");
+          }
+          await verifyOpenSource(source, sourceHandle, options.signal);
+          const names = (await readdir(batchRoot)).sort(bytewise), expectedNames = outputPaths.map((path) => basename(path));
+          if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) {
+            footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", group.source.source.locator, "did not produce exactly one numbered PNG for every requested frame window.");
+          }
+          for (const [index, point] of batch.entries()) {
+            const evidence = await inspectFrame(outputPaths[index]!);
+            totalFrameBytes += evidence.bytes;
+            if (totalFrameBytes > maximumStagedFrameBytes) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$frames", "exceeded the staged frame byte budget.");
+            frames.set(sampleKey(group.source.source.locator, group.source.selectedStreamIndex, point), evidence);
+          }
+          ordinal += 1;
         }
-        const names = (await readdir(batchRoot)).sort(bytewise), expectedNames = outputPaths.map((path) => basename(path));
-        if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) {
-          footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", group.source.source.locator, "did not produce exactly one numbered PNG for every requested frame window.");
-        }
-        for (const [index, point] of batch.entries()) {
-          const evidence = await inspectFrame(outputPaths[index]!);
-          totalFrameBytes += evidence.bytes;
-          if (totalFrameBytes > maximumStagedFrameBytes) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$frames", "exceeded the staged frame byte budget.");
-          frames.set(sampleKey(group.source.source.locator, group.source.selectedStreamIndex, point), evidence);
-        }
-        ordinal += 1;
-      }
+      } finally { await sourceHandle.close().catch(() => undefined); }
     }
   } catch (error) { primaryError = error; }
-  let sealError: unknown;
-  try { await collector.seal(); await authority.verify(); }
-  catch (error) { sealError = error; }
+  const lifecycleChecks = await Promise.allSettled([collector.seal(), authority.verify()]);
   if (primaryError !== undefined) throw primaryError;
-  if (sealError !== undefined) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$frames", "the bound FFmpeg frame-sampling lifecycle could not be verified.");
+  if (lifecycleChecks.some((check) => check.status === "rejected")) {
+    footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$frames", "the bound FFmpeg frame-sampling lifecycle could not be verified.");
+  }
   const chunkFrames = new Map<string, readonly SampleFrame[]>();
   for (const chunk of changedChunks) {
     const records = chunk.samplePoints.map((point) => frames.get(sampleKey(chunk.sourceLocator, chunk.streamIndex, point)));
@@ -523,16 +702,6 @@ function signedIndex(options: Readonly<{
     creation: Object.freeze({ cutVersion: cutProductVersion, backendProtocolVersion: 1 as const }),
   });
   return parseCutFootageIndex(`${stableJsonStringify({ ...body, indexSha256: sha256(stableJsonStringify(body)) })}\n`);
-}
-
-async function recheckSources(projectRoot: string, plan: FootagePlan) {
-  for (const source of plan.sources) {
-    await resolveProjectFile(projectRoot, source.source.locator);
-    const current = await probeProjectBytes(projectRoot, source.source.locator);
-    if (current.file.locator !== source.source.locator || current.file.bytes !== source.source.bytes || current.file.sha256 !== source.source.sha256) {
-      footageFail("CUT_FOOTAGE_INDEX_STALE", source.source.locator, "changed while the footage index was being built.");
-    }
-  }
 }
 
 function deterministicMergePlanSha(options: Readonly<{
@@ -617,8 +786,7 @@ function result(index: CutFootageIndex, indexLocator: string, vectorLocator: str
   return Object.freeze({ index, indexLocator, vectorLocator, reusedChunkIds: Object.freeze([...reusedChunkIds]), indexedChunkIds: Object.freeze([...indexedChunkIds]) });
 }
 
-/** Builds or incrementally replaces one canonical project footage index/vector pair. */
-export async function indexProjectFootage(options: Readonly<{
+type IndexProjectFootageOptions = Readonly<{
   projectRoot: string;
   rootLocator: string;
   outputLocator: string;
@@ -627,7 +795,9 @@ export async function indexProjectFootage(options: Readonly<{
   ffmpegExecutable?: string;
   signal?: AbortSignal;
   __testHooks?: FootageIndexerTestHooks;
-}>): Promise<CutFootageIndexResult> {
+}>;
+
+async function indexProjectFootageOperation(options: IndexProjectFootageOptions): Promise<CutFootageIndexResult> {
   if (!options || typeof options !== "object" || Array.isArray(options)) footageFail("CUT_FOOTAGE_BACKEND_PROTOCOL", "$", "must be one footage indexing request.");
   abortIfRequested(options.signal);
   const rootLocator = validateProjectLocator(options.rootLocator, "footage root locator");
@@ -647,14 +817,20 @@ export async function indexProjectFootage(options: Readonly<{
   const locators = await discoverProjectFootage(canonicalProjectRoot, rootLocator, options.discoveryLimits ?? {});
   if (!locators.length) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", rootLocator, "contains no MP4 or MOV footage.");
   const plan = await planFootageSources({ projectRoot: canonicalProjectRoot, locators, backend, priorIndex: prior?.index });
+  const sourceSnapshots = await capturePlannedSourceSnapshots(canonicalProjectRoot, plan);
   const reusable = new Set(plan.reusableChunkIds);
   const reusedChunkIds = plan.chunks.map((chunk) => chunk.id).filter((id) => reusable.has(id)).sort(bytewise);
   const indexedChunkIds = plan.chunks.map((chunk) => chunk.id).filter((id) => !reusable.has(id)).sort(bytewise);
   if (reusedChunkIds.length && !prior) footageFail("CUT_FOOTAGE_INDEX_STALE", "$reuse", "planned reuse without one verified prior vector artifact.");
   const stagingRoot = await mkdtemp(resolve(outputParent, `.${basename(indexPath)}.cut-footage-staging-${process.pid}-${randomUUID()}-`));
+  const stagingMetadata = await lstat(stagingRoot, { bigint: true });
+  if (!stagingMetadata.isDirectory() || stagingMetadata.isSymbolicLink()) {
+    footageFail("CUT_FOOTAGE_PUBLISH", "$output", "the private footage staging directory could not be verified.");
+  }
+  const stagingEvidence = Object.freeze({ dev: stagingMetadata.dev, ino: stagingMetadata.ino });
   try {
     const frames = await extractChangedFrames({
-      projectRoot: canonicalProjectRoot, plan, changedChunkIds: indexedChunkIds, stagingRoot,
+      projectRoot: canonicalProjectRoot, plan, changedChunkIds: indexedChunkIds, stagingRoot, sources: sourceSnapshots,
       ...(options.ffmpegExecutable === undefined ? {} : { ffmpegExecutable: options.ffmpegExecutable }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.__testHooks === undefined ? {} : { hooks: options.__testHooks }),
@@ -691,14 +867,17 @@ export async function indexProjectFootage(options: Readonly<{
     ]);
     await options.__testHooks?.beforeSourceRecheck?.(plan);
     abortIfRequested(options.signal);
-    await recheckSources(canonicalProjectRoot, plan);
+    await verifyPlannedSourceHashes(sourceSnapshots, options.signal);
     await recheckPriorPair(prior, indexPath, vectorPath);
     if (prior && prior.indexBytes.equals(indexBytes) && prior.vectorBytes.equals(vectorBytes)) {
       return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);
     }
+    await options.__testHooks?.beforePublication?.(plan);
+    await verifyPlannedSourceMetadata(sourceSnapshots);
+    const expectedDestinations = await publicationDestinationSnapshots(prior, indexPath, vectorPath);
     const publications: readonly StagedFilePublication[] = Object.freeze([
-      Object.freeze({ staged: stagedVector, destination: vectorPath, order: 100, role: "footage-vector" }),
-      Object.freeze({ staged: stagedIndex, destination: indexPath, order: 200, role: "footage-index" }),
+      Object.freeze({ staged: stagedVector, destination: vectorPath, order: 100, role: "footage-vector", expectedDestinationSnapshot: expectedDestinations.vector }),
+      Object.freeze({ staged: stagedIndex, destination: indexPath, order: 200, role: "footage-index", expectedDestinationSnapshot: expectedDestinations.index }),
     ]);
     try {
       if (options.__testHooks?.publication) await publishStagedFileTransactionForTest(publications, options.__testHooks.publication);
@@ -708,6 +887,16 @@ export async function indexProjectFootage(options: Readonly<{
     }
     return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);
   } finally {
-    await rm(stagingRoot, { recursive: true, force: true });
+    await cleanupStagingDirectory(stagingRoot, stagingEvidence);
+  }
+}
+
+/** Builds or incrementally replaces one canonical project footage index/vector pair. */
+export async function indexProjectFootage(options: IndexProjectFootageOptions): Promise<CutFootageIndexResult> {
+  try {
+    return await indexProjectFootageOperation(options);
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_PUBLISH", "$", "the footage index operation failed at a bounded local I/O boundary.");
   }
 }
