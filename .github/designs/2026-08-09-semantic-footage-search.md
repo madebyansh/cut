@@ -68,7 +68,7 @@ Embeddings stay in the sidecar-owned artifact rather than bloating JSON. Search 
 
 ### Search report
 
-`cut-footage-search` version 1 contains the index identity, normalized text query, threshold, and sorted matches. Each match has a stable ID, canonical integer `scorePpm`, source locator and SHA-256, selected stream, exact half-open source range, matched chunk IDs, and optional adjacent handles.
+`cut-footage-search` version 1 contains the canonical project-relative index locator and index identity, normalized text query, threshold, and sorted matches. Binding the locator into `searchSha256` lets `footage extract <search-report>` load the exact index without guessing a sibling filename or requiring another CLI argument. Each match has a stable ID, canonical integer `scorePpm`, source locator and SHA-256, selected stream, exact half-open source range, matched chunk IDs, and optional adjacent handles.
 
 The adapter's floating score is admitted once, clamped, and quantized to integer parts per million before it enters a public report. Ordering is deterministic: descending `scorePpm`, then source locator, start time, end time, and stable match ID. Overlapping hits from the same source are merged or suppressed by one documented policy before ranking. A low-confidence result is reported honestly; CUT never pretends it found a confident match.
 
