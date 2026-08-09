@@ -1,0 +1,12 @@
+{
+  "name": "@cut-lang/footage-local",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0 <21 || >=24.0.0 <25"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0"
+  }
+}
