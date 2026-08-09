@@ -231,6 +231,22 @@ setTimeout(() => process.exit(0), 2000);
   assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors") || name.includes("staging")), []);
 });
 
+test("abort at the final publication boundary leaves no footage pair", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(false), controller = new AbortController();
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, signal: controller.signal,
+    __testHooks: {
+      runFrameBatch: frameHook([]),
+      async beforePublication() { controller.abort(); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError
+    && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL"
+    && error.path === "$signal"
+    && !error.message.includes(fixture.root));
+  assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors") || name.includes("staging")), []);
+});
+
 test("indexing maps local I/O failures to stable footage errors without absolute paths", { skip: process.platform === "win32" }, async () => {
   const fixture = await fixtureProject(false);
   const missingRoot = join(fixture.root, "private-missing-project");
@@ -329,6 +345,25 @@ test("a source changed after the multi-source hash pass cannot enter the publish
     ffmpegExecutable: process.execPath, __testHooks: hooks,
   }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
   assert.deepEqual((await readdir(join(fixture.root, ".cut/footage"))).filter((name) => name.endsWith(".json") || name.endsWith(".vectors")), []);
+});
+
+test("full reuse rejects a source changed after the multi-source hash pass", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await fixtureProject(true);
+  await indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath, __testHooks: { runFrameBatch: frameHook([]) },
+  });
+  const indexPath = join(fixture.root, fixture.output), vectorPath = join(fixture.root, ".cut/footage/index.vectors");
+  const before = await Promise.all([readFile(indexPath), readFile(vectorPath)]);
+  const sourcePath = join(fixture.root, "media/a.mp4");
+  await assert.rejects(indexProjectFootage({
+    projectRoot: fixture.root, rootLocator: "media", outputLocator: fixture.output, backend: backend(fixture.script),
+    ffmpegExecutable: process.execPath,
+    __testHooks: {
+      async afterSourceRecheck() { await appendFile(sourcePath, Buffer.from([0])); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
+  assert.deepEqual(await Promise.all([readFile(indexPath), readFile(vectorPath)]), before);
 });
 
 test("index workflow publishes a strict pair, then reuses every chunk byte-identically without starting inference", { timeout: 30_000, skip: process.platform === "win32" }, async () => {

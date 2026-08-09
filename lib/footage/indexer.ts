@@ -86,6 +86,7 @@ export type FootageIndexerTestHooks = Readonly<{
   runFrameBatch?: (request: FootageFrameBatchRequest) => Promise<void>;
   afterFrames?: (plan: FootagePlan) => void | Promise<void>;
   beforeSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
+  afterSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
   beforePublication?: (plan: FootagePlan) => void | Promise<void>;
   publication?: StagedFileTransactionTestHooks;
 }>;
@@ -868,13 +869,20 @@ async function indexProjectFootageOperation(options: IndexProjectFootageOptions)
     await options.__testHooks?.beforeSourceRecheck?.(plan);
     abortIfRequested(options.signal);
     await verifyPlannedSourceHashes(sourceSnapshots, options.signal);
+    await options.__testHooks?.afterSourceRecheck?.(plan);
+    abortIfRequested(options.signal);
     await recheckPriorPair(prior, indexPath, vectorPath);
+    abortIfRequested(options.signal);
+    await verifyPlannedSourceMetadata(sourceSnapshots);
+    abortIfRequested(options.signal);
     if (prior && prior.indexBytes.equals(indexBytes) && prior.vectorBytes.equals(vectorBytes)) {
       return result(index, indexLocator, vectorLocator, reusedChunkIds, indexedChunkIds);
     }
     await options.__testHooks?.beforePublication?.(plan);
+    abortIfRequested(options.signal);
     await verifyPlannedSourceMetadata(sourceSnapshots);
     const expectedDestinations = await publicationDestinationSnapshots(prior, indexPath, vectorPath);
+    abortIfRequested(options.signal);
     const publications: readonly StagedFilePublication[] = Object.freeze([
       Object.freeze({ staged: stagedVector, destination: vectorPath, order: 100, role: "footage-vector", expectedDestinationSnapshot: expectedDestinations.vector }),
       Object.freeze({ staged: stagedIndex, destination: indexPath, order: 200, role: "footage-index", expectedDestinationSnapshot: expectedDestinations.index }),
