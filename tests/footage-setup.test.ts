@@ -238,7 +238,7 @@ test("locked npm runner uses node plus exact argv and fails without leaking chil
     'import { writeFile } from "node:fs/promises";',
     'await writeFile("npm-runner-record.json", JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), environment: process.env }));',
   ].join("\n"));
-  const environment = Object.freeze({ PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".home"), TMPDIR: join(stagingRoot, ".tmp"), CI: "1" });
+  const environment = Object.freeze({ PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".npm-home"), TMPDIR: join(stagingRoot, ".npm-tmp"), CI: "1", npm_config_cache: npmCacheRoot });
   await installCutFootageLocalRuntime({ stagingRoot, nodeExecutable: process.execPath, npmCliPath, npmCacheRoot, environment });
   const record = JSON.parse(await readFile(join(stagingRoot, "npm-runner-record.json"), "utf8"));
   assert.equal(record.cwd, await realpath(stagingRoot));
@@ -258,7 +258,7 @@ test("locked npm runner kills and drains output overflow and cancellation", asyn
   const root = await mkdtemp(join(tmpdir(), "cut-footage-npm-bounds-"));
   const stagingRoot = join(root, "stage"), npmCacheRoot = join(root, "cache");
   await mkdir(stagingRoot);
-  const environment = Object.freeze({ PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".home"), TMPDIR: join(stagingRoot, ".tmp"), CI: "1" });
+  const environment = Object.freeze({ PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".npm-home"), TMPDIR: join(stagingRoot, ".npm-tmp"), CI: "1", npm_config_cache: npmCacheRoot });
   const overflowCli = join(root, "overflow-npm.mjs");
   await writeFile(overflowCli, 'process.stdout.write("x".repeat(5 * 1024 * 1024)); setInterval(() => {}, 1000);\n');
   await assert.rejects(
@@ -280,6 +280,46 @@ test("locked npm runner kills and drains output overflow and cancellation", asyn
   controller.abort();
   await assert.rejects(running, footageError("CUT_FOOTAGE_PUBLISH"));
   assert.throws(() => process.kill(pid!, 0), { code: "ESRCH" });
+
+  const earlyRoot = await mkdtemp(join(tmpdir(), "cut-footage-npm-early-abort-"));
+  const earlyStage = join(earlyRoot, "stage"), earlyCache = join(earlyRoot, "cache"), earlyCli = join(earlyRoot, "npm.mjs");
+  await mkdir(earlyStage);
+  await writeFile(earlyCli, 'import { writeFile } from "node:fs/promises"; await writeFile("unexpected-spawn", "bad");\n');
+  const earlyController = new AbortController();
+  const earlyRun = installCutFootageLocalRuntime({
+    stagingRoot: earlyStage,
+    nodeExecutable: process.execPath,
+    npmCliPath: earlyCli,
+    npmCacheRoot: earlyCache,
+    environment: {
+      PATH: "/usr/bin:/bin", HOME: join(earlyStage, ".npm-home"), TMPDIR: join(earlyStage, ".npm-tmp"),
+      CI: "1", npm_config_cache: earlyCache,
+    },
+    signal: earlyController.signal,
+  });
+  queueMicrotask(() => earlyController.abort());
+  await assert.rejects(earlyRun, footageError("CUT_FOOTAGE_PUBLISH"));
+  await assert.rejects(readFile(join(earlyStage, "unexpected-spawn")), { code: "ENOENT" });
+});
+
+test("locked npm runner refuses a cache symlink before spawning", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cut-footage-npm-cache-link-"));
+  const stagingRoot = join(root, "stage"), npmCacheRoot = join(root, "cache"), outside = join(root, "outside"), npmCliPath = join(root, "npm.mjs");
+  await Promise.all([mkdir(stagingRoot), mkdir(outside)]);
+  await symlink(outside, npmCacheRoot, "dir");
+  await writeFile(npmCliPath, 'import { writeFile } from "node:fs/promises"; await writeFile("unexpected-spawn", "bad");\n');
+  await assert.rejects(installCutFootageLocalRuntime({
+    stagingRoot,
+    nodeExecutable: process.execPath,
+    npmCliPath,
+    npmCacheRoot,
+    environment: {
+      PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".npm-home"), TMPDIR: join(stagingRoot, ".npm-tmp"),
+      CI: "1", npm_config_cache: npmCacheRoot,
+    },
+  }), footageError("CUT_FOOTAGE_PUBLISH"));
+  assert.deepEqual(await readdir(outside), []);
+  await assert.rejects(readFile(join(stagingRoot, "unexpected-spawn")), { code: "ENOENT" });
 });
 
 test("setup cleanup never deletes a payload pathname whose inode was replaced", async () => {

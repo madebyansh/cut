@@ -387,6 +387,33 @@ function runtimeEnvironment(
   });
 }
 
+async function prepareDirectPrivateDirectory(path: string, parent: string) {
+  try {
+    const parentBefore = await lstat(parent);
+    if (!parentBefore.isDirectory() || parentBefore.isSymbolicLink()) publishFailure("the locked local footage runtime directory parent is invalid.");
+    try { await mkdir(path, { mode: 0o700 }); } catch (error) {
+      if (systemErrorCode(error) !== "EEXIST") throw error;
+    }
+    const directoryBefore = await lstat(path);
+    if (!directoryBefore.isDirectory() || directoryBefore.isSymbolicLink()) publishFailure("the locked local footage runtime directory is invalid.");
+    const [canonicalParent, canonicalDirectory, parentAfter, directoryAfter] = await Promise.all([
+      realpath(parent),
+      realpath(path),
+      lstat(parent),
+      lstat(path),
+    ]);
+    if (!inside(canonicalParent, canonicalDirectory)
+      || parentAfter.dev !== parentBefore.dev || parentAfter.ino !== parentBefore.ino
+      || directoryAfter.dev !== directoryBefore.dev || directoryAfter.ino !== directoryBefore.ino
+      || !directoryAfter.isDirectory() || directoryAfter.isSymbolicLink()) {
+      publishFailure("the locked local footage runtime directory changed during preparation.");
+    }
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    publishFailure("the locked local footage runtime installer could not prepare its private directories.");
+  }
+}
+
 async function readBoundedRegular(path: string, maximumBytes: number) {
   let handle;
   try {
@@ -599,14 +626,16 @@ export async function installCutFootageLocalRuntime(request: CutFootageLocalInst
     || !isAbsolute(request.npmCacheRoot) || normalize(request.npmCacheRoot) !== request.npmCacheRoot) {
     publishFailure("the locked local footage runtime installer request is invalid.");
   }
+  const npmHome = join(request.stagingRoot, ".npm-home"), npmTemporary = join(request.stagingRoot, ".npm-tmp");
+  if (request.environment.HOME !== npmHome || request.environment.TMPDIR !== npmTemporary
+    || request.environment.npm_config_cache !== request.npmCacheRoot || dirname(request.npmCacheRoot) !== dirname(request.stagingRoot)) {
+    publishFailure("the locked local footage runtime installer directories are invalid.");
+  }
   if (request.signal?.aborted) publishFailure("the locked local footage runtime install was cancelled.");
-  try {
-    await Promise.all([
-      mkdir(request.environment.HOME, { recursive: true, mode: 0o700 }),
-      mkdir(request.environment.TMPDIR, { recursive: true, mode: 0o700 }),
-      mkdir(request.npmCacheRoot, { recursive: true, mode: 0o700 }),
-    ]);
-  } catch { publishFailure("the locked local footage runtime installer could not prepare its private directories."); }
+  await prepareDirectPrivateDirectory(npmHome, request.stagingRoot);
+  await prepareDirectPrivateDirectory(npmTemporary, request.stagingRoot);
+  await prepareDirectPrivateDirectory(request.npmCacheRoot, dirname(request.npmCacheRoot));
+  if (request.signal?.aborted) publishFailure("the locked local footage runtime install was cancelled.");
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let child: ReturnType<typeof spawn>;
@@ -644,6 +673,7 @@ export async function installCutFootageLocalRuntime(request: CutFootageLocalInst
       return;
     }
     request.signal?.addEventListener("abort", abort, { once: true });
+    if (request.signal?.aborted) fail();
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.byteLength; combinedBytes += chunk.byteLength;
       if (stdoutBytes > maximumNpmOutputBytes || combinedBytes > maximumNpmCombinedOutputBytes) fail();

@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { stableJsonStringify } from "../core/stable";
 import { compareRational } from "../language/rational";
-import { cutFootageLimits, type CutFootageIndex, type CutFootageSearch } from "./contracts";
+import {
+  cutFootageLimits,
+  parseCutFootageSearch,
+  validateCutFootageSearchAgainstIndex,
+  type CutFootageIndex,
+  type CutFootageSearch,
+} from "./contracts";
 import { footageFail } from "./diagnostics";
 import type { CutFootageSidecarCandidate } from "./sidecar";
 
@@ -111,4 +117,24 @@ export function rankCutFootageCandidates(
     || compareRational(left.sourceSelection.range.end, right.sourceSelection.range.end)
     || left.id.localeCompare(right.id));
   return Object.freeze(matches);
+}
+
+/** Constructs, validates, and serializes one canonical LF-terminated search report. */
+export function buildCutFootageSearchReport(
+  index: CutFootageIndex,
+  query: unknown,
+  candidates: readonly CutFootageSidecarCandidate[],
+  options: Readonly<{ thresholdPpm: number; limit: number }>,
+) {
+  const body = Object.freeze({
+    format: "cut-footage-search" as const,
+    version: 1 as const,
+    indexSha256: index.indexSha256,
+    query: Object.freeze({ text: normalizeCutFootageQuery(query), thresholdPpm: options.thresholdPpm }),
+    matches: rankCutFootageCandidates(index, candidates, options),
+  });
+  const searchSha256 = createHash("sha256").update(stableJsonStringify(body)).digest("hex");
+  const bytes = Buffer.from(`${stableJsonStringify({ ...body, searchSha256 })}\n`, "utf8");
+  const report = validateCutFootageSearchAgainstIndex(index, parseCutFootageSearch(bytes));
+  return Object.freeze({ report, bytes });
 }
