@@ -56,13 +56,13 @@ Download the package and checksum from the
 [latest GitHub release](https://github.com/madebyansh/cut/releases/latest), verify
 them, then install CUT into a project:
 
-On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.2-SHA256SUMS.txt`.
-On Linux, use `sha256sum -c CUT-0.4.0-alpha.2-SHA256SUMS.txt`. Then install:
+On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`.
+On Linux, use `sha256sum -c CUT-0.4.0-alpha.3-SHA256SUMS.txt`. Then install:
 
 ```sh
 mkdir my-cut-project && cd my-cut-project
 npm init -y
-npm install --save-exact /path/to/cut-lang-0.4.0-alpha.2.tgz
+npm install --save-exact /path/to/cut-lang-0.4.0-alpha.3.tgz
 npx cut doctor
 npx cut init film --name "My first CUT film"
 ```
@@ -172,7 +172,7 @@ See [SECURITY.md](SECURITY.md) for reporting and trust boundaries.
 
 ## Status
 
-This repository is `0.4.0-alpha.2`. The core compiler and renderer have broad
+This repository is `0.4.0-alpha.3`. The core compiler and renderer have broad
 automated coverage, but CUT is **not 1.0**: complex preview rendering can be slow,
 Linux source and package execution is experimental, Windows descriptor-bound
 media execution is unsupported, and independent-user usability feedback is still

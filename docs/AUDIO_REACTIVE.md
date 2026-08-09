@@ -1,6 +1,6 @@
 # Audio-reactive visual signals
 
-Status: implemented public vertical slice in the `0.4.0-alpha.2` toolchain.
+Status: implemented public vertical slice in the `0.4.0-alpha.3` toolchain.
 Public CUT source, checker/compiler, typed CutAVIR v3, strict loader, verified
 selected-stream preparation, the ordinary visual transform resolver, inspect,
 semantic diff, graph/cache identity, and focused conformance studies all execute.

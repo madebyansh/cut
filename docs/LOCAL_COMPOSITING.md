@@ -1,6 +1,6 @@
 # Retained local compositing V1
 
-Status: **PARTIAL**, executable in CUT `0.4.0-alpha.2`. This document defines
+Status: **PARTIAL**, executable in CUT `0.4.0-alpha.3`. This document defines
 one bounded reference-runtime contract. It does not make CUT 1.0-ready and it
 does not upgrade either additive study to a creative pass.
 

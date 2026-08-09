@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0-alpha.3
+
+- Align the bundled editor support with the CUT 0.4.0-alpha.3 compiler and runtime identities.
+
 ## 0.4.0-alpha.2
 
 - Align the bundled editor support with the CUT 0.4.0-alpha.2 compiler and runtime identities.

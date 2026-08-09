@@ -5,10 +5,10 @@ visible version boundary:
 
 | Surface | Current value |
 | --- | --- |
-| Package | `cut-lang@0.4.0-alpha.2` |
+| Package | `cut-lang@0.4.0-alpha.3` |
 | Source header | `cut 0.4;` |
-| Compiler | `cut-ts/0.4.0-alpha.2` |
-| Reference runtime | `cut-reference/0.4.0-alpha.2` |
+| Compiler | `cut-ts/0.4.0-alpha.3` |
+| Reference runtime | `cut-reference/0.4.0-alpha.3` |
 | CutAVIR | version 3, language `0.4` |
 | Project/package lock | `cut.lock` v3, language `0.4` |
 

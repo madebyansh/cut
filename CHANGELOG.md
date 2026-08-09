@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0-alpha.3
+
+- Accelerated deterministic preview rendering with a bounded three-worker path for stateless picture ranges.
+- Preserved serial rendering for stateful video and clip contexts.
+- Accelerated retained compositing, color transforms, local-space placement, map geometry, vector paths, and static audio DSP without changing authoritative output bytes.
+- Retained the experimental Linux package path through the JavaScript compositor fallback.
+
 ## 0.4.0-alpha.2
 
 - Added experimental Linux x64/arm64 packaging through the JavaScript compositor fallback.
