@@ -7,6 +7,7 @@ import test from "node:test";
 import { CutFootageError } from "../lib/footage/diagnostics";
 import { collectCutFootageLocalDoctorReport } from "../lib/footage/doctor";
 import {
+  createCutFootageLocalIndexBackend,
   cutFootageBackendIdentityFromInstall,
   installCutFootageLocalRuntime,
   inspectCutFootageLocalInstall,
@@ -167,9 +168,20 @@ test("footage doctor returns one stable missing-backend report without leaking i
 
 test("footage setup stages, verifies online and offline, atomically publishes, and is idempotent", async () => {
   const fixture = await installedFixture();
+  const guardPath = join(process.cwd(), "dist-cli", "lib", "footage", "network-deny.js");
   assert.equal(fixture.report.status, "installed");
   assert.equal(JSON.stringify(fixture.report).includes(fixture.home), false);
   assert.deepEqual(fixture.launches.map((launch) => launch.mode), ["setup", "offline"]);
+  assert.deepEqual(fixture.launches[0]?.arguments, [
+    join(fixture.launches[0]!.installationRoot, "local-clip-sidecar.mjs"),
+    "setup",
+  ]);
+  assert.deepEqual(fixture.launches[1]?.arguments, [
+    "--import",
+    guardPath,
+    join(fixture.launches[1]!.installationRoot, "local-clip-sidecar.mjs"),
+    "offline",
+  ]);
   assert.equal(fixture.launches[0]?.environment.CUT_FOOTAGE_MODEL_DIR, fixture.launches[0]?.modelRevisionRoot);
   assert.equal(fixture.launches[0]?.modelRevisionRoot.includes(".local-clip-v1.payload-"), true);
   assert.equal(fixture.launches[0]?.modelRevisionRoot.endsWith("/models/fixture/clip/r1"), true);
@@ -197,16 +209,24 @@ test("footage setup stages, verifies online and offline, atomically publishes, a
   assert.ok(JSON.parse(await readFile(join(fixture.installationRoot, "install-manifest.json"), "utf8")));
 
   let installedAgain = false;
+  let reusedLaunch: CutFootageLocalSidecarLaunch | undefined;
   const reused = await setupCutFootageLocalBackend({
     backend: "local", home: fixture.home, recipeRoot: fixture.recipe.root, npmCliPath: join(fixture.recipe.root, "local-clip-sidecar.mjs"),
     platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
     operations: {
       async installRuntime() { installedAgain = true; throw new Error("must not reinstall"); },
-      async startSidecar(launch) { assert.equal(launch.mode, "offline"); return fakeSession(launch.expectedHandshake); },
+      async startSidecar(launch) { reusedLaunch = launch; return fakeSession(launch.expectedHandshake); },
     },
   });
   assert.equal(reused.status, "ready");
   assert.equal(installedAgain, false);
+  assert.equal(reusedLaunch?.mode, "offline");
+  assert.deepEqual(reusedLaunch?.arguments, [
+    "--import",
+    guardPath,
+    join(reusedLaunch!.installationRoot, "local-clip-sidecar.mjs"),
+    "offline",
+  ]);
 });
 
 test("setup failure preserves its unpublished payload, creates no shared lock, and does not leak child diagnostics", async () => {
@@ -481,6 +501,7 @@ test("setup refuses an adapter changed by runtime installation or sidecar verifi
 
 test("doctor rejects platform or handshake drift and starts ordinary sidecars offline", async () => {
   const fixture = await installedFixture();
+  const guardPath = join(process.cwd(), "dist-cli", "lib", "footage", "network-deny.js");
   await inspectCutFootageLocalInstall({
     home: fixture.home, platform: "linux", architecture: "x64", nodeVersion: "20.19.0",
   });
@@ -511,7 +532,12 @@ test("doctor rejects platform or handshake drift and starts ordinary sidecars of
   });
   assert.equal(normalLaunch?.mode, "offline");
   assert.equal(normalLaunch?.environment.CUT_FOOTAGE_MODEL_DIR, normalLaunch?.modelRevisionRoot);
-  assert.equal(normalLaunch?.arguments.at(-1), "offline");
+  assert.deepEqual(normalLaunch?.arguments, [
+    "--import",
+    guardPath,
+    join(normalLaunch!.installationRoot, "local-clip-sidecar.mjs"),
+    "offline",
+  ]);
   await session.close();
 });
 
@@ -546,4 +572,13 @@ test("canonical public backend identity binds the handshake model revision and a
     dimensions: 4,
     normalization: "l2",
   });
+  const backend = await createCutFootageLocalIndexBackend({
+    home: fixture.home, platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+  });
+  assert.deepEqual(backend.sidecar.arguments, [
+    "--import",
+    join(process.cwd(), "dist-cli", "lib", "footage", "network-deny.js"),
+    install.sidecarPath,
+    "offline",
+  ]);
 });

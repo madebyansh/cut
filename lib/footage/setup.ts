@@ -604,10 +604,13 @@ function launchFor(
   signal?: AbortSignal,
 ): CutFootageLocalSidecarLaunch {
   const modelRoot = modelRevisionPath(root, model), sidecarPath = join(root, "local-clip-sidecar.mjs");
+  const argumentsList = mode === "setup"
+    ? [sidecarPath, mode]
+    : ["--import", join(__dirname, "network-deny.js"), sidecarPath, mode];
   return deepFreeze({
     mode,
     executable: process.execPath,
-    arguments: Object.freeze([sidecarPath, mode]),
+    arguments: Object.freeze(argumentsList),
     environment: mode === "setup"
       ? Object.freeze({ CUT_FOOTAGE_CACHE_DIR: join(root, "models"), CUT_FOOTAGE_MODEL_DIR: modelRoot, ...proxyEnvironment(sourceEnvironment) })
       : Object.freeze({ CUT_FOOTAGE_MODEL_DIR: modelRoot }),
@@ -1021,7 +1024,7 @@ export async function inspectCutFootageLocalInstall(options: CutFootageLocalInsp
   }
 }
 
-/** Starts a verified ordinary sidecar with remote model access disabled by the adapter. */
+/** Starts a verified ordinary sidecar under the network-denying Node preload. */
 export async function startCutFootageLocalSidecar(options: CutFootageLocalStartOptions = {}): Promise<CutFootageSidecarSession> {
   const install = await inspectCutFootageLocalInstall(options), operations = options.operations ?? defaultOperations;
   const launch = launchFor(install.root, install.manifest.model, install.manifest.handshake, "offline", {}, options.signal);
