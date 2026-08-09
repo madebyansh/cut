@@ -115,6 +115,7 @@ export type ProbeNativeProcessExecution = Readonly<{
   authority: BoundReferenceNativeMediaTool;
   collector: ReferenceNativeProcessCollector;
   context: ReferenceNativeProcessContext;
+  signal?: AbortSignal;
 }>;
 export type ProbeDecodedAudioNativeProcessExecutions = Readonly<{
   pcm: ProbeNativeProcessExecution;
@@ -149,6 +150,8 @@ const HARD_BUDGET = {
   timeoutMs: 5 * 60_000,
 };
 
+const probeTerminationGraceMs = 250;
+
 function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
@@ -162,11 +165,44 @@ async function spawnProbeNativeProcess(
   options: SpawnOptions,
   execution?: ProbeNativeProcessExecution,
 ): Promise<ChildProcess> {
-  if (execution === undefined) return spawn(executable, args, options);
-  if (execution.authority.tool !== tool || execution.collector.authority !== execution.authority) {
-    throw new CutProjectError("CUTP2008", `${tool} native process authority is inconsistent.`);
+  if (execution?.signal?.aborted) throw new CutProjectError("CUTP2008", `${tool} native process launch was cancelled.`);
+  const detached = execution?.signal !== undefined && platform() !== "win32";
+  const controlledOptions = detached ? { ...options, detached: true } : options;
+  let child: ChildProcess;
+  if (execution === undefined) child = spawn(executable, args, controlledOptions);
+  else {
+    if (execution.authority.tool !== tool || execution.collector.authority !== execution.authority) {
+      throw new CutProjectError("CUTP2008", `${tool} native process authority is inconsistent.`);
+    }
+    child = await spawnBoundReferenceNativeProcess(execution.collector, execution.context, args, controlledOptions);
   }
-  return spawnBoundReferenceNativeProcess(execution.collector, execution.context, args, options);
+  if (!execution?.signal) return child;
+  const signal = execution.signal;
+  let terminating = false;
+  const signalTree = (value: NodeJS.Signals) => {
+    if (detached && child.pid !== undefined) {
+      try { process.kill(-child.pid, value); return; }
+      catch { /* direct-child fallback still closes the bound process */ }
+    }
+    if (child.exitCode === null && child.signalCode === null) child.kill(value);
+  };
+  const abort = () => {
+    if (terminating) return;
+    terminating = true;
+    signalTree("SIGTERM");
+    setTimeout(() => {
+      signalTree("SIGKILL");
+      setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        child.stdin?.destroy();
+      }, probeTerminationGraceMs);
+    }, probeTerminationGraceMs);
+  };
+  child.once("close", () => signal.removeEventListener("abort", abort));
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  return child;
 }
 
 function probeBudget(options: ProbeBudget): Required<ProbeBudget> {
@@ -307,11 +343,12 @@ async function assertStableLocator(projectRoot: string, locator: string, expecte
   }
 }
 
-async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: number) {
+async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: number, signal?: AbortSignal) {
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   let position = 0;
   while (position < expectedBytes) {
+    if (signal?.aborted) throw new CutProjectError("CUTP2009", "Media hashing was cancelled.");
     const length = Math.min(buffer.length, expectedBytes - position);
     const { bytesRead } = await handle.read(buffer, 0, length, position);
     if (bytesRead === 0) {
@@ -320,6 +357,7 @@ async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: n
     hash.update(buffer.subarray(0, bytesRead));
     position += bytesRead;
   }
+  if (signal?.aborted) throw new CutProjectError("CUTP2009", "Media hashing was cancelled.");
   const trailing = Buffer.allocUnsafe(1);
   if ((await handle.read(trailing, 0, 1, expectedBytes)).bytesRead !== 0) {
     throw new CutProjectError("CUTP2009", "Media grew while it was being hashed.");
@@ -800,7 +838,7 @@ async function scanAudioProxyAlignmentVariant(
         ffmpegExecutable,
         execution,
       ),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, execution?.signal),
     ]);
     const [hashFinal, scanFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pathFinal)], path);
@@ -1082,7 +1120,7 @@ async function scanVideoProxyAlignmentVariant(
     if (initial.size !== BigInt(identity.file.bytes)) throw new CutProjectError("CUTP2009", "Media byte count changed before video-proxy alignment scanning.", path);
     const results = await Promise.allSettled([
       ffmpegVideoProxyAnalysisRgb(path, scanHandle.fd, stream.index, witness.frameCount, budget, ffmpegExecutable, execution),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, execution?.signal),
     ]);
     const [hashFinal, scanFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pathFinal)], path);
@@ -1674,7 +1712,7 @@ export async function probeProjectMedia(
 
     const results = await Promise.allSettled([
       ffprobe(path, probeHandle.fd, budget, nativeExecutables.ffprobe, execution),
-      sha256(hashHandle, bytes),
+      sha256(hashHandle, bytes, execution?.signal),
     ]);
     let after: SourceSnapshot[];
     try {
@@ -1821,7 +1859,7 @@ export async function probeProjectDecodedVideoCadence(
     if (initial.size !== BigInt(identity.file.bytes)) throw new CutProjectError("CUTP2009", "Media byte count changed before decoded-cadence scanning.", path);
     const results = await Promise.allSettled([
       ffprobeDecodedVideoCadence(path, scanHandle.fd, { index: stream.index, timeBase: stream.timeBase, start: stream.start, frameRates }, cadenceBudget, nativeExecutables.ffprobe, execution),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, execution?.signal),
     ]);
     const [hashFinal, scanFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pathFinal)], path);
@@ -1897,7 +1935,7 @@ export async function probeProjectDecodedAudioSamples(
         nativeExecutables.ffprobe,
         executions?.frames,
       ),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, executions?.frames.signal ?? executions?.pcm.signal),
     ]);
     const [hashFinal, scanFinal, pcmFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), pcmHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pcmFinal), sourceSnapshot(pathFinal)], path);

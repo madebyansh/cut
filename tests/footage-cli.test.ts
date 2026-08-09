@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import { stableJsonStringify } from "../lib/core/stable";
 import { parseCutFootageIndex } from "../lib/footage/contracts";
@@ -239,5 +240,119 @@ test("footage extract maps SIGINT and SIGTERM to cancellation and leaves no cand
     await assert.rejects(lstat(join(root, `${output}.cut-footage.json`)), (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT"));
     const entries = await readdir(join(root, "selects"));
     assert.equal(entries.some((entry) => entry.includes("cut-footage-staging")), false);
+  }
+});
+
+async function executableOnPath(name: string) {
+  for (const directory of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+    const candidate = resolve(directory, name);
+    if (await access(candidate, constants.X_OK).then(() => true, () => false)) return candidate;
+  }
+  throw new Error(`${name} is not executable on PATH`);
+}
+
+async function writeHangingFfprobe(root: string, phase: "metadata" | "show-frames", marker: string) {
+  const tools = join(root, "probe-tools"), wrapper = join(tools, "ffprobe");
+  await mkdir(tools, { recursive: true });
+  const realFfprobe = await executableOnPath("ffprobe");
+  await writeFile(wrapper, `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const phase = process.env.CUT_TEST_PROBE_PHASE;
+const shouldHang = phase === "metadata" ? args.includes("-show_program_version") : args.includes("-show_frames");
+if (!shouldHang) {
+  const delegated = spawn(process.env.CUT_TEST_REAL_FFPROBE, args, { stdio: ["inherit", "inherit", "inherit", 3] });
+  delegated.once("error", () => process.exit(111));
+  delegated.once("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exit(code ?? 111);
+  });
+} else {
+  const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000)"], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  writeFileSync(process.env.CUT_TEST_PROBE_MARKER, JSON.stringify({ wrapper: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });
+  process.on("SIGTERM", () => {});
+  process.on("SIGINT", () => {});
+  setInterval(() => {}, 1000);
+}
+`, { flag: "wx" });
+  await chmod(wrapper, 0o755);
+  return Object.freeze({ tools, realFfprobe, phase, marker });
+}
+
+function pidAlive(pid: number) {
+  try { process.kill(pid, 0); return true; }
+  catch { return false; }
+}
+
+async function waitForDead(pid: number) {
+  const deadline = Date.now() + 5_000;
+  while (pidAlive(pid) && Date.now() <= deadline) await new Promise((accept) => setTimeout(accept, 20));
+  return !pidAlive(pid);
+}
+
+test("footage extract signals promptly terminate hanging ffprobe metadata and show-frames process groups", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  for (const [phase, signal] of [["metadata", "SIGINT"], ["show-frames", "SIGTERM"]] as const) {
+    const root = await cliExtractionFixture(), marker = join(root, `.cut/${phase}-probe-pids.json`);
+    const probe = await writeHangingFfprobe(root, phase, marker), output = `selects/cancel-${phase}.mp4`;
+    const child = spawn(process.execPath, [
+      cli, "footage", "extract", ".cut/footage/search.json", "--match", "1", "--out", output, "--json",
+    ], {
+      cwd: root,
+      env: {
+        PATH: `${probe.tools}${delimiter}${process.env.PATH ?? ""}`,
+        CUT_FOOTAGE_HOME: join(root, "unused-home"),
+        CUT_TEST_PROBE_PHASE: probe.phase,
+        CUT_TEST_PROBE_MARKER: marker,
+        CUT_TEST_REAL_FFPROBE: probe.realFfprobe,
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    child.stdout.on("data", (value: Buffer) => stdout.push(value));
+    child.stderr.on("data", (value: Buffer) => stderr.push(value));
+    const closed = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }>>((accept) => {
+      child.once("close", (code, terminalSignal) => accept({ code, signal: terminalSignal }));
+    });
+    const markerDeadline = Date.now() + 10_000;
+    while (!await lstat(marker).then(() => true, () => false)) {
+      if (Date.now() > markerDeadline) throw new Error(`${phase} ffprobe wrapper did not launch`);
+      await new Promise((accept) => setTimeout(accept, 10));
+    }
+    const pids = JSON.parse(await readFile(marker, "utf8")) as { wrapper: number; grandchild: number };
+    const started = Date.now();
+    assert.equal(child.kill(signal), true);
+    const outcome = await Promise.race([
+      closed.then((terminal) => ({ kind: "closed" as const, terminal })),
+      new Promise<{ kind: "timeout" }>((accept) => {
+        const timer = setTimeout(() => accept({ kind: "timeout" }), 4_000);
+        timer.unref();
+      }),
+    ]);
+    if (outcome.kind === "timeout") {
+      for (const pid of [pids.wrapper, pids.grandchild]) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+      child.kill("SIGKILL");
+      await closed;
+    }
+    assert.equal(outcome.kind, "closed", `${phase} probe tree did not stop promptly after ${signal}`);
+    if (outcome.kind !== "closed") continue;
+    assert.ok(Date.now() - started < 4_000);
+    assert.deepEqual(outcome.terminal, { code: 1, signal: null });
+    assert.equal(Buffer.concat(stderr).toString("utf8"), "");
+    const report = JSON.parse(Buffer.concat(stdout).toString("utf8"));
+    assert.equal(report.command, "footage extract");
+    assert.equal(report.diagnostics[0].code, "CUT_FOOTAGE_PUBLISH");
+    assert.match(report.diagnostics[0].message, /cancelled/u);
+    assert.equal(await waitForDead(pids.wrapper), true, `${phase} wrapper pid survived`);
+    assert.equal(await waitForDead(pids.grandchild), true, `${phase} grandchild pid survived`);
+    await assert.rejects(lstat(join(root, output)), { code: "ENOENT" });
+    await assert.rejects(lstat(join(root, `${output}.cut-footage.json`)), { code: "ENOENT" });
+    assert.equal((await readdir(join(root, "selects"))).some((entry) => entry.includes("cut-footage-staging")), false);
   }
 });

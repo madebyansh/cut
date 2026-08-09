@@ -422,6 +422,33 @@ test("staging cleanup preserves a replacement directory and hides private filesy
   await rm(movedStage, { recursive: true, force: true });
 });
 
+test("leaf-only staging cleanup preserves a foreign swap after directory identity validation", { timeout: 30_000, skip: process.platform === "win32" }, async () => {
+  const fixture = await workflowFixture();
+  let replacementLeaf = "", movedStage = "", swapped = false;
+  await assert.rejects(extractProjectFootage({
+    projectRoot: fixture.root,
+    searchLocator: ".cut/footage/search.json",
+    outputLocator: "selects/stage-post-check-race.mp4",
+    selector: { rank: 1 },
+    __testHooks: {
+      afterVerification() { throw new Error("trigger owned stage cleanup"); },
+      async beforeStageCleanup(detail: Readonly<{ path: string }>) {
+        movedStage = `${detail.path}.owned`;
+        await rename(detail.path, movedStage);
+        await mkdir(detail.path, { mode: 0o700 });
+        replacementLeaf = join(detail.path, "foreign-sentinel");
+        await writeFile(replacementLeaf, "preserve post-check swap\n", { flag: "wx" });
+        swapped = true;
+      },
+    } as never,
+  }), (error: unknown) => error instanceof CutFootageError
+    && error.code === "CUT_FOOTAGE_PUBLISH"
+    && !error.message.includes(fixture.root));
+  assert.equal(swapped, true, "the deterministic cleanup race hook must run after the first identity check");
+  assert.equal(await readFile(replacementLeaf, "utf8"), "preserve post-check swap\n");
+  await rm(movedStage, { recursive: true, force: true });
+});
+
 test("missing search reports and raw local I/O failures stay inside stable footage diagnostics", async () => {
   const root = join(await mkdtemp(join(tmpdir(), "cut-footage-extract-missing-report-")), "project");
   await createCutProject(root, "Missing extraction report");
@@ -435,6 +462,25 @@ test("missing search reports and raw local I/O failures stay inside stable foota
     && error.path === "$.searchSha256"
     && !error.message.includes(root)
     && !error.message.includes("private-missing-search"));
+});
+
+test("empty and invalid report loader failures expose only logical footage paths", async () => {
+  for (const [name, bytes] of [["empty", ""], ["malformed", "{\n"], ["invalid", "{}\n"]] as const) {
+    const root = join(await mkdtemp(join(tmpdir(), `cut-footage-extract-${name}-report-`)), "project");
+    await createCutProject(root, `${name} extraction report`);
+    const locator = `.cut/footage/private-${name}-search.json`;
+    await mkdir(join(root, ".cut/footage"), { recursive: true });
+    await writeFile(join(root, locator), bytes);
+    await assert.rejects(extractProjectFootage({
+      projectRoot: root,
+      searchLocator: locator,
+      outputLocator: "selects/invalid.mp4",
+      selector: { rank: 1 },
+    }), (error: unknown) => error instanceof CutFootageError
+      && /^\$(?:$|\.|\[)/u.test(error.path)
+      && !error.message.includes(root)
+      && !error.message.includes(locator));
+  }
 });
 
 test("indexed source probes retain the 100 GiB admission bound while encoded outputs remain capped at 8 GiB", { timeout: 30_000, skip: process.platform === "win32" }, async () => {

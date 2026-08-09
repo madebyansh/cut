@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdtemp, open, realpath, rm, unlink, writeFile, type FileHandle } from "node:fs/promises";
+import { lstat, mkdtemp, open, realpath, rmdir, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { stableJsonStringify } from "../core/stable";
 import { decodedVideoCadenceDuration, maximumDecodedVideoCadenceFrames } from "../language/video-cadence";
@@ -86,6 +86,7 @@ export type ExtractProjectFootageOptions = Readonly<{
     afterEncode?: (detail: Readonly<{ path: string; arguments: readonly string[] }>) => void | Promise<void>;
     afterVerification?: (detail: Readonly<{ path: string }>) => void | Promise<void>;
     afterPublication?: (detail: Readonly<{ outputPath: string; manifestPath: string }>) => void | Promise<void>;
+    beforeStageCleanup?: (detail: Readonly<{ path: string }>) => void | Promise<void>;
   }>;
 }>;
 
@@ -98,7 +99,7 @@ export type ExtractProjectFootageResult = Readonly<{
 type HeldSnapshot = Readonly<{ dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }>;
 type HeldFile = Readonly<{ path: string; handle: FileHandle; snapshot: HeldSnapshot }>;
 type DirectorySnapshot = Readonly<{ dev: bigint; ino: bigint }>;
-type HeldDirectory = Readonly<{ path: string; snapshot: DirectorySnapshot }>;
+type HeldDirectory = Readonly<{ path: string; snapshot: DirectorySnapshot; leaves: readonly string[] }>;
 
 function snapshot(metadata: Awaited<ReturnType<FileHandle["stat"]>>): HeldSnapshot {
   const value = metadata as unknown as HeldSnapshot;
@@ -134,12 +135,28 @@ function sameDirectory(metadata: Awaited<ReturnType<typeof lstat>>, expected: Di
   return metadata.isDirectory() && !metadata.isSymbolicLink() && metadata.dev === expected.dev && metadata.ino === expected.ino;
 }
 
-async function cleanupStagingDirectory(stage: HeldDirectory | undefined) {
+async function cleanupStagingDirectory(
+  stage: HeldDirectory | undefined,
+  beforeCleanup?: (detail: Readonly<{ path: string }>) => void | Promise<void>,
+) {
   if (!stage) return;
   try {
-    const current = await lstat(stage.path, { bigint: true });
-    if (!sameDirectory(current, stage.snapshot)) return;
-    await rm(stage.path, { recursive: true, force: true });
+    const initial = await lstat(stage.path, { bigint: true });
+    if (!sameDirectory(initial, stage.snapshot)) return;
+    await beforeCleanup?.({ path: stage.path });
+    const afterHook = await lstat(stage.path, { bigint: true });
+    if (!sameDirectory(afterHook, stage.snapshot)) return;
+    for (const leaf of stage.leaves) {
+      const parent = await lstat(stage.path, { bigint: true });
+      if (!sameDirectory(parent, stage.snapshot)) return;
+      const metadata = await optionalLstat(leaf);
+      if (!metadata) continue;
+      if (!metadata.isFile() || metadata.isSymbolicLink()) return;
+      await unlink(leaf);
+    }
+    const final = await lstat(stage.path, { bigint: true });
+    if (!sameDirectory(final, stage.snapshot)) return;
+    await rmdir(stage.path);
   } catch (error) {
     if (systemCode(error) !== "ENOENT") return;
   }
@@ -396,7 +413,7 @@ async function loadExtractionReports(projectRoot: string, searchLocator: string)
     validateCutFootageSearchAgainstIndex(index, search);
     return Object.freeze({ search, index });
   } catch (error) {
-    if (error instanceof CutFootageError) throw error;
+    if (error instanceof CutFootageError && /^\$(?:$|\.|\[)/u.test(error.path)) throw error;
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$.searchSha256", "the search report or its exact index cannot be loaded from bounded project files.");
   }
 }
@@ -454,7 +471,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       initialBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
       abortIfRequested(options.signal);
       initialMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
         context: mediaContext(0, "media-metadata", indexedSource),
       });
       abortIfRequested(options.signal);
@@ -475,7 +492,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
           { maxFileBytes: maximumIndexedSourceBytes },
           { ffprobe: ffprobe.executablePath },
           {
-            authority: ffprobe, collector: ffprobeCollector,
+            authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
             context: mediaContext(1, "decoded-video-cadence", indexedSource, currentStream.index),
           },
         );
@@ -503,10 +520,14 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       if (!stageMetadata.isDirectory() || stageMetadata.isSymbolicLink()) {
         footageFail("CUT_FOOTAGE_PUBLISH", "$.output", "the private extraction staging root is not one direct directory.");
       }
-      stageDirectory = Object.freeze({ path: stagePath, snapshot: directorySnapshot(stageMetadata) });
       const extension = outputLocator.toLowerCase().endsWith(".mov") ? "mov" : "mp4";
-      stageOutput = resolve(stageDirectory.path, `candidate.${extension}`);
-      stageManifest = resolve(stageDirectory.path, "candidate.cut-footage.json");
+      stageOutput = resolve(stagePath, `candidate.${extension}`);
+      stageManifest = resolve(stagePath, "candidate.cut-footage.json");
+      stageDirectory = Object.freeze({
+        path: stagePath,
+        snapshot: directorySnapshot(stageMetadata),
+        leaves: Object.freeze([stageOutput, stageManifest]),
+      });
       const stageLocator = relative(projectRoot, stageOutput).split(sep).join("/");
       const filter = `[0:${currentStream.index}]trim=start_frame=${startFrameIndex}:end_frame=${endFrameExclusive},setpts=PTS-STARTPTS[v]`;
       ffmpegArguments = [
@@ -530,7 +551,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       if (outputBytes.file.bytes !== heldStageBytes || outputBytes.file.sha256 !== heldStageSha) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed during byte verification.");
       abortIfRequested(options.signal);
       outputMedia = await probeProjectMedia(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes }, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
         context: mediaContext(2, "media-metadata", outputBytes.file, undefined, "proxy"),
       });
       if (outputMedia.streams.length !== 1) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.output.streams", "the staged output must contain exactly one public video stream.");
@@ -541,7 +562,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
         footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.output.streams[0]", "must be one zero-start High-profile H.264 stream at the selected source frame rate.");
       }
       outputCadence = await probeProjectDecodedVideoCadence(projectRoot, stageLocator, outputMedia, 0, {}, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
         context: mediaContext(3, "decoded-video-cadence", outputBytes.file, 0, "proxy"),
       });
       const outputDuration = decodedVideoCadenceDuration(outputCadence, outputStream);
@@ -552,7 +573,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       abortIfRequested(options.signal);
       const postBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
       const postMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
-        authority: ffprobe, collector: ffprobeCollector,
+        authority: ffprobe, collector: ffprobeCollector, signal: options.signal,
         context: mediaContext(4, "media-metadata", indexedSource),
       });
       normalizeSourceProbe(postBytes, postMedia, indexedSource);
@@ -668,7 +689,7 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
     return Object.freeze({ manifest, outputPath: destination.outputPath, manifestPath: destination.manifestPath });
   } finally {
     await Promise.allSettled([heldOutput?.handle.close(), heldManifest?.handle.close(), source.handle.close()]);
-    await cleanupStagingDirectory(stageDirectory);
+    await cleanupStagingDirectory(stageDirectory, options.__testHooks?.beforeStageCleanup);
   }
 }
 
