@@ -212,6 +212,19 @@ function codedCliError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
 }
 
+async function withFootageExtractionSignals<T>(operation: (signal: AbortSignal) => Promise<T>) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  process.once("SIGINT", abort);
+  process.once("SIGTERM", abort);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    process.off("SIGINT", abort);
+    process.off("SIGTERM", abort);
+  }
+}
+
 async function readBoundedCliStdin() {
   if (process.stdin.isTTY) throw codedCliError("CUT_STDIN_REQUIRED", "--stdin requires UTF-8 CUT source on standard input.");
   const chunks: Buffer[] = [];
@@ -612,13 +625,14 @@ async function main() {
     }
     const handleText = option("--handles");
     const handles = handleText === undefined ? undefined : parseCutFootageHandle(handleText);
-    const extracted = await extractProjectFootage({
+    const extracted = await withFootageExtractionSignals((signal) => extractProjectFootage({
       projectRoot: process.cwd(),
       searchLocator: subject!,
       outputLocator: option("--out")!,
       selector,
+      signal,
       ...(handles === undefined ? {} : { requestedHandles: Object.freeze({ head: handles, tail: handles }) }),
-    });
+    }));
     if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(extracted.manifest)}\n`);
     else {
       console.log(`${green("✓")} extracted ${extracted.manifest.matchId} → ${option("--out")!}`);
