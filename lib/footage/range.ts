@@ -83,11 +83,20 @@ export function clampFootageHandles(options: Readonly<{
 }>): Readonly<{ requested: CutFootageHandles; effective: CutFootageHandles; range: CutFootageRange }> {
   if (!options || typeof options !== "object" || Array.isArray(options)) footageFail("CUT_FOOTAGE_RANGE", "$", "must be one handle-clamping object.");
   const range = validRange(options.range, "$.range"), duration = positive(options.duration, "$.duration"), grid = positive(options.grid, "$.grid");
-  if (compareRational(range.end, duration) > 0) footageFail("CUT_FOOTAGE_RANGE", "$.range", "must not exceed source duration.");
+  const searchableEnd = floorFootageTimeToGrid(duration, grid);
+  if (compareRational(searchableEnd, zeroRational) <= 0
+    || divideRational(range.start, grid).denominator !== "1"
+    || divideRational(range.end, grid).denominator !== "1"
+    || compareRational(range.end, searchableEnd) > 0) {
+    footageFail("CUT_FOOTAGE_RANGE", "$.range", "must be grid-aligned inside the source's searchable frame extent.");
+  }
   const requested = Object.freeze({ head: nonNegative(options.requested.head, "$.requested.head"), tail: nonNegative(options.requested.tail, "$.requested.tail") });
   const rawStart = subtractRational(range.start, requested.head), rawEnd = addRational(range.end, requested.tail);
-  const start = compareRational(rawStart, zeroRational) <= 0 ? zeroRational : floorFootageTimeToGrid(rawStart, grid);
-  const end = compareRational(rawEnd, duration) >= 0 ? duration : ceilFootageTimeToGrid(rawEnd, grid);
+  const start = compareRational(rawStart, zeroRational) <= 0 ? zeroRational : ceilFootageTimeToGrid(rawStart, grid);
+  const end = compareRational(rawEnd, searchableEnd) >= 0 ? searchableEnd : floorFootageTimeToGrid(rawEnd, grid);
+  if (compareRational(start, range.start) > 0 || compareRational(end, range.end) < 0 || compareRational(end, start) <= 0) {
+    footageFail("CUT_FOOTAGE_RANGE", "$.range", "cannot retain the selected range while snapping requested handles inward to its frame grid.");
+  }
   const finalRange = Object.freeze({ semantics: "half-open" as const, start, end });
   return Object.freeze({
     requested,
