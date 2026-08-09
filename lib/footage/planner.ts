@@ -16,6 +16,7 @@ export type FootageNormalizedSource = Readonly<{
   source: FootagePublicSource;
   selectedStreamIndex: number;
   grid: Rational;
+  searchableDuration: Rational;
 }>;
 export type FootagePlannedChunk = Readonly<{
   id: string;
@@ -56,8 +57,6 @@ export function normalizeFootageSourceProbe(bytes: CutByteProbe, probe: CutMedia
   if (byteFile.locator !== mediaFile.locator || byteFile.bytes !== mediaFile.bytes || byteFile.sha256 !== mediaFile.sha256) {
     footageFail("CUT_FOOTAGE_INDEX_STALE", byteFile.locator, "byte probe and media probe do not identify the same immutable source.");
   }
-  const duration = probe.container.duration;
-  if (!duration || compareRational(duration, zeroRational) <= 0) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", byteFile.locator, "duration is required and must be positive.");
   const streams = probe.streams
     .filter((stream): stream is CutMediaProbe["streams"][number] & { type: "video" | "audio"; timeBase: Rational } => (stream.type === "video" || stream.type === "audio") && stream.timeBase !== undefined)
     .map((stream) => Object.freeze({ index: stream.index, type: stream.type, timeBase: stream.timeBase, ...(stream.frameRate === undefined ? {} : { frameRate: stream.frameRate }) }))
@@ -67,17 +66,18 @@ export function normalizeFootageSourceProbe(bytes: CutByteProbe, probe: CutMedia
   if (!selected) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", byteFile.locator, "one video stream is required.");
   if (!selected.timeBase) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", byteFile.locator, "selected video timeBase is required.");
   if (!selected.frameRate || compareRational(selected.frameRate, zeroRational) <= 0) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", byteFile.locator, "selected video frameRate is required and must be positive.");
+  if (!selected.duration || compareRational(selected.duration, zeroRational) <= 0) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", byteFile.locator, "selected video duration is required and must be positive.");
   positive(selected.timeBase, `${byteFile.locator}.timeBase`);
   const publicStreams = streams.filter((stream) => stream.type === "video" || stream.type === "audio");
-  const probeSha256 = digest({
-    format: probe.format, version: probe.version, implementation: probe.implementation,
-    container: { names: probe.container.names, duration, ...(probe.container.start === undefined ? {} : { start: probe.container.start }), ...(probe.container.bitRate === undefined ? {} : { bitRate: probe.container.bitRate }) },
-    streams: publicStreams,
-  });
+  const grid = divideRational(rational(1), selected.frameRate);
+  const searchableDuration = floorFootageTimeToGrid(selected.duration, grid);
+  if (compareRational(searchableDuration, zeroRational) <= 0) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", byteFile.locator, "selected video duration contains no positive frame-grid boundary.");
+  const probeSha256 = digest(probe);
   return Object.freeze({
-    source: Object.freeze({ locator: byteFile.locator, bytes: byteFile.bytes, sha256: byteFile.sha256, duration, probeSha256, streams: Object.freeze(publicStreams) }),
+    source: Object.freeze({ locator: byteFile.locator, bytes: byteFile.bytes, sha256: byteFile.sha256, duration: selected.duration, probeSha256, streams: Object.freeze(publicStreams) }),
     selectedStreamIndex: selected.index,
-    grid: divideRational(rational(1), selected.frameRate),
+    grid,
+    searchableDuration,
   });
 }
 
@@ -105,7 +105,7 @@ function samplePoints(range: CutFootageRange, grid: Rational): readonly Rational
 
 /** Plans v1's fixed 8s/2s chunk law and one grid-aligned frame point per second slot. */
 export function planFootageChunks(source: FootageNormalizedSource, policy: FootageChunkPolicy = defaultFootageChunkPolicy): readonly FootagePlannedChunk[] {
-  const ranges = planFootageChunkRanges({ duration: source.source.duration, chunkDuration: policy.duration, overlap: policy.overlap, grid: source.grid });
+  const ranges = planFootageChunkRanges({ duration: source.searchableDuration, chunkDuration: policy.duration, overlap: policy.overlap, grid: source.grid });
   if (ranges.length > cutFootageLimits.maximumChunks) footageFail("CUT_FOOTAGE_RANGE", "$chunks", "exceeds the bounded footage chunk count.");
   return Object.freeze(ranges.map((range) => Object.freeze({
     id: chunkId(source, range), sourceLocator: source.source.locator, sourceSha256: source.source.sha256,

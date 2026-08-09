@@ -25,8 +25,8 @@ const probe = (overrides: Partial<CutMediaProbe> = {}): CutMediaProbe => ({
   implementation: { name: "ffprobe", version: "test" }, file: { ...bytes.file },
   container: { names: ["mov"], duration: rational(20) }, chapters: [],
   streams: [
-    { index: 2, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), disposition: [] },
-    { index: 1, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), disposition: ["default"] },
+    { index: 2, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20), disposition: [] },
+    { index: 1, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20), disposition: ["default"] },
   ],
   ...overrides,
 });
@@ -44,8 +44,8 @@ test("source normalization picks default video before lowest index and requires 
   const normalized = normalizeFootageSourceProbe(bytes, probe());
   assert.equal(normalized.selectedStreamIndex, 1);
   assert.equal(normalizeFootageSourceProbe(bytes, probe({ streams: [
-    { index: 2, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), disposition: [] },
-    { index: 1, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), disposition: [] },
+    { index: 2, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20), disposition: [] },
+    { index: 1, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20), disposition: [] },
   ] })).selectedStreamIndex, 1);
   assert.deepEqual(normalized.source, {
     locator: "media/a.mp4", bytes: 2, sha256: "a".repeat(64), duration: rational(20), probeSha256: normalized.source.probeSha256,
@@ -54,9 +54,24 @@ test("source normalization picks default video before lowest index and requires 
       { index: 2, type: "video", timeBase: rational(1, 25), frameRate: rational(25) },
     ],
   });
-  assert.throws(() => normalizeFootageSourceProbe(bytes, probe({ container: { names: ["mov"] } })), /duration/u);
-  assert.throws(() => normalizeFootageSourceProbe(bytes, probe({ streams: [{ index: 0, type: "video", codec: "h264", timeBase: rational(1, 25), disposition: [] }] })), /frameRate/u);
-  assert.throws(() => normalizeFootageSourceProbe(bytes, probe({ streams: [{ index: 0, type: "video", codec: "h264", frameRate: rational(25), disposition: [] }] })), /timeBase/u);
+  assert.throws(() => normalizeFootageSourceProbe(bytes, probe({ streams: [{ index: 0, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), disposition: [] }] })), /duration/u);
+  assert.throws(() => normalizeFootageSourceProbe(bytes, probe({ streams: [{ index: 0, type: "video", codec: "h264", timeBase: rational(1, 25), duration: rational(20), disposition: [] }] })), /frameRate/u);
+  assert.throws(() => normalizeFootageSourceProbe(bytes, probe({ streams: [{ index: 0, type: "video", codec: "h264", frameRate: rational(25), duration: rational(20), disposition: [] }] })), /timeBase/u);
+});
+
+test("planner preserves selected-stream duration but floors its executable non-grid tail before signing a v1 index", () => {
+  const source = normalizeFootageSourceProbe(bytes, probe({
+    container: { names: ["mov"], duration: rational(21) },
+    streams: [
+      { index: 2, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20, 1), disposition: [] },
+      { index: 1, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(201, 10), disposition: ["default"] },
+    ],
+  }));
+  const chunks = planFootageChunks(source);
+  assert.deepEqual(source.source.duration, rational(201, 10));
+  assert.deepEqual(source.searchableDuration, rational(502, 25));
+  assert.deepEqual(chunks.at(-1)?.range.end, rational(502, 25));
+  assert.equal(signedIndex(source.source, chunks).chunks.at(-1)?.range.end.numerator, "502");
 });
 
 test("chunk planner uses exact eight-second chunks, two-second overlap, and one deterministic frame-grid point per second slot", () => {
@@ -101,4 +116,10 @@ test("reuse returns chunk ids only for a complete identity match", () => {
   assert.deepEqual(reusableFootageChunkIds(source, chunks, previous, { ...backend, model: "other" }, defaultFootageChunkPolicy), []);
   assert.deepEqual(reusableFootageChunkIds(source, chunks, previous, backend, { duration: rational(8), overlap: rational(1) }), []);
   assert.deepEqual(reusableFootageChunkIds(source, chunks.slice(0, 2), previous, backend, defaultFootageChunkPolicy), []);
+  const codecDrift = normalizeFootageSourceProbe(bytes, probe({ streams: [
+    { index: 2, type: "video", codec: "h264", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20), disposition: [] },
+    { index: 1, type: "video", codec: "hevc", timeBase: rational(1, 25), frameRate: rational(25), duration: rational(20), disposition: ["default"] },
+  ] }));
+  assert.notEqual(codecDrift.source.probeSha256, source.source.probeSha256);
+  assert.deepEqual(reusableFootageChunkIds(codecDrift, planFootageChunks(codecDrift), previous, backend, defaultFootageChunkPolicy), []);
 });
