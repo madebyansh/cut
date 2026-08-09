@@ -254,6 +254,34 @@ test("locked npm runner uses node plus exact argv and fails without leaking chil
   );
 });
 
+test("locked npm runner kills and drains output overflow and cancellation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cut-footage-npm-bounds-"));
+  const stagingRoot = join(root, "stage"), npmCacheRoot = join(root, "cache");
+  await mkdir(stagingRoot);
+  const environment = Object.freeze({ PATH: "/usr/bin:/bin", HOME: join(stagingRoot, ".home"), TMPDIR: join(stagingRoot, ".tmp"), CI: "1" });
+  const overflowCli = join(root, "overflow-npm.mjs");
+  await writeFile(overflowCli, 'process.stdout.write("x".repeat(5 * 1024 * 1024)); setInterval(() => {}, 1000);\n');
+  await assert.rejects(
+    installCutFootageLocalRuntime({ stagingRoot, nodeExecutable: process.execPath, npmCliPath: overflowCli, npmCacheRoot, environment }),
+    footageError("CUT_FOOTAGE_PUBLISH"),
+  );
+
+  const hangingCli = join(root, "hanging-npm.mjs"), pidPath = join(stagingRoot, "npm-child.pid");
+  await writeFile(hangingCli, 'import { writeFile } from "node:fs/promises"; await writeFile("npm-child.pid", String(process.pid)); setInterval(() => {}, 1000);\n');
+  const controller = new AbortController();
+  const running = installCutFootageLocalRuntime({
+    stagingRoot, nodeExecutable: process.execPath, npmCliPath: hangingCli, npmCacheRoot, environment, signal: controller.signal,
+  });
+  let pid: number | undefined;
+  for (let attempt = 0; attempt < 100 && pid === undefined; attempt += 1) {
+    try { pid = Number(await readFile(pidPath, "utf8")); } catch { await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
+  }
+  assert.ok(pid);
+  controller.abort();
+  await assert.rejects(running, footageError("CUT_FOOTAGE_PUBLISH"));
+  assert.throws(() => process.kill(pid!, 0), { code: "ESRCH" });
+});
+
 test("setup cleanup never deletes a payload pathname whose inode was replaced", async () => {
   const home = join(await mkdtemp(join(tmpdir(), "cut-footage-cleanup-race-")), "footage");
   const recipe = await fakeRecipe();
