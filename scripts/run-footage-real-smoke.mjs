@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertFootageRealSmoke } from "./assert-footage-real-smoke.mjs";
@@ -177,12 +177,60 @@ async function requireAbsent(path) {
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
+export async function snapshotInstalledCutPackage(packageRoot) {
+  const root = absolute(packageRoot, "installed CUT package root");
+  const rootMetadata = await lstat(root);
+  if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink()) throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package root is invalid");
+  const pending = [Object.freeze({ path: root, locator: "" })], records = [];
+  let entries = 0, bytes = 0;
+  while (pending.length) {
+    const directory = pending.pop();
+    const children = await readdir(directory.path, { withFileTypes: true });
+    children.sort((left, right) => left.name.localeCompare(right.name));
+    for (const child of children) {
+      const locator = directory.locator ? `${directory.locator}/${child.name}` : child.name;
+      entries += 1;
+      if (entries > 2_048) throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package exceeds its entry bound");
+      if (/(?:^|\/)(?:node_modules|models?|site-packages|venv)(?:\/|$)|\.(?:onnx|pt|pth|safetensors|whl)$/iu.test(locator)) {
+        throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package contains a forbidden model payload");
+      }
+      const path = resolve(directory.path, child.name), metadata = await lstat(path);
+      if (metadata.isSymbolicLink()) throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package contains a symbolic link");
+      if (metadata.isDirectory()) {
+        records.push(`d\0${locator}`);
+        pending.push(Object.freeze({ path, locator }));
+        continue;
+      }
+      if (!metadata.isFile() || !Number.isSafeInteger(metadata.size) || metadata.size < 0) {
+        throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package contains an unsupported entry");
+      }
+      bytes += metadata.size;
+      if (bytes > 64 * 1024 * 1024) throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package exceeds its byte bound");
+      const contents = await readFile(path);
+      if (contents.byteLength !== metadata.size) throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package changed during its snapshot");
+      records.push(`f\0${locator}\0${contents.byteLength}\0${digest(contents)}`);
+    }
+  }
+  let manifest;
+  try { manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8")); }
+  catch { throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package manifest is invalid"); }
+  if (manifest?.name !== "cut-lang") throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package identity is invalid");
+  const aggregate = createHash("sha256");
+  for (const record of records.sort()) aggregate.update(record).update("\n");
+  return Object.freeze({ entries, bytes, sha256: aggregate.digest("hex") });
+}
+
 export async function runFootageRealSmoke(options, operations) {
   const plan = createFootageRealSmokePlan(options);
   const execute = operations?.execute ?? executeFootageRealSmokeCommand;
   const assertSmoke = operations?.assertSmoke ?? assertFootageRealSmoke;
   if (typeof execute !== "function" || typeof assertSmoke !== "function") throw new Error("CUT_FOOTAGE_REAL_SMOKE: runner operations are invalid");
   const project = resolve(options.projectRoot), reports = resolve(options.reportsRoot), home = resolve(options.footageHome);
+  const packageRoot = absolute(options.packageRoot, "installed CUT package root");
+  if ([project, reports, home].some((root) => contains(root, packageRoot) || contains(packageRoot, root))) {
+    throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package and private smoke roots must be distinct");
+  }
+  const packageBefore = await snapshotInstalledCutPackage(packageRoot);
   await Promise.all([
     requireRegularInput(options.cutExecutable, "cut executable", true),
     requireRegularInput(options.ffmpegExecutable, "ffmpeg executable", true),
@@ -206,15 +254,17 @@ export async function runFootageRealSmoke(options, operations) {
   await Promise.all(Object.entries(protectedFiles).map(([locator, bytes]) => writeFile(resolve(project, locator), bytes, { flag: "wx" })));
   await writeFile(resolve(reports, "protected.json"), `${JSON.stringify(Object.fromEntries(Object.entries(protectedFiles).map(([locator, bytes]) => [locator, digest(bytes)])))}\n`, { flag: "wx" });
   await executeFootageRealSmokePlan(plan, { execute });
+  const packageAfter = await snapshotInstalledCutPackage(packageRoot);
+  if (JSON.stringify(packageAfter) !== JSON.stringify(packageBefore)) throw new Error("CUT_FOOTAGE_REAL_SMOKE: installed CUT package changed during optional backend setup or use");
   return assertSmoke(project, reports, home);
 }
 
 async function main() {
-  const [cutExecutable, ffmpegExecutable, ffprobeExecutable, fixtureRoot, projectRoot, reportsRoot, footageHome, extra] = process.argv.slice(2);
-  if (!cutExecutable || !ffmpegExecutable || !ffprobeExecutable || !fixtureRoot || !projectRoot || !reportsRoot || !footageHome || extra) {
-    throw new Error("CUT_FOOTAGE_REAL_SMOKE: usage: run-footage-real-smoke.mjs <cut> <ffmpeg> <ffprobe> <fixture-root> <project-root> <reports-root> <footage-home>");
+  const [cutExecutable, ffmpegExecutable, ffprobeExecutable, fixtureRoot, packageRoot, projectRoot, reportsRoot, footageHome, extra] = process.argv.slice(2);
+  if (!cutExecutable || !ffmpegExecutable || !ffprobeExecutable || !fixtureRoot || !packageRoot || !projectRoot || !reportsRoot || !footageHome || extra) {
+    throw new Error("CUT_FOOTAGE_REAL_SMOKE: usage: run-footage-real-smoke.mjs <cut> <ffmpeg> <ffprobe> <fixture-root> <installed-cut-package> <project-root> <reports-root> <footage-home>");
   }
-  process.stdout.write(`${JSON.stringify(await runFootageRealSmoke({ cutExecutable, ffmpegExecutable, ffprobeExecutable, fixtureRoot, projectRoot, reportsRoot, footageHome }))}\n`);
+  process.stdout.write(`${JSON.stringify(await runFootageRealSmoke({ cutExecutable, ffmpegExecutable, ffprobeExecutable, fixtureRoot, packageRoot, projectRoot, reportsRoot, footageHome }))}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

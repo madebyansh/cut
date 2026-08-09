@@ -4,7 +4,13 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { createFootageRealSmokePlan, executeFootageRealSmokeCommand, executeFootageRealSmokePlan, runFootageRealSmoke } from "./run-footage-real-smoke.mjs";
+import {
+  createFootageRealSmokePlan,
+  executeFootageRealSmokeCommand,
+  executeFootageRealSmokePlan,
+  runFootageRealSmoke,
+  snapshotInstalledCutPackage,
+} from "./run-footage-real-smoke.mjs";
 
 const root = resolve("/tmp/cut-footage-real-smoke-test");
 
@@ -113,18 +119,19 @@ test("real smoke executor rejects a successful no-clobber probe or a changed pro
 
 test("real smoke runner starts from empty roots, protects the CUT project, and returns the final assertion", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "cut-footage-runner-full-"));
-  const fixtures = join(sandbox, "fixtures"), tools = join(sandbox, "tools");
-  await Promise.all([mkdir(fixtures), mkdir(tools)]);
+  const fixtures = join(sandbox, "fixtures"), tools = join(sandbox, "tools"), packageRoot = join(sandbox, "cut-lang");
+  await Promise.all([mkdir(fixtures), mkdir(tools), mkdir(packageRoot)]);
   await Promise.all([
     writeFile(join(fixtures, "dog-outdoors.jpg"), "dog"),
     writeFile(join(fixtures, "laptop-dashboard.jpg"), "dashboard"),
     writeFile(join(tools, "cut"), "#!/bin/sh\n"),
     writeFile(join(tools, "ffmpeg"), "#!/bin/sh\n"),
     writeFile(join(tools, "ffprobe"), "#!/bin/sh\n"),
+    writeFile(join(packageRoot, "package.json"), "{\"name\":\"cut-lang\"}\n"),
   ]);
   await Promise.all([chmod(join(tools, "cut"), 0o755), chmod(join(tools, "ffmpeg"), 0o755), chmod(join(tools, "ffprobe"), 0o755)]);
   const options = {
-    cutExecutable: join(tools, "cut"), ffmpegExecutable: join(tools, "ffmpeg"), ffprobeExecutable: join(tools, "ffprobe"), fixtureRoot: fixtures,
+    cutExecutable: join(tools, "cut"), ffmpegExecutable: join(tools, "ffmpeg"), ffprobeExecutable: join(tools, "ffprobe"), fixtureRoot: fixtures, packageRoot,
     projectRoot: join(sandbox, "project"), reportsRoot: join(sandbox, "reports"), footageHome: join(sandbox, "home"),
   };
   const seen = [];
@@ -188,4 +195,48 @@ test("real smoke command executor clears inherited offline flags only for the ne
       else process.env[name] = previous[name];
     }
   }
+});
+
+test("installed CUT package snapshot binds every regular file and rejects package bloat", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "cut-footage-package-snapshot-"));
+  const packageRoot = join(sandbox, "cut-lang");
+  await mkdir(join(packageRoot, "dist-cli"), { recursive: true });
+  await writeFile(join(packageRoot, "package.json"), "{\"name\":\"cut-lang\"}\n");
+  await writeFile(join(packageRoot, "dist-cli/cut.js"), "first\n");
+  const first = await snapshotInstalledCutPackage(packageRoot);
+  assert.deepEqual(await snapshotInstalledCutPackage(packageRoot), first);
+  await writeFile(join(packageRoot, "dist-cli/cut.js"), "changed\n");
+  const changed = await snapshotInstalledCutPackage(packageRoot);
+  assert.notEqual(changed.sha256, first.sha256);
+  await writeFile(join(packageRoot, "model.onnx"), "hidden model\n");
+  await assert.rejects(snapshotInstalledCutPackage(packageRoot), /forbidden model payload/u);
+});
+
+test("real smoke runner rejects setup that rewrites the installed CUT package", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "cut-footage-runner-package-drift-"));
+  const fixtures = join(sandbox, "fixtures"), tools = join(sandbox, "tools"), packageRoot = join(sandbox, "cut-lang");
+  await Promise.all([mkdir(fixtures), mkdir(tools), mkdir(packageRoot)]);
+  await Promise.all([
+    writeFile(join(fixtures, "dog-outdoors.jpg"), "dog"), writeFile(join(fixtures, "laptop-dashboard.jpg"), "dashboard"),
+    writeFile(join(tools, "cut"), "#!/bin/sh\n"), writeFile(join(tools, "ffmpeg"), "#!/bin/sh\n"), writeFile(join(tools, "ffprobe"), "#!/bin/sh\n"),
+    writeFile(join(packageRoot, "package.json"), "{\"name\":\"cut-lang\"}\n"),
+  ]);
+  await Promise.all([chmod(join(tools, "cut"), 0o755), chmod(join(tools, "ffmpeg"), 0o755), chmod(join(tools, "ffprobe"), 0o755)]);
+  const options = {
+    cutExecutable: join(tools, "cut"), ffmpegExecutable: join(tools, "ffmpeg"), ffprobeExecutable: join(tools, "ffprobe"), fixtureRoot: fixtures, packageRoot,
+    projectRoot: join(sandbox, "project"), reportsRoot: join(sandbox, "reports"), footageHome: join(sandbox, "home"),
+  };
+  await assert.rejects(runFootageRealSmoke(options, {
+    async execute(step) {
+      if (step.name === "setup-first") await writeFile(join(packageRoot, "package.json"), "{\"name\":\"cut-lang\",\"changed\":true}\n");
+      if (step.name === "extract") {
+        await writeFile(join(options.projectRoot, "selects/dog.mp4"), "clip");
+        await writeFile(join(options.projectRoot, "selects/dog.mp4.cut-footage.json"), "manifest");
+      }
+      return step.expectedExit === "failure"
+        ? { exitCode: 1, stdout: "{\"format\":\"cut-cli-diagnostics\",\"version\":1,\"command\":\"footage extract\",\"status\":\"fail\",\"diagnostics\":[{\"code\":\"CUT_FOOTAGE_OUTPUT_EXISTS\",\"severity\":\"error\"}]}\n", stderr: "" }
+        : { exitCode: 0, stdout: "{}\n", stderr: "" };
+    },
+    assertSmoke: async () => ({ status: "pass" }),
+  }), /installed CUT package changed/u);
 });

@@ -151,6 +151,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes ffmpeg
       - run: npm ci --ignore-scripts
+      - run: npm run cli:build
       - run: npm run audit:package-footprint
       - name: Install the audited tarball into a clean consumer
         shell: bash
@@ -184,6 +185,7 @@ jobs:
             "$(command -v ffmpeg)" \
             "$(command -v ffprobe)" \
             "$GITHUB_WORKSPACE/tests/fixtures/footage-real" \
+            "$consumer/node_modules/cut-lang" \
             "$project" \
             "$reports" \
             "$footage_home" \
