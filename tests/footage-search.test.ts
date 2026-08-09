@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -300,6 +300,17 @@ test("search workflow replaces only the output inode admitted before inference",
   });
   assert.deepEqual(await readFile(outputPath), replaced.bytes);
 
+  const sameInodeForeign = Buffer.from("foreign same-inode edit\n", "utf8"), admittedInode = (await lstat(outputPath)).ino;
+  await assert.rejects(searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
+    __testHooks: {
+      async startSidecar() { return searchSession(fixture.handshake, candidates); },
+      async afterInference() { await writeFile(outputPath, sameInodeForeign); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_PUBLISH");
+  assert.equal((await lstat(outputPath)).ino, admittedInode);
+  assert.deepEqual(await readFile(outputPath), sameInodeForeign);
+
   const foreign = Buffer.from("foreign replacement\n", "utf8"), stagedForeign = `${outputPath}.foreign`;
   await assert.rejects(searchProjectFootage({
     projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
@@ -354,5 +365,88 @@ test("search workflow maps missing and empty index files to one stable path-free
     assert.equal(error.path, "$.indexLocator");
     assert.equal(error.message, "CUT_FOOTAGE_INDEX_STALE at $.indexLocator: the footage index could not be loaded as one current bounded report.");
     assert.equal(error.message.includes(fixture.root), false);
+  }
+});
+
+test("search publication authority rejects index and source drift after final revalidation", { timeout: 30_000 }, async () => {
+  for (const mutation of ["index", "source"] as const) {
+    const fixture = await workflowFixture();
+    const outputLocator = ".cut/footage/search.json";
+    const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+    await assert.rejects(searchProjectFootage({
+      projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "dog", backendInstall: fixture.install,
+      __testHooks: {
+        async startSidecar() { return searchSession(fixture.handshake, candidates); },
+        async afterFinalRevalidation() {
+          if (mutation === "index") await writeFile(join(fixture.root, fixture.indexLocator), changedIndexBytes(fixture.index));
+          else await appendFile(join(fixture.root, "media/a.mp4"), Buffer.from([0]));
+        },
+      },
+    }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE" && error.path === "$.indexLocator", mutation);
+    await assert.rejects(readFile(join(fixture.root, outputLocator)), { code: "ENOENT" });
+  }
+});
+
+test("search authority failure after promotion restores an admitted report or absent output", { timeout: 30_000 }, async () => {
+  for (const prior of ["absent", "admitted"] as const) {
+    const fixture = await workflowFixture();
+    const outputLocator = ".cut/footage/search.json", outputPath = join(fixture.root, outputLocator);
+    const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+    let admittedBytes: Buffer | undefined, admittedInode: number | undefined;
+    if (prior === "admitted") {
+      const first = await searchProjectFootage({
+        projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "first dog", backendInstall: fixture.install,
+        __testHooks: { async startSidecar() { return searchSession(fixture.handshake, candidates); } },
+      });
+      admittedBytes = Buffer.from(first.bytes); admittedInode = (await lstat(outputPath)).ino;
+    }
+    const hooks = {
+      async startSidecar() { return searchSession(fixture.handshake, candidates); },
+      async beforePublicationFinalize() { await appendFile(join(fixture.root, "media/a.mp4"), Buffer.from([0])); },
+    } as unknown as NonNullable<SearchProjectFootageOptions["__testHooks"]>;
+    await assert.rejects(searchProjectFootage({
+      projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator, query: "second dog", backendInstall: fixture.install,
+      __testHooks: hooks,
+    }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE" && error.path === "$.indexLocator", prior);
+    if (admittedBytes) {
+      assert.deepEqual(await readFile(outputPath), admittedBytes);
+      assert.equal((await lstat(outputPath)).ino, admittedInode);
+    } else {
+      await assert.rejects(lstat(outputPath), { code: "ENOENT" });
+    }
+  }
+});
+
+test("search cancellation scheduled during artifact staging rolls back before commit", { timeout: 30_000 }, async () => {
+  const fixture = await workflowFixture(), controller = new AbortController();
+  const outputPath = join(fixture.root, ".cut/footage/search.json");
+  const candidates = fixture.index.chunks.map((chunk) => ({ chunkId: chunk.id, score: 0.5 }));
+  await assert.rejects(searchProjectFootage({
+    projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator: ".cut/footage/search.json",
+    query: "dog", backendInstall: fixture.install, signal: controller.signal,
+    __testHooks: {
+      async startSidecar() { return searchSession(fixture.handshake, candidates); },
+      afterFinalRevalidation() { setTimeout(() => controller.abort(), 0); },
+    },
+  }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_BACKEND_PROTOCOL" && error.path === "$signal");
+  await assert.rejects(lstat(outputPath), { code: "ENOENT" });
+});
+
+test("vector and source revalidation failures stay in one stable path-free search boundary", { timeout: 30_000 }, async () => {
+  for (const missing of ["vector", "source"] as const) {
+    const fixture = await workflowFixture();
+    await rm(join(fixture.root, missing === "vector" ? fixture.vectorLocator : "media/a.mp4"));
+    let caught: unknown;
+    try {
+      await searchProjectFootage({
+        projectRoot: fixture.root, indexLocator: fixture.indexLocator, outputLocator: ".cut/footage/search.json",
+        query: "dog", backendInstall: fixture.install,
+      });
+    } catch (error) { caught = error; }
+    assert.ok(caught instanceof CutFootageError, missing);
+    assert.equal(caught.code, "CUT_FOOTAGE_INDEX_STALE", missing);
+    assert.equal(caught.path, "$.indexLocator", missing);
+    assert.equal(caught.message, "CUT_FOOTAGE_INDEX_STALE at $.indexLocator: the footage index vector and source authority could not be revalidated safely.", missing);
+    assert.equal(caught.message.includes(fixture.root), false, missing);
   }
 });

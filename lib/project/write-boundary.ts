@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { BigIntStats, Stats } from "node:fs";
 import { link, lstat, mkdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { boundedDiagnosticString } from "../core/stable";
@@ -25,8 +26,12 @@ export type StagedFilePublication = Readonly<{
 
 export type StagedFileDestinationSnapshot = Readonly<
   | { state: "absent" }
-  | { state: "present"; kind: "file" | "symlink"; dev: number | bigint; ino: number | bigint }
+  | { state: "present"; kind: "file"; dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }
+  | { state: "present"; kind: "symlink"; dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint; target: string }
 >;
+
+export type StagedFileTransactionVerificationPhase = "before-promotion" | "before-finalize";
+export type StagedFileTransactionVerifier = (phase: StagedFileTransactionVerificationPhase) => void | Promise<void>;
 
 export type CreateOnlyStagedFilePublication = Readonly<{
   staged: string;
@@ -100,7 +105,10 @@ type PreparedPublication = Readonly<{
   parentSnapshot: EntrySnapshot;
   destinationSnapshot?: EntrySnapshot;
   destinationSymlinkTarget?: string;
+  expectedDestinationSnapshot?: StagedFileDestinationSnapshot;
 }>;
+
+type EntryMetadata = Stats | BigIntStats;
 
 function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
@@ -121,18 +129,22 @@ function foldedPath(path: string) {
   return path.normalize("NFC").toLowerCase().normalize("NFC");
 }
 
-function snapshot(metadata: Awaited<ReturnType<typeof lstat>>, kind: EntrySnapshot["kind"]): EntrySnapshot {
+function sameInteger(left: number | bigint, right: number | bigint) {
+  return BigInt(left) === BigInt(right);
+}
+
+function snapshot(metadata: EntryMetadata, kind: EntrySnapshot["kind"]): EntrySnapshot {
   return { kind, dev: metadata.dev, ino: metadata.ino };
 }
 
-function sameSnapshot(metadata: Awaited<ReturnType<typeof lstat>>, expected: EntrySnapshot) {
+function sameSnapshot(metadata: EntryMetadata, expected: EntrySnapshot) {
   const kind = metadata.isSymbolicLink() ? "symlink" : metadata.isFile() ? "file" : metadata.isDirectory() ? "directory" : undefined;
-  return kind === expected.kind && metadata.dev === expected.dev && metadata.ino === expected.ino;
+  return kind === expected.kind && sameInteger(metadata.dev, expected.dev) && sameInteger(metadata.ino, expected.ino);
 }
 
 async function optionalEntry(path: string) {
   try {
-    return await lstat(path);
+    return await lstat(path, { bigint: true });
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
     throw error;
@@ -145,7 +157,18 @@ export async function snapshotStagedFileDestination(path: string): Promise<Stage
   if (!metadata) return Object.freeze({ state: "absent" as const });
   const kind = metadata.isSymbolicLink() ? "symlink" as const : metadata.isFile() ? "file" as const : undefined;
   if (!kind) preflightFailure(`destination ${boundedDiagnosticString(destination)} cannot be snapshotted because it is not a regular file or leaf symlink.`, destination);
-  return Object.freeze({ state: "present" as const, kind, dev: metadata.dev, ino: metadata.ino });
+  const evidence = { state: "present" as const, dev: metadata.dev, ino: metadata.ino, size: metadata.size, mtimeNs: metadata.mtimeNs, ctimeNs: metadata.ctimeNs };
+  if (kind === "file") return Object.freeze({ ...evidence, kind: "file" as const });
+  let target: string;
+  try { target = await readlink(destination); }
+  catch (error) { preflightFailure(`cannot inspect destination symlink ${boundedDiagnosticString(destination)} (${errorCode(error) ?? "UNKNOWN"}).`, destination, error); }
+  return Object.freeze({ ...evidence, kind: "symlink" as const, target });
+}
+
+function exactBigInt(value: unknown, path: string, field: string) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  preflightFailure(`expected destination snapshot for ${boundedDiagnosticString(path)} has malformed ${field}.`, path);
 }
 
 function normalizeExpectedDestinationSnapshot(value: unknown, path: string): StagedFileDestinationSnapshot | undefined {
@@ -155,18 +178,41 @@ function normalizeExpectedDestinationSnapshot(value: unknown, path: string): Sta
   }
   const record = value as Record<string, unknown>, keys = Object.keys(record).sort();
   if (record.state === "absent" && keys.length === 1 && keys[0] === "state") return Object.freeze({ state: "absent" });
+  const expectedKeys = record.kind === "symlink"
+    ? "ctimeNs,dev,ino,kind,mtimeNs,size,state,target"
+    : "ctimeNs,dev,ino,kind,mtimeNs,size,state";
   if (record.state !== "present" || (record.kind !== "file" && record.kind !== "symlink")
-    || keys.join(",") !== "dev,ino,kind,state"
-    || !(typeof record.dev === "number" || typeof record.dev === "bigint")
-    || !(typeof record.ino === "number" || typeof record.ino === "bigint")) {
+    || keys.join(",") !== expectedKeys || (record.kind === "symlink" && typeof record.target !== "string")) {
     preflightFailure(`expected destination snapshot for ${boundedDiagnosticString(path)} is malformed.`, path);
   }
-  return Object.freeze({ state: "present", kind: record.kind, dev: record.dev, ino: record.ino });
+  const evidence = Object.freeze({
+    state: "present" as const,
+    kind: record.kind,
+    dev: exactBigInt(record.dev, path, "dev"),
+    ino: exactBigInt(record.ino, path, "ino"),
+    size: exactBigInt(record.size, path, "size"),
+    mtimeNs: exactBigInt(record.mtimeNs, path, "mtimeNs"),
+    ctimeNs: exactBigInt(record.ctimeNs, path, "ctimeNs"),
+  });
+  return record.kind === "file"
+    ? Object.freeze({ ...evidence, kind: "file" as const })
+    : Object.freeze({ ...evidence, kind: "symlink" as const, target: record.target as string });
 }
 
-function matchesExpectedDestination(metadata: Awaited<ReturnType<typeof lstat>> | undefined, expected: StagedFileDestinationSnapshot) {
+function matchesExpectedDestination(metadata: BigIntStats | undefined, target: string | undefined, expected: StagedFileDestinationSnapshot) {
   if (expected.state === "absent") return metadata === undefined;
-  return metadata !== undefined && sameSnapshot(metadata, expected);
+  if (!metadata) return false;
+  const kind = metadata.isSymbolicLink() ? "symlink" : metadata.isFile() ? "file" : undefined;
+  return kind === expected.kind
+    && metadata.dev === expected.dev && metadata.ino === expected.ino && metadata.size === expected.size
+    && metadata.mtimeNs === expected.mtimeNs && metadata.ctimeNs === expected.ctimeNs
+    && (expected.kind !== "symlink" || target === expected.target);
+}
+
+async function pathMatchesExpectedDestination(path: string, expected: StagedFileDestinationSnapshot) {
+  const metadata = await optionalEntry(path);
+  const target = metadata?.isSymbolicLink() ? await readlink(path) : undefined;
+  return matchesExpectedDestination(metadata, target, expected);
 }
 
 function preflightFailure(message: string, path?: string, cause?: unknown): never {
@@ -261,13 +307,13 @@ async function prepareStagedFileTransaction(
       try { destinationSymlinkTarget = await readlink(destination); }
       catch (error) { preflightFailure(`cannot inspect destination symlink ${boundedDiagnosticString(destination)} (${errorCode(error) ?? "UNKNOWN"}).`, destination, error); }
     }
-    if (candidate.expectedDestinationSnapshot && !matchesExpectedDestination(destinationMetadata, candidate.expectedDestinationSnapshot)) {
+    if (candidate.expectedDestinationSnapshot && !matchesExpectedDestination(destinationMetadata, destinationSymlinkTarget, candidate.expectedDestinationSnapshot)) {
       preflightFailure(`destination ${boundedDiagnosticString(destination)} does not match the caller's expected snapshot.`, destination);
     }
     if (staged && stagedMetadata && observedDevice(hooks, staged, "staged", stagedMetadata.dev) !== observedDevice(hooks, parent, "destination-parent", parentMetadata.dev)) {
       preflightFailure(`staged file ${boundedDiagnosticString(staged)} is not on the destination filesystem for ${boundedDiagnosticString(destination)}.`, staged);
     }
-    if (stagedMetadata && destinationMetadata && stagedMetadata.dev === destinationMetadata.dev && stagedMetadata.ino === destinationMetadata.ino) {
+    if (stagedMetadata && destinationMetadata && sameInteger(stagedMetadata.dev, destinationMetadata.dev) && sameInteger(stagedMetadata.ino, destinationMetadata.ino)) {
       preflightFailure(`staged file and destination are the same filesystem entry at ${boundedDiagnosticString(destination)}.`, destination);
     }
     const backup = resolve(parent, `.${basename(destination)}.cut-${transactionId}-${String(index).padStart(4, "0")}.bak`);
@@ -291,6 +337,7 @@ async function prepareStagedFileTransaction(
       parentSnapshot: snapshot(parentMetadata, "directory"),
       ...(destinationMetadata ? { destinationSnapshot: snapshot(destinationMetadata, destinationMetadata.isSymbolicLink() ? "symlink" : "file") } : {}),
       ...(destinationSymlinkTarget === undefined ? {} : { destinationSymlinkTarget }),
+      ...(candidate.expectedDestinationSnapshot === undefined ? {} : { expectedDestinationSnapshot: candidate.expectedDestinationSnapshot }),
     });
   }
 
@@ -329,6 +376,9 @@ async function prepareStagedFileTransaction(
     if (entry.destinationSnapshot) {
       if (!destinationMetadata || !sameSnapshot(destinationMetadata, entry.destinationSnapshot)) preflightFailure(`destination changed during preflight at ${boundedDiagnosticString(entry.destination)}.`, entry.destination);
     } else if (destinationMetadata) preflightFailure(`destination appeared during preflight at ${boundedDiagnosticString(entry.destination)}.`, entry.destination);
+    if (entry.expectedDestinationSnapshot && !await pathMatchesExpectedDestination(entry.destination, entry.expectedDestinationSnapshot)) {
+      preflightFailure(`destination ${boundedDiagnosticString(entry.destination)} no longer matches the caller's expected snapshot.`, entry.destination);
+    }
   }
   return prepared;
 }
@@ -357,6 +407,7 @@ async function rollbackStagedFileTransaction(
   backedUp: readonly PreparedPublication[],
   ordered: readonly PreparedPublication[],
   hooks: StagedFileTransactionTestHooks,
+  backupSnapshots: ReadonlyMap<string, StagedFileDestinationSnapshot>,
 ) {
   const failures: Array<{ error: unknown; path: string }> = [];
   const indexes = new Map(ordered.map((entry, index) => [entry.destination, index]));
@@ -365,7 +416,8 @@ async function rollbackStagedFileTransaction(
     try {
       await invokeFault(hooks, "rollback-new", "before", index, entry);
       if (!entry.staged || !entry.stagedSnapshot) throw new Error(`promoted publication has no staged path (${entry.destination})`);
-      const destinationMetadata = await lstat(entry.destination);
+      const destinationMetadata = await optionalEntry(entry.destination);
+      if (!destinationMetadata) throw new Error(`promoted destination disappeared before rollback (${entry.destination})`);
       if (!sameSnapshot(destinationMetadata, entry.stagedSnapshot)) throw new Error(`promoted destination inode changed before rollback (${entry.destination})`);
       if (await optionalEntry(entry.staged)) throw new Error(`staged path appeared before promoted rollback (${entry.staged})`);
       await link(entry.destination, entry.staged);
@@ -382,8 +434,13 @@ async function rollbackStagedFileTransaction(
     try {
       await invokeFault(hooks, "rollback-backup", "before", index, entry);
       if (!entry.destinationSnapshot) throw new Error(`backed-up publication has no prior destination snapshot (${entry.destination})`);
-      const backupMetadata = await lstat(entry.backup);
+      const backupMetadata = await optionalEntry(entry.backup);
+      if (!backupMetadata) throw new Error(`prior backup disappeared before rollback (${entry.backup})`);
       if (!sameSnapshot(backupMetadata, entry.destinationSnapshot)) throw new Error(`backup inode changed before rollback (${entry.backup})`);
+      const backupSnapshot = backupSnapshots.get(entry.destination);
+      if (backupSnapshot && !await pathMatchesExpectedDestination(entry.backup, backupSnapshot)) {
+        throw new Error(`backup content changed before rollback (${entry.backup})`);
+      }
       if (await optionalEntry(entry.destination)) throw new Error(`destination appeared before backup rollback (${entry.destination})`);
       if (entry.destinationSnapshot.kind === "symlink") {
         const target = await readlink(entry.backup);
@@ -392,7 +449,8 @@ async function rollbackStagedFileTransaction(
       } else {
         await link(entry.backup, entry.destination);
       }
-      const restoredDestination = await lstat(entry.destination);
+      const restoredDestination = await optionalEntry(entry.destination);
+      if (!restoredDestination) throw new Error(`backup rollback did not restore the prior entry (${entry.destination})`);
       if (entry.destinationSnapshot.kind === "symlink"
         ? !restoredDestination.isSymbolicLink() || await readlink(entry.destination) !== entry.destinationSymlinkTarget
         : !sameSnapshot(restoredDestination, entry.destinationSnapshot)) {
@@ -410,6 +468,7 @@ async function rollbackStagedFileTransaction(
 async function executeStagedFileTransaction(
   publications: readonly StagedFilePublication[],
   hooks: StagedFileTransactionTestHooks,
+  verifier?: StagedFileTransactionVerifier,
 ) {
   let prepared: PreparedPublication[];
   try {
@@ -421,18 +480,31 @@ async function executeStagedFileTransaction(
 
   const backedUp: PreparedPublication[] = [];
   const promoted: PreparedPublication[] = [];
+  const backupSnapshots = new Map<string, StagedFileDestinationSnapshot>();
   let active = prepared[0];
+  let verifierFailed = false;
+  const verify = async (phase: StagedFileTransactionVerificationPhase) => {
+    if (!verifier) return;
+    try { await verifier(phase); }
+    catch (error) { verifierFailed = true; throw error; }
+  };
   try {
     for (const [index, entry] of prepared.entries()) {
       active = entry;
       if (!entry.destinationSnapshot) continue;
       await invokeFault(hooks, "backup", "before", index, entry);
-      const current = await lstat(entry.destination);
+      const current = await optionalEntry(entry.destination);
+      if (!current) throw new Error(`destination disappeared before backup (${entry.destination})`);
       if (!sameSnapshot(current, entry.destinationSnapshot)) throw new Error(`destination changed before backup (${entry.destination})`);
+      if (entry.expectedDestinationSnapshot && !await pathMatchesExpectedDestination(entry.destination, entry.expectedDestinationSnapshot)) {
+        throw new Error(`destination content changed before backup (${entry.destination})`);
+      }
       await rename(entry.destination, entry.backup);
       backedUp.push(entry);
+      backupSnapshots.set(entry.destination, await snapshotStagedFileDestination(entry.backup));
       await invokeFault(hooks, "backup", "after", index, entry);
     }
+    await verify("before-promotion");
     for (const [index, entry] of prepared.entries()) {
       if (entry.action === "remove") continue;
       active = entry;
@@ -445,8 +517,9 @@ async function executeStagedFileTransaction(
       promoted.push(entry);
       await invokeFault(hooks, "promotion", "after", index, entry);
     }
+    await verify("before-finalize");
   } catch (commitError) {
-    const rollbackFailures = await rollbackStagedFileTransaction(promoted, backedUp, prepared, hooks);
+    const rollbackFailures = await rollbackStagedFileTransaction(promoted, backedUp, prepared, hooks, backupSnapshots);
     if (rollbackFailures.length) {
       const first = rollbackFailures[0];
       throw new StagedFileTransactionError(
@@ -456,6 +529,7 @@ async function executeStagedFileTransaction(
         { cause: commitError },
       );
     }
+    if (verifierFailed) throw commitError;
     throw new StagedFileTransactionError(
       "CUT_PUBLISH_COMMIT",
       `publication failed at ${boundedDiagnosticString(active.destination)}; every prior destination was restored (${errorCode(commitError) ?? "UNKNOWN"}).`,
@@ -469,7 +543,10 @@ async function executeStagedFileTransaction(
   // entries (especially across filesystems) have no global atomic commit.
   for (const entry of backedUp) {
     try {
-      if (!entry.destinationSnapshot || !sameSnapshot(await lstat(entry.backup), entry.destinationSnapshot)) continue;
+      const backup = await optionalEntry(entry.backup);
+      if (!entry.destinationSnapshot || !backup || !sameSnapshot(backup, entry.destinationSnapshot)) continue;
+      const backupSnapshot = backupSnapshots.get(entry.destination);
+      if (backupSnapshot && !await pathMatchesExpectedDestination(entry.backup, backupSnapshot)) continue;
       await rm(entry.backup, { force: true });
     }
     catch { /* A stale hidden backup is safer than reporting a committed set as failed. */ }
@@ -482,8 +559,11 @@ async function executeStagedFileTransaction(
  * This restores the prior set after caught in-process backup/promotion errors.
  * It does not claim atomic visibility across files or crash/power-loss safety.
  */
-export async function publishStagedFileTransaction(publications: readonly StagedFilePublication[]) {
-  await executeStagedFileTransaction(publications, {});
+export async function publishStagedFileTransaction(
+  publications: readonly StagedFilePublication[],
+  verifier?: StagedFileTransactionVerifier,
+) {
+  await executeStagedFileTransaction(publications, {}, verifier);
 }
 
 /** @internal Unit-test entry point for deterministic filesystem fault injection. */
@@ -709,6 +789,7 @@ export async function ensureProjectWriteDirectory(projectRoot: string, locator: 
 export async function writeProjectArtifacts(
   ownershipRoots: readonly string[],
   artifacts: readonly ProjectArtifactWrite[],
+  verifier?: StagedFileTransactionVerifier,
 ) {
   if (!ownershipRoots.length) preflightFailure("an artifact write needs at least one ownership root.");
   if (!artifacts.length) preflightFailure("an artifact write needs at least one destination.");
@@ -778,7 +859,7 @@ export async function writeProjectArtifacts(
         ...(artifact.expectedDestinationSnapshot === undefined ? {} : { expectedDestinationSnapshot: artifact.expectedDestinationSnapshot }),
       });
     }
-    await publishStagedFileTransaction(publications);
+    await publishStagedFileTransaction(publications, verifier);
   } finally {
     await Promise.all(stages.map((stage) => rm(stage, { force: true })));
   }

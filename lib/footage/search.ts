@@ -17,7 +17,7 @@ import {
   type CutFootageIndex,
   type CutFootageSearch,
 } from "./contracts";
-import { footageFail } from "./diagnostics";
+import { CutFootageError, footageFail } from "./diagnostics";
 import { loadCutFootageVectorArtifact } from "./indexer";
 import { planFootageSources } from "./planner";
 import {
@@ -185,6 +185,7 @@ export type SearchProjectFootageOptions = Readonly<{
     startSidecar?: (install: CutFootageLocalInstall) => Promise<CutFootageSidecarSession>;
     afterInference?: () => void | Promise<void>;
     afterFinalRevalidation?: () => void | Promise<void>;
+    beforePublicationFinalize?: () => void | Promise<void>;
   }>;
 }>;
 
@@ -209,25 +210,29 @@ function backendFromHandshake(handshake: CutFootageLocalInstall["manifest"]["han
 }
 
 async function revalidateSearchIndex(projectRoot: string, index: CutFootageIndex) {
-  await loadCutFootageVectorArtifact(projectRoot, index);
-  const plan = await planFootageSources({
-    projectRoot,
-    locators: index.sources.map((source) => source.locator),
-    backend: index.backend,
-    priorIndex: index,
-    chunkPolicy: index.chunkPolicy,
-  });
-  const publicChunks = plan.chunks.map((chunk) => Object.freeze({
-    id: chunk.id,
-    sourceLocator: chunk.sourceLocator,
-    sourceSha256: chunk.sourceSha256,
-    streamIndex: chunk.streamIndex,
-    range: chunk.range,
-  }));
-  if (plan.reusableChunkIds.length !== index.chunks.length
-    || stableJsonStringify(plan.sources.map((source) => source.source)) !== stableJsonStringify(index.sources)
-    || stableJsonStringify(publicChunks) !== stableJsonStringify(index.chunks)) {
-    footageFail("CUT_FOOTAGE_INDEX_STALE", "$index", "the indexed source and chunk set is no longer reusable.");
+  try {
+    await loadCutFootageVectorArtifact(projectRoot, index);
+    const plan = await planFootageSources({
+      projectRoot,
+      locators: index.sources.map((source) => source.locator),
+      backend: index.backend,
+      priorIndex: index,
+      chunkPolicy: index.chunkPolicy,
+    });
+    const publicChunks = plan.chunks.map((chunk) => Object.freeze({
+      id: chunk.id,
+      sourceLocator: chunk.sourceLocator,
+      sourceSha256: chunk.sourceSha256,
+      streamIndex: chunk.streamIndex,
+      range: chunk.range,
+    }));
+    if (plan.reusableChunkIds.length !== index.chunks.length
+      || stableJsonStringify(plan.sources.map((source) => source.source)) !== stableJsonStringify(index.sources)
+      || stableJsonStringify(publicChunks) !== stableJsonStringify(index.chunks)) {
+      footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
+    }
+  } catch {
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the footage index vector and source authority could not be revalidated safely.");
   }
 }
 
@@ -248,6 +253,21 @@ function assertCurrentSearchIndex(
     || stableJsonStringify(current.index) !== stableJsonStringify(admitted.index)) {
     footageFail("CUT_FOOTAGE_INDEX_STALE", "$.indexLocator", "the admitted footage index changed after inference.");
   }
+}
+
+async function verifyCurrentSearchAuthority(
+  projectRoot: string,
+  indexLocator: string,
+  admitted: Readonly<{ path: string; index: CutFootageIndex }>,
+  signal: AbortSignal | undefined,
+) {
+  abortIfRequested(signal);
+  const current = await loadSearchIndex(projectRoot, indexLocator);
+  assertCurrentSearchIndex(admitted, current);
+  await revalidateSearchIndex(projectRoot, current.index);
+  abortIfRequested(signal);
+  assertCurrentSearchIndex(admitted, await loadSearchIndex(projectRoot, indexLocator));
+  abortIfRequested(signal);
 }
 
 /** Revalidates an index, queries the verified offline sidecar, and atomically publishes one search report. */
@@ -309,9 +329,7 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
 
   await options.__testHooks?.afterInference?.();
   abortIfRequested(options.signal);
-  const currentIndex = await loadSearchIndex(projectRoot, indexLocator);
-  assertCurrentSearchIndex(admittedIndex, currentIndex);
-  await revalidateSearchIndex(projectRoot, currentIndex.index);
+  await verifyCurrentSearchAuthority(projectRoot, indexLocator, admittedIndex, options.signal);
   await options.__testHooks?.afterFinalRevalidation?.();
   const built = buildCutFootageSearchReport(index, indexLocator, query, candidates, bounds);
   abortIfRequested(options.signal);
@@ -321,7 +339,13 @@ export async function searchProjectFootage(options: SearchProjectFootageOptions)
       contents: built.bytes,
       role: "footage-search",
       expectedDestinationSnapshot: expectedOutput,
-    })]);
-  } catch { footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search report could not be published."); }
+    })], async (phase) => {
+      if (phase === "before-finalize") await options.__testHooks?.beforePublicationFinalize?.();
+      await verifyCurrentSearchAuthority(projectRoot, indexLocator, admittedIndex, options.signal);
+    });
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the footage search report could not be published.");
+  }
   return Object.freeze({ report: built.report, outputPath, bytes: built.bytes });
 }

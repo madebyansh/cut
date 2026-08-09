@@ -467,11 +467,39 @@ test("replacement publication accepts optional absent or prior destination CAS s
     assert.equal(await readFile(priorDestination, "utf8"), "foreign");
     assert.equal(await readFile(priorStage, "utf8"), "replacement");
 
+    const sameInode = await snapshotStagedFileDestination(priorDestination), inodeBefore = (await lstat(priorDestination)).ino;
+    await writeFile(priorDestination, "foreign edited through the admitted inode");
+    assert.equal((await lstat(priorDestination)).ino, inodeBefore);
+    await assert.rejects(publishStagedFileTransaction([{
+      staged: priorStage, destination: priorDestination, expectedDestinationSnapshot: sameInode,
+    }]), hasTransactionCode("CUT_PUBLISH_PREFLIGHT"));
+    assert.equal(await readFile(priorDestination, "utf8"), "foreign edited through the admitted inode");
+    assert.equal(await readFile(priorStage, "utf8"), "replacement");
+
     const current = await snapshotStagedFileDestination(priorDestination);
     await publishStagedFileTransaction([{
       staged: priorStage, destination: priorDestination, expectedDestinationSnapshot: current,
     }]);
     assert.equal(await readFile(priorDestination, "utf8"), "replacement");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("production publication verification runs inside the rollback window", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-write-authority-verifier-"));
+  try {
+    const destination = resolve(root, "search.json"), stage = resolve(root, ".search.stage");
+    await writeFile(destination, "admitted report"); await writeFile(stage, "new report");
+    const admitted = await snapshotStagedFileDestination(destination), failure = new Error("authority changed");
+    const phases: string[] = [];
+    await assert.rejects(publishStagedFileTransaction([{
+      staged: stage, destination, expectedDestinationSnapshot: admitted,
+    }], (phase) => {
+      phases.push(phase);
+      if (phase === "before-finalize") throw failure;
+    }), (error: unknown) => error === failure);
+    assert.deepEqual(phases, ["before-promotion", "before-finalize"]);
+    assert.equal(await readFile(destination, "utf8"), "admitted report");
+    assert.equal(await readFile(stage, "utf8"), "new report");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
