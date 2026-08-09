@@ -53,6 +53,44 @@ cut build main.cut --lock cut.lock --out .cut/replay.cutir.json --json
 cut diff .cut/graph.cutir.json .cut/replay.cutir.json --json
 ```
 
+## Optional local semantic footage search
+
+The default package stays lightweight. It ships a locked setup recipe, not the
+ML runtime or model weights. On supported macOS or Linux with Node/npm already
+installed, explicitly install the local CPU backend once:
+
+```sh
+export CUT_FOOTAGE_HOME="$CONSUMER_ROOT/.cut-footage-home" # optional automation isolation
+cut footage setup --backend local --json
+cut footage doctor --json
+```
+
+This setup step requires network access and can install several hundred MB.
+Homebrew is not required. Normal indexing and searching are offline and bind the
+exact verified runtime, q8 model revision, source hashes, and vector bytes.
+Indexing and extraction still need working FFmpeg and ffprobe executables from
+any supported installation, so run `cut doctor --json` before real media work.
+
+Copy authorized MP4/MOV source files into the project, then run the complete
+candidate-to-clip handoff:
+
+```sh
+mkdir -p media .cut/footage selects
+cp /absolute/path/to/authorized/dog-source.mp4 media/dog-source.mp4
+
+cut footage index media/ --out .cut/footage/index.json --json
+cut footage search .cut/footage/index.json --query "a dog outdoors" \
+  --out .cut/footage/search.json --json
+cut footage extract .cut/footage/search.json --match 1 --handles 1s \
+  --out selects/dog.mp4 --json
+```
+
+Inspect `.cut/footage/search.json` before extraction when editorial judgement
+matters. Search results are candidates, not timeline edits. Extraction writes a
+new clip plus `selects/dog.mp4.cut-footage.json`; it refuses to replace either
+leaf. Run `cut footage index` again after source bytes change, and rerun setup
+only when doctor says the immutable backend is missing or invalid.
+
 ## Transparent cold-to-warm cache workflow
 
 The two `render` commands above are the installed cache workflow; CUT does not

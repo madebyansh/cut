@@ -75,10 +75,11 @@
     "lint": "node node_modules/eslint/bin/eslint.js cli lib tests scripts",
     "test": "npm run test:core",
     "test:core": "node scripts/run-dist-core-tests.mjs --build",
-    "test:portable": "npm run cli:build && node --test dist-cli/tests/formatter.test.js dist-cli/tests/linter.test.js dist-cli/tests/language.test.js dist-cli/tests/doctor.test.js dist-cli/tests/reference-native-source-over.test.js dist-cli/tests/reference-media-camera2d-runtime.test.js",
+    "test:portable": "npm run cli:build && node --test dist-cli/tests/formatter.test.js dist-cli/tests/linter.test.js dist-cli/tests/language.test.js dist-cli/tests/doctor.test.js dist-cli/tests/reference-native-source-over.test.js dist-cli/tests/reference-media-camera2d-runtime.test.js dist-cli/tests/cli-help.test.js dist-cli/tests/footage-cli.test.js && npm run audit:package-footprint",
     "test:scripts": "node --test scripts/*.test.mjs",
     "audit:public": "node scripts/audit-public-tree.mjs",
-    "verify": "npm run audit:public && npm run test:scripts && npm run lint && npm run test:core",
+    "audit:package-footprint": "npm pack --dry-run --json --ignore-scripts --cache .cut/npm-pack-cache | node scripts/assert-package-footprint.mjs /dev/stdin",
+    "verify": "npm run audit:public && npm run test:scripts && npm run lint && npm run test:core && npm run audit:package-footprint",
     "prepack": "npm run cli:build && node scripts/sync-builtin-implementation-data.mjs --check"
   },
   "dependencies": {

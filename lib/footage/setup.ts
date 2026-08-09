@@ -19,6 +19,7 @@ import { stableJsonStringify } from "../core/stable";
 import { parseStrictPackageJson } from "../package/json";
 import { cutDoctorNodeVersionCheck } from "../system/doctor";
 import { CutFootageError, footageFail } from "./diagnostics";
+import type { CutFootageIndexBackend } from "./indexer";
 import {
   startCutFootageSidecar,
   type CutFootageSidecarLimits,
@@ -1041,6 +1042,26 @@ export async function startCutFootageLocalSidecar(options: CutFootageLocalStartO
     if (error instanceof CutFootageError && error.code === "CUT_FOOTAGE_MODEL_MISMATCH") throw error;
     mismatch();
   }
+}
+
+/** Constructs the exact verified offline launch used by the footage indexer. */
+export async function createCutFootageLocalIndexBackend(options: CutFootageLocalInspectOptions = {}): Promise<CutFootageIndexBackend> {
+  const install = await inspectCutFootageLocalInstall(options);
+  const publication = inspectedPublications.get(install);
+  if (!publication) mismatch();
+  await assertPublishedSnapshot(publication);
+  if ((await hashRegular(install.sidecarPath)).sha256 !== install.manifest.adapterSha256) mismatch();
+  const launch = launchFor(install.root, install.manifest.model, install.manifest.handshake, "offline");
+  return deepFreeze({
+    identity: cutFootageBackendIdentityFromInstall(install),
+    sidecar: {
+      executable: launch.executable,
+      arguments: launch.arguments,
+      environment: launch.environment,
+      expectedHandshake: launch.expectedHandshake,
+      limits: launch.limits,
+    },
+  });
 }
 
 /** Installs one immutable local backend through a sibling payload and one create-only publication. */

@@ -19,6 +19,18 @@ instead of guessing flags from another release. Unknown, duplicate, missing,
 misordered, or extra arguments fail before filesystem, media, model, or render
 work begins.
 
+The optional semantic-footage surface is also closed and machine-readable:
+
+```sh
+cut footage setup --backend local --json
+cut footage doctor --json
+cut footage index media/ --out .cut/footage/index.json --json
+cut footage search .cut/footage/index.json --query "a dog outdoors" \
+  --out .cut/footage/search.json --json
+cut footage extract .cut/footage/search.json --match 1 --handles 1s \
+  --out selects/dog.mp4 --json
+```
+
 ## First project
 
 ```sh
@@ -48,6 +60,63 @@ cut diff .cut/graph.cutir.json .cut/graph.cutir.json
 selects a declared output from source and selects only explicitly authored,
 lock-verified video/audio proxies. Missing proxies report a master fallback.
 The reference runtime always requires a lock for preview and render.
+
+## Semantic footage search
+
+Semantic search is optional. The ordinary CUT install contains the small,
+five-file `adapters/footage-local` recipe, but it does not contain
+`@huggingface/transformers`, ONNX Runtime, model weights, or a model cache.
+Install the backend only when this workflow is needed:
+
+```sh
+cut footage setup --backend local --json
+cut footage doctor --json
+```
+
+`footage setup` is the only network-bearing footage command. It uses the npm
+CLI that belongs to the supported Node installation to install the locked
+`@huggingface/transformers` 4.2.0 closure, including `onnxruntime-node` 1.24.3,
+then downloads and verifies CPU q8
+`Xenova/clip-vit-base-patch32` revision
+`d15189d7028b43f1d3e65039190477f6af591c2a`. Homebrew is not required.
+Indexing and extraction still require working FFmpeg and ffprobe executables;
+they may come from any supported installation. Run `cut doctor --json` as well
+as `cut footage doctor --json` before the first real project.
+The exact macOS arm64 installation measured during design was roughly 387 MB
+for the runtime and 161 MB for the model; Linux and future package metadata can
+vary. The default location is below `~/.cut/footage`; automation may select one
+canonical absolute directory with `CUT_FOOTAGE_HOME`.
+
+After setup, index and search are offline. They load only the verified absolute
+model-revision directory and never contact the model hub:
+
+```sh
+cut footage index media/ --out .cut/footage/index.json --json
+cut footage search .cut/footage/index.json \
+  --query "founder opens the live dashboard" \
+  --out .cut/footage/search.json --json
+cut footage extract .cut/footage/search.json \
+  --match 1 --handles 1s --out selects/dashboard.mp4 --json
+```
+
+All footage locators are relative to the current project directory. Indexing
+recursively admits regular, non-linked MP4/MOV files, hashes and probes each
+source, and writes the canonical index plus its bound vector artifact. A second
+run reuses only byte-identical, probe-identical chunks. Search rechecks the
+sources, vectors, and backend before inference, then writes a deterministic
+`cut-footage-search` v1 report. Its matches are candidate evidence; search does
+not edit a `.cut` program or call the compositor.
+
+Extraction accepts a one-based rank or the report's stable match ID. Optional
+`--handles` is one exact non-negative `s` or `ms` value applied to both sides;
+when omitted, the report's handles or exact zero are used. The command
+revalidates the report and source, then publishes both the requested clip and
+`<clip>.cut-footage.json` without overwriting either existing leaf. JSON success
+is respectively `cut-footage-local-setup-report`,
+`cut-footage-local-doctor-report`, `cut-footage-index`,
+`cut-footage-search`, and `cut-footage-extract`. Public failures use stable
+`CUT_FOOTAGE_*` diagnostics and never include the private footage-home path or
+raw model output.
 
 ## Transcript-editing workflow
 
