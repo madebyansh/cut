@@ -39,8 +39,10 @@ import { normalizeFootageSourceProbe } from "./planner";
 import { clampFootageHandles, type CutFootageHandles } from "./range";
 
 const maximumHandle = rational(86_400);
+const maximumIndexedSourceBytes = 100 * 1024 * 1024 * 1024;
 const maximumExtractBytes = 8 * 1024 * 1024 * 1024;
 const maximumNativeTimeoutMs = 5 * 60_000;
+const heldHashBufferBytes = 1024 * 1024;
 
 /** Parse one canonical, exact, non-negative footage handle in seconds or milliseconds. */
 export function parseCutFootageHandle(value: unknown): Rational {
@@ -79,8 +81,11 @@ export type ExtractProjectFootageOptions = Readonly<{
   __testHooks?: Readonly<{
     ffmpegExecutable?: string;
     ffprobeExecutable?: string;
+    beforeSourceProbe?: (detail: Readonly<{ maxFileBytes: number }>) => void | Promise<void>;
+    beforeStage?: (detail: Readonly<{ parent: string }>) => void | Promise<void>;
     afterEncode?: (detail: Readonly<{ path: string; arguments: readonly string[] }>) => void | Promise<void>;
     afterVerification?: (detail: Readonly<{ path: string }>) => void | Promise<void>;
+    afterPublication?: (detail: Readonly<{ outputPath: string; manifestPath: string }>) => void | Promise<void>;
   }>;
 }>;
 
@@ -92,6 +97,8 @@ export type ExtractProjectFootageResult = Readonly<{
 
 type HeldSnapshot = Readonly<{ dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }>;
 type HeldFile = Readonly<{ path: string; handle: FileHandle; snapshot: HeldSnapshot }>;
+type DirectorySnapshot = Readonly<{ dev: bigint; ino: bigint }>;
+type HeldDirectory = Readonly<{ path: string; snapshot: DirectorySnapshot }>;
 
 function snapshot(metadata: Awaited<ReturnType<FileHandle["stat"]>>): HeldSnapshot {
   const value = metadata as unknown as HeldSnapshot;
@@ -106,6 +113,36 @@ function sameSnapshot(metadata: Awaited<ReturnType<FileHandle["stat"]>>, expecte
 
 function systemCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
+}
+
+function abortIfRequested(signal: AbortSignal | undefined) {
+  if (signal?.aborted) footageFail("CUT_FOOTAGE_PUBLISH", "$signal", "the footage extraction was cancelled.");
+}
+
+async function runExtractionHook<T>(signal: AbortSignal | undefined, hook: ((detail: T) => void | Promise<void>) | undefined, detail: T) {
+  abortIfRequested(signal);
+  await hook?.(detail);
+  abortIfRequested(signal);
+}
+
+function directorySnapshot(metadata: Awaited<ReturnType<typeof lstat>>): DirectorySnapshot {
+  const value = metadata as typeof metadata & Readonly<{ dev: bigint; ino: bigint }>;
+  return Object.freeze({ dev: value.dev, ino: value.ino });
+}
+
+function sameDirectory(metadata: Awaited<ReturnType<typeof lstat>>, expected: DirectorySnapshot) {
+  return metadata.isDirectory() && !metadata.isSymbolicLink() && metadata.dev === expected.dev && metadata.ino === expected.ino;
+}
+
+async function cleanupStagingDirectory(stage: HeldDirectory | undefined) {
+  if (!stage) return;
+  try {
+    const current = await lstat(stage.path, { bigint: true });
+    if (!sameDirectory(current, stage.snapshot)) return;
+    await rm(stage.path, { recursive: true, force: true });
+  } catch (error) {
+    if (systemCode(error) !== "ENOENT") return;
+  }
 }
 
 async function optionalLstat(path: string) {
@@ -148,17 +185,33 @@ async function assertHeldPath(held: HeldFile) {
   }
 }
 
-async function hashHeldFile(held: HeldFile) {
-  await assertHeldPath(held);
-  const digest = createHash("sha256");
-  for await (const chunk of held.handle.createReadStream({ start: 0, autoClose: false })) digest.update(chunk);
-  await assertHeldPath(held);
+async function digestHeldBytes(held: HeldFile) {
+  const expectedBytes = Number(held.snapshot.size);
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) {
+    footageFail("CUT_FOOTAGE_PUBLISH", "$.output.bytes", "one held extraction file exceeds the safe hashing bound.");
+  }
+  const digest = createHash("sha256"), buffer = Buffer.allocUnsafe(Math.min(heldHashBufferBytes, Math.max(1, expectedBytes)));
+  let position = 0;
+  while (position < expectedBytes) {
+    const length = Math.min(buffer.byteLength, expectedBytes - position);
+    const { bytesRead } = await held.handle.read(buffer, 0, length, position);
+    if (bytesRead < 1) break;
+    digest.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
   return digest.digest("hex");
 }
 
-async function assertLinkedHeldBytes(held: HeldFile, expectedSha256: string) {
+async function hashHeldFile(held: HeldFile) {
+  await assertHeldPath(held);
+  const digest = await digestHeldBytes(held);
+  await assertHeldPath(held);
+  return digest;
+}
+
+async function assertLinkedHeldBytes(held: HeldFile, expectedSha256: string, linkedPath = held.path) {
   const assertLinkedIdentity = async () => {
-    const [handleMetadata, pathMetadata] = await Promise.all([held.handle.stat({ bigint: true }), lstat(held.path, { bigint: true })]);
+    const [handleMetadata, pathMetadata] = await Promise.all([held.handle.stat({ bigint: true }), lstat(linkedPath, { bigint: true })]);
     if (!handleMetadata.isFile() || !pathMetadata.isFile()
       || handleMetadata.dev !== held.snapshot.dev || handleMetadata.ino !== held.snapshot.ino
       || pathMetadata.dev !== held.snapshot.dev || pathMetadata.ino !== held.snapshot.ino
@@ -168,10 +221,9 @@ async function assertLinkedHeldBytes(held: HeldFile, expectedSha256: string) {
     }
   };
   await assertLinkedIdentity();
-  const digest = createHash("sha256");
-  for await (const chunk of held.handle.createReadStream({ start: 0, autoClose: false })) digest.update(chunk);
+  const digest = await digestHeldBytes(held);
   await assertLinkedIdentity();
-  if (digest.digest("hex") !== expectedSha256) {
+  if (digest !== expectedSha256) {
     footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "a staged extraction byte hash changed during publication.");
   }
 }
@@ -283,15 +335,37 @@ async function prepareDestination(projectRoot: string, outputLocator: string) {
   try { parent = parentLocator === "." ? projectRoot : await ensureProjectWriteDirectory(projectRoot, parentLocator); }
   catch { return footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the extraction destination parent cannot be prepared without following a symlink."); }
   const outputPath = resolve(parent, basename(outputLocator)), manifestPath = resolve(parent, basename(manifestLocator));
+  let parentSnapshot: DirectorySnapshot;
   try {
+    const initialParent = await lstat(parent, { bigint: true });
+    if (!initialParent.isDirectory() || initialParent.isSymbolicLink()) {
+      footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the extraction destination parent is not one direct regular directory.");
+    }
+    parentSnapshot = directorySnapshot(initialParent);
     if (await optionalLstat(outputPath) || await optionalLstat(manifestPath)) {
       footageFail("CUT_FOOTAGE_OUTPUT_EXISTS", "$.outputLocator", "the footage output or its manifest already exists.");
+    }
+    const finalParent = await lstat(parent, { bigint: true });
+    if (!sameDirectory(finalParent, parentSnapshot)) {
+      footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the extraction destination parent changed while it was prepared.");
     }
   } catch (error) {
     if (error instanceof CutFootageError) throw error;
     return footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the extraction destination leaves cannot be inspected safely.");
   }
-  return Object.freeze({ outputLocator, manifestLocator, outputPath, manifestPath, parent });
+  return Object.freeze({ outputLocator, manifestLocator, outputPath, manifestPath, parent, parentSnapshot });
+}
+
+async function assertDestinationParent(destination: Awaited<ReturnType<typeof prepareDestination>>) {
+  try {
+    const current = await lstat(destination.parent, { bigint: true });
+    if (!sameDirectory(current, destination.parentSnapshot)) {
+      footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the extraction destination parent changed during staging or publication.");
+    }
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the extraction destination parent cannot be revalidated safely.");
+  }
 }
 
 function ffmpegVersion(stdout: string) {
@@ -315,18 +389,29 @@ async function rollbackOwnedPair(entries: readonly Readonly<{ path: string; held
   if (uncertain) footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "a stale extraction could not be rolled back without touching a foreign destination.");
 }
 
+async function loadExtractionReports(projectRoot: string, searchLocator: string) {
+  try {
+    const search = await loadCutFootageSearchFile(await resolveProjectFile(projectRoot, searchLocator));
+    const index = await loadCutFootageIndexFile(await resolveProjectFile(projectRoot, search.indexLocator));
+    validateCutFootageSearchAgainstIndex(index, search);
+    return Object.freeze({ search, index });
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_INDEX_STALE", "$.searchSha256", "the search report or its exact index cannot be loaded from bounded project files.");
+  }
+}
+
 /** Extract one exact search match into a verified create-only candidate pair. */
-export async function extractProjectFootage(options: ExtractProjectFootageOptions): Promise<ExtractProjectFootageResult> {
+async function extractProjectFootageOperation(options: ExtractProjectFootageOptions): Promise<ExtractProjectFootageResult> {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     return footageFail("CUT_FOOTAGE_MATCH", "$", "must be one footage extraction request.");
   }
-  if (options.signal?.aborted) footageFail("CUT_FOOTAGE_PUBLISH", "$signal", "the footage extraction was cancelled.");
+  abortIfRequested(options.signal);
   const projectRoot = await realpath(resolve(options.projectRoot));
   const searchLocator = validateProjectLocator(options.searchLocator, "footage search locator");
   const outputLocator = validateProjectLocator(options.outputLocator, "footage output locator");
-  const search = await loadCutFootageSearchFile(await resolveProjectFile(projectRoot, searchLocator));
-  const index = await loadCutFootageIndexFile(await resolveProjectFile(projectRoot, search.indexLocator));
-  validateCutFootageSearchAgainstIndex(index, search);
+  const { search, index } = await loadExtractionReports(projectRoot, searchLocator);
+  abortIfRequested(options.signal);
   const match = selectMatch(search, options.selector);
   const indexedSource = index.sources.find((source) => source.locator === match.sourceSelection.locator);
   const indexedStream = indexedSource?.streams.find((stream) => stream.index === match.sourceSelection.streamIndex);
@@ -335,7 +420,7 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
   }
   const destination = await prepareDestination(projectRoot, outputLocator);
   const source = await openHeldSource(projectRoot, match.sourceSelection.locator);
-  let stageDirectory: string | undefined, heldOutput: HeldFile | undefined, heldManifest: HeldFile | undefined;
+  let stageDirectory: HeldDirectory | undefined, heldOutput: HeldFile | undefined, heldManifest: HeldFile | undefined;
   try {
     await assertHeldSourceIdentity(source, indexedSource);
     await recheckReports(projectRoot, searchLocator, search, index);
@@ -365,11 +450,14 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
     let outputBytes: CutByteProbe | undefined, outputMedia: CutMediaProbe | undefined, outputCadence: Awaited<ReturnType<typeof probeProjectDecodedVideoCadence>> | undefined;
     let version = "", ffmpegArguments: string[] = [], stageOutput = "", stageManifest = "";
     try {
-      initialBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumExtractBytes });
-      initialMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumExtractBytes }, { ffprobe: ffprobe.executablePath }, {
+      await runExtractionHook(options.signal, options.__testHooks?.beforeSourceProbe, { maxFileBytes: maximumIndexedSourceBytes });
+      initialBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
+      abortIfRequested(options.signal);
+      initialMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
         authority: ffprobe, collector: ffprobeCollector,
         context: mediaContext(0, "media-metadata", indexedSource),
       });
+      abortIfRequested(options.signal);
       normalizeSourceProbe(initialBytes, initialMedia, indexedSource);
       await assertHeldSourceIdentity(source, indexedSource);
       const currentStream = initialMedia.streams.find((stream) => stream.index === match.sourceSelection.streamIndex && stream.type === "video");
@@ -377,16 +465,48 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
         || compareRational(currentStream.duration, indexedSource.duration) !== 0) {
         footageFail("CUT_FOOTAGE_INDEX_STALE", "$.sourceSelection.streamIndex", "the selected video stream type, rate, or duration changed.");
       }
+      let sourceCadence: Awaited<ReturnType<typeof probeProjectDecodedVideoCadence>>;
+      try {
+        sourceCadence = await probeProjectDecodedVideoCadence(
+          projectRoot,
+          indexedSource.locator,
+          initialMedia,
+          currentStream.index,
+          { maxFileBytes: maximumIndexedSourceBytes },
+          { ffprobe: ffprobe.executablePath },
+          {
+            authority: ffprobe, collector: ffprobeCollector,
+            context: mediaContext(1, "decoded-video-cadence", indexedSource, currentStream.index),
+          },
+        );
+        const sourceCadenceDuration = decodedVideoCadenceDuration(sourceCadence, currentStream);
+        if (compareRational(sourceCadenceDuration, indexedSource.duration) !== 0
+          || endFrameExclusive > BigInt(sourceCadence.frameCount)) {
+          footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.sourceSelection.streamIndex", "the selected source decoded cadence does not bind its indexed frame extent.");
+        }
+      } catch (error) {
+        if (error instanceof CutFootageError) throw error;
+        footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.sourceSelection.streamIndex", "the selected source has no exact constant decoded-video cadence for frame-index extraction.");
+      }
+      abortIfRequested(options.signal);
       const versionCapture = await runBoundReferenceFfmpegCapture(ffmpeg.executablePath, ["-version"], 30_000, { stdoutBytes: 16_000, stderrBytes: 16_000, totalBytes: 32_000 }, {
         authority: ffmpeg, collector: ffmpegCollector,
         context: mediaContext(0, "toolchain-version", indexedSource),
       }, { signal: options.signal, terminateProcessTree: true });
       version = ffmpegVersion(versionCapture.stdout);
 
-      stageDirectory = await mkdtemp(resolve(destination.parent, `.${basename(outputLocator)}.cut-footage-staging-`));
+      await assertDestinationParent(destination);
+      await runExtractionHook(options.signal, options.__testHooks?.beforeStage, { parent: destination.parent });
+      await assertDestinationParent(destination);
+      const stagePath = await mkdtemp(resolve(destination.parent, `.${basename(outputLocator)}.cut-footage-staging-`));
+      const stageMetadata = await lstat(stagePath, { bigint: true });
+      if (!stageMetadata.isDirectory() || stageMetadata.isSymbolicLink()) {
+        footageFail("CUT_FOOTAGE_PUBLISH", "$.output", "the private extraction staging root is not one direct directory.");
+      }
+      stageDirectory = Object.freeze({ path: stagePath, snapshot: directorySnapshot(stageMetadata) });
       const extension = outputLocator.toLowerCase().endsWith(".mov") ? "mov" : "mp4";
-      stageOutput = resolve(stageDirectory, `candidate.${extension}`);
-      stageManifest = resolve(stageDirectory, "candidate.cut-footage.json");
+      stageOutput = resolve(stageDirectory.path, `candidate.${extension}`);
+      stageManifest = resolve(stageDirectory.path, "candidate.cut-footage.json");
       const stageLocator = relative(projectRoot, stageOutput).split(sep).join("/");
       const filter = `[0:${currentStream.index}]trim=start_frame=${startFrameIndex}:end_frame=${endFrameExclusive},setpts=PTS-STARTPTS[v]`;
       ffmpegArguments = [
@@ -399,7 +519,7 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
         authority: ffmpeg, collector: ffmpegCollector,
         context: mediaContext(1, "footage-range-extract", indexedSource, currentStream.index),
       }, { signal: options.signal, inheritedFileDescriptors: [source.handle.fd], terminateProcessTree: true });
-      await options.__testHooks?.afterEncode?.({ path: stageOutput, arguments: Object.freeze([...ffmpegArguments]) });
+      await runExtractionHook(options.signal, options.__testHooks?.afterEncode, { path: stageOutput, arguments: Object.freeze([...ffmpegArguments]) });
       heldOutput = await openHeldRegular(stageOutput);
       const heldStageSha = await hashHeldFile(heldOutput);
       const heldStageBytes = Number(heldOutput.snapshot.size);
@@ -408,9 +528,10 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
       }
       outputBytes = await probeProjectBytes(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes });
       if (outputBytes.file.bytes !== heldStageBytes || outputBytes.file.sha256 !== heldStageSha) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed during byte verification.");
+      abortIfRequested(options.signal);
       outputMedia = await probeProjectMedia(projectRoot, stageLocator, { maxFileBytes: maximumExtractBytes }, { ffprobe: ffprobe.executablePath }, {
         authority: ffprobe, collector: ffprobeCollector,
-        context: mediaContext(1, "media-metadata", outputBytes.file, undefined, "proxy"),
+        context: mediaContext(2, "media-metadata", outputBytes.file, undefined, "proxy"),
       });
       if (outputMedia.streams.length !== 1) footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.output.streams", "the staged output must contain exactly one public video stream.");
       const outputStream = outputMedia.streams[0];
@@ -421,37 +542,44 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
       }
       outputCadence = await probeProjectDecodedVideoCadence(projectRoot, stageLocator, outputMedia, 0, {}, { ffprobe: ffprobe.executablePath }, {
         authority: ffprobe, collector: ffprobeCollector,
-        context: mediaContext(2, "decoded-video-cadence", outputBytes.file, 0, "proxy"),
+        context: mediaContext(3, "decoded-video-cadence", outputBytes.file, 0, "proxy"),
       });
       const outputDuration = decodedVideoCadenceDuration(outputCadence, outputStream);
       if (BigInt(outputCadence.frameCount) !== expectedFrames
         || compareRational(outputDuration, subtractRational(clamped.range.end, clamped.range.start)) !== 0) {
         footageFail("CUT_FOOTAGE_RANGE", "$.output", "the decoded output frame count or exact duration differs from the selected range.");
       }
-      const postBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumExtractBytes });
-      const postMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumExtractBytes }, { ffprobe: ffprobe.executablePath }, {
+      abortIfRequested(options.signal);
+      const postBytes = await probeProjectBytes(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes });
+      const postMedia = await probeProjectMedia(projectRoot, indexedSource.locator, { maxFileBytes: maximumIndexedSourceBytes }, { ffprobe: ffprobe.executablePath }, {
         authority: ffprobe, collector: ffprobeCollector,
-        context: mediaContext(3, "media-metadata", indexedSource),
+        context: mediaContext(4, "media-metadata", indexedSource),
       });
       normalizeSourceProbe(postBytes, postMedia, indexedSource);
       if (!same(postBytes, initialBytes) || !same(postMedia, initialMedia)) footageFail("CUT_FOOTAGE_INDEX_STALE", "$.sourceSelection", "the source probe changed during extraction.");
       await assertHeldSourceIdentity(source, indexedSource);
-      await ffmpeg.verify(); await ffprobe.verify();
-      await ffmpegCollector.seal(); await ffprobeCollector.seal();
+      abortIfRequested(options.signal);
+      await ffmpeg.verify(); abortIfRequested(options.signal);
+      await ffprobe.verify(); abortIfRequested(options.signal);
+      await ffmpegCollector.seal(); abortIfRequested(options.signal);
+      await ffprobeCollector.seal(); abortIfRequested(options.signal);
     } catch (error) { operationError = error; }
     if (operationError !== undefined) {
       await Promise.allSettled([ffmpegCollector.seal(), ffprobeCollector.seal()]);
+      abortIfRequested(options.signal);
       if (operationError instanceof CutFootageError) throw operationError;
       footageFail("CUT_FOOTAGE_UNSUPPORTED_MEDIA", "$.sourceSelection", "the bound extraction toolchain could not produce a verified exact clip.");
     }
     if (!initialMedia || !outputBytes || !outputMedia || !outputCadence || !heldOutput || !stageOutput || !stageManifest || !version) {
       footageFail("CUT_FOOTAGE_PUBLISH", "$.output", "the extraction did not produce complete verification evidence.");
     }
-    await options.__testHooks?.afterVerification?.({ path: stageOutput });
+    await runExtractionHook(options.signal, options.__testHooks?.afterVerification, { path: stageOutput });
     await assertHeldSourceIdentity(source, indexedSource);
+    abortIfRequested(options.signal);
     await assertHeldPath(heldOutput);
     if (await hashHeldFile(heldOutput) !== outputBytes.file.sha256) footageFail("CUT_FOOTAGE_PUBLISH", "$.output.sha256", "the staged output changed after verification.");
     await recheckReports(projectRoot, searchLocator, search, index);
+    abortIfRequested(options.signal);
 
     const outputStreams = Object.freeze(outputMedia.streams.map((stream) => Object.freeze({
       index: stream.index, type: stream.type === "audio" ? "audio" as const : "video" as const, codec: stream.codec,
@@ -470,26 +598,36 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
     const extractSha256 = createHash("sha256").update(stableJsonStringify(body)).digest("hex");
     const manifestBytes = Buffer.from(`${stableJsonStringify({ ...body, extractSha256 })}\n`, "utf8");
     const manifest = validateCutFootageExtractAgainstSearch(search, parseCutFootageExtract(manifestBytes));
+    abortIfRequested(options.signal);
     await writeFile(stageManifest, manifestBytes, { flag: "wx", mode: 0o600 });
+    abortIfRequested(options.signal);
     heldManifest = await openHeldRegular(stageManifest);
     const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
     if (await hashHeldFile(heldManifest) !== manifestSha256) {
       footageFail("CUT_FOOTAGE_PUBLISH", "$.extractSha256", "the staged extraction manifest changed before publication.");
     }
+    abortIfRequested(options.signal);
     const verifiedOutput = heldOutput, verifiedManifest = heldManifest;
     const assertPublicationInputs = async () => {
+      abortIfRequested(options.signal);
       await Promise.all([
         assertHeldPath(source), assertLinkedHeldBytes(verifiedOutput, outputBytes.file.sha256),
         assertLinkedHeldBytes(verifiedManifest, manifestSha256),
-        recheckReports(projectRoot, searchLocator, search, index),
+        recheckReports(projectRoot, searchLocator, search, index), assertDestinationParent(destination),
       ]);
+      abortIfRequested(options.signal);
     };
     const guardedHooks: StagedFileTransactionTestHooks = Object.freeze({
       ...(options.publicationHooks?.device === undefined ? {} : { device: options.publicationHooks.device }),
       async fault(point) {
-        if (point.phase === "promotion") await assertPublicationInputs();
+        if (point.phase !== "promotion") {
+          await options.publicationHooks?.fault?.(point);
+          return;
+        }
+        await assertPublicationInputs();
         await options.publicationHooks?.fault?.(point);
-        if (point.phase === "promotion") await assertPublicationInputs();
+        abortIfRequested(options.signal);
+        await assertPublicationInputs();
       },
     });
     try {
@@ -509,8 +647,18 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
       footageFail("CUT_FOOTAGE_PUBLISH", "$.outputLocator", "the verified extraction pair could not be published safely.");
     }
     try {
+      abortIfRequested(options.signal);
+      await runExtractionHook(options.signal, options.__testHooks?.afterPublication, {
+        outputPath: destination.outputPath, manifestPath: destination.manifestPath,
+      });
+      await assertDestinationParent(destination);
+      await Promise.all([
+        assertLinkedHeldBytes(heldOutput, outputBytes.file.sha256, destination.outputPath),
+        assertLinkedHeldBytes(heldManifest, manifestSha256, destination.manifestPath),
+      ]);
       await assertHeldSourceIdentity(source, indexedSource);
       await recheckReports(projectRoot, searchLocator, search, index);
+      abortIfRequested(options.signal);
     } catch (error) {
       await rollbackOwnedPair([
         { path: destination.outputPath, held: heldOutput }, { path: destination.manifestPath, held: heldManifest },
@@ -520,6 +668,17 @@ export async function extractProjectFootage(options: ExtractProjectFootageOption
     return Object.freeze({ manifest, outputPath: destination.outputPath, manifestPath: destination.manifestPath });
   } finally {
     await Promise.allSettled([heldOutput?.handle.close(), heldManifest?.handle.close(), source.handle.close()]);
-    if (stageDirectory) await rm(stageDirectory, { recursive: true, force: true }).catch(() => undefined);
+    await cleanupStagingDirectory(stageDirectory);
+  }
+}
+
+
+/** Extract one exact search match while keeping every local failure inside stable footage diagnostics. */
+export async function extractProjectFootage(options: ExtractProjectFootageOptions): Promise<ExtractProjectFootageResult> {
+  try {
+    return await extractProjectFootageOperation(options);
+  } catch (error) {
+    if (error instanceof CutFootageError) throw error;
+    footageFail("CUT_FOOTAGE_PUBLISH", "$", "the footage extraction failed at a bounded local I/O boundary.");
   }
 }
