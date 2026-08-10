@@ -27,6 +27,21 @@ async function run(args: string[], cwd: string, expectedCode = 0) {
   });
 }
 
+async function runExternal(command: string, args: string[], cwd: string) {
+  return new Promise<void>((accept, reject) => {
+    const child = spawn(command, args, { cwd, shell: false, stdio: ["ignore", "ignore", "pipe"] });
+    const stderr: Buffer[] = [];
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`${command} timed out`)); }, 30_000);
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) accept();
+      else reject(new Error(`${command} exited ${code ?? signal}: ${Buffer.concat(stderr).toString("utf8")}`));
+    });
+  });
+}
+
 const source = `cut 0.4;
 project "CLI authoring review";
 import { Rect } from "cut:visual";
@@ -66,6 +81,48 @@ test("public frame, contact, and audition commands emit closed machine reports a
     const audition = JSON.parse((await run(["audition", "main.cut", "--lock", "cut.lock", "--samples", "4800:9600", "--stem", "dialogue", "--out", "review/dialogue.wav", "--json"], root)).stdout);
     assert.deepEqual({ format: audition.format, status: audition.status, artifact: audition.manifest.format, samples: audition.manifest.artifact.samples, selection: audition.manifest.selection.kind }, { format: "cut-audition-report", status: "pass", artifact: "cut-reference-audio-audition", samples: 4_800, selection: "stem" });
     assert.equal(JSON.parse(await readFile(resolve(root, "review/dialogue.wav.manifest.json"), "utf8")).range.semantics, "half-open");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("draft preview is visibly and structurally non-authoritative while exact preview bytes remain unchanged", { timeout: 180_000 }, async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "cut-cli-draft-preview-"));
+  try {
+    await writeFile(resolve(root, "main.cut"), source);
+    await run(["lock", "main.cut", "--out", "cut.lock"], root);
+    const exactBefore = JSON.parse((await run([
+      "preview", "main.cut", "--lock", "cut.lock", "--output", "out", "--range", "0s:1s", "--width", "64", "--out", "review/exact-before.mp4", "--json",
+    ], root)).stdout);
+    const draft = JSON.parse((await run([
+      "preview", "main.cut", "--lock", "cut.lock", "--output", "out", "--range", "0s:1s", "--width", "64", "--draft", "--out", "review/draft.mp4", "--json",
+    ], root)).stdout);
+    assert.deepEqual(
+      { report: draft.format, status: draft.status, manifest: draft.manifest.format, authority: draft.manifest.authority, visibleMark: draft.manifest.visibleMark },
+      { report: "cut-preview-report", status: "pass", manifest: "cut-reference-draft-preview", authority: "non-authoritative-draft", visibleMark: "CUT DRAFT pixel label" },
+    );
+    assert.deepEqual(draft.manifest.execution.omitted, [
+      "loudness-normalization",
+      "true-peak-scan",
+      "aac-delivery-verification",
+      "stems",
+      "release-manifest",
+    ]);
+    assert.deepEqual(
+      JSON.parse(await readFile(resolve(root, "review/draft.mp4.manifest.json"), "utf8")),
+      draft.manifest,
+    );
+    const rgbaPath = resolve(root, "review/draft-first.rgba");
+    await runExternal("ffmpeg", ["-hide_banner", "-loglevel", "error", "-i", "review/draft.mp4", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", rgbaPath], root);
+    const rgba = await readFile(rgbaPath), marked = (16 * 64 + 16) * 4;
+    assert.ok(rgba[marked]! > 180 && rgba[marked + 1]! < 120 && rgba[marked + 2]! > 80, "first encoded draft frame must carry the visible magenta CUT DRAFT mark");
+
+    const exactAfter = JSON.parse((await run([
+      "preview", "main.cut", "--lock", "cut.lock", "--output", "out", "--range", "0s:1s", "--width", "64", "--out", "review/exact-after.mp4", "--json",
+    ], root)).stdout);
+    assert.equal(exactAfter.manifest.artifact.sha256, exactBefore.manifest.artifact.sha256, "draft execution must not alter authoritative preview bytes");
+    const unbounded = JSON.parse((await run([
+      "preview", "main.cut", "--lock", "cut.lock", "--output", "out", "--draft", "--json",
+    ], root, 1)).stdout);
+    assert.equal(unbounded.diagnostics[0]?.code, "CUT_DRAFT_RANGE_REQUIRED");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
