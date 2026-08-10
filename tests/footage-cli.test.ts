@@ -273,9 +273,9 @@ if (!shouldHang) {
   const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000)"], {
     stdio: ["ignore", "inherit", "inherit"],
   });
-  writeFileSync(process.env.CUT_TEST_PROBE_MARKER, JSON.stringify({ wrapper: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });
   process.on("SIGTERM", () => {});
   process.on("SIGINT", () => {});
+  writeFileSync(process.env.CUT_TEST_PROBE_MARKER, JSON.stringify({ wrapper: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });
   setInterval(() => {}, 1000);
 }
 `, { flag: "wx" });
@@ -336,8 +336,9 @@ test("footage index maps cli signals to cancellation, kills its ffmpeg tree, and
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
 const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000)"], { stdio:["ignore","inherit","inherit"] });
+process.on("SIGTERM", () => {}); process.on("SIGINT", () => {});
 writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ ffmpeg:process.pid, grandchild:grandchild.pid }) + "\\n", { flag:"wx" });
-process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setInterval(() => {}, 1000);
+setInterval(() => {}, 1000);
 `);
     await chmod(ffmpeg, 0o755);
     const preload = await writeCliFixtureBackendPreload(root);
@@ -600,9 +601,9 @@ test("footage setup maps SIGINT and SIGTERM to stable cancellation, kills its np
       'import { spawn } from "node:child_process";',
       'import { writeFile } from "node:fs/promises";',
       'const grandchild = spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\",()=>{});process.on(\\"SIGINT\\",()=>{});setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "inherit"] });',
-      'await writeFile("setup-pids.json", JSON.stringify({ installer: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });',
       'process.on("SIGTERM", () => {});',
       'process.on("SIGINT", () => {});',
+      'await writeFile("setup-pids.json", JSON.stringify({ installer: process.pid, grandchild: grandchild.pid }) + "\\n", { flag: "wx" });',
       'setInterval(() => {}, 1000);',
     ].join("\n"));
     const child = spawn(process.execPath, [cli, "footage", "setup", "--backend", "local", "--json"], {

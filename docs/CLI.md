@@ -111,7 +111,9 @@ Extraction accepts a one-based rank or the report's stable match ID. Optional
 `--handles` is one exact non-negative `s` or `ms` value applied to both sides;
 when omitted, the report's handles or exact zero are used. The command
 revalidates the report and source, then publishes both the requested clip and
-`<clip>.cut-footage.json` without overwriting either existing leaf. JSON success
+`<clip>.cut-footage.json` without overwriting either existing leaf. Extraction
+is picture-only and removes source audio; CUT does not imply an audio selection
+from a visual semantic match. JSON success
 is respectively `cut-footage-local-setup-report`,
 `cut-footage-local-doctor-report`, `cut-footage-index`,
 `cut-footage-search`, and `cut-footage-extract`. Public failures use stable

@@ -50,7 +50,7 @@ const pinnedProvider = "huggingface-transformers-js";
 const pinnedModel = "Xenova/clip-vit-base-patch32";
 const pinnedRevision = "d15189d7028b43f1d3e65039190477f6af591c2a";
 const pinnedSelfTestSha256 = "ba7503358ab88be43b6e50d5d8a0f5367e22241208d832248ccb32209372aae7";
-const pinnedPackageLockSha256 = "305d9fe258383dd6ed3c55536ed19130d248c5f608ead471298f54f67f291b0c";
+const pinnedPackageLockSha256 = "737c37d79cc48493d89b32e0f2eb367377bcd915883e5988cb9e6638283a025b";
 const pinnedModelFiles = Object.freeze([
   Object.freeze({ locator: "config.json", role: "config", bytes: 4_524, sha256: "493ef57ff783e42d1530c91b53469b7fdf8db8a9c1408e86998fcb7899a4f495" }),
   Object.freeze({ locator: "onnx/text_model_quantized.onnx", role: "text-model", bytes: 64_504_507, sha256: "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a" }),
@@ -763,6 +763,8 @@ async function verifyInstalledRuntime(root: string, signal?: AbortSignal) {
   for (const [locatorValue, name, version] of [
     ["node_modules/@huggingface/transformers/package.json", "@huggingface/transformers", "4.2.0"],
     ["node_modules/onnxruntime-node/package.json", "onnxruntime-node", "1.24.3"],
+    ["node_modules/adm-zip/package.json", "adm-zip", "0.6.0"],
+    ["node_modules/sharp/package.json", "sharp", "0.35.3"],
   ] as const) {
     let parsed: unknown;
     try { parsed = parseStrictPackageJson(await readBoundedRegular(join(root, locatorValue), maximumRecipeFileBytes, signal)); }
@@ -1002,10 +1004,12 @@ async function loadRecipe(recipeRoot: string, stagingRoot: string, enforcePinned
 }
 
 function validateRecipePackages(packageJson: unknown, packageLock: unknown) {
-  const packageRecord = record(packageJson, ["name", "version", "private", "type", "engines", "dependencies"]);
+  const packageRecord = record(packageJson, ["name", "version", "private", "type", "engines", "dependencies", "overrides"]);
   const engines = record(packageRecord.engines, ["node"]), dependencies = record(packageRecord.dependencies, ["@huggingface/transformers"]);
+  const overrides = record(packageRecord.overrides, ["adm-zip", "sharp"]);
   if (packageRecord.name !== "@cut-lang/footage-local" || packageRecord.version !== "1.0.0" || packageRecord.private !== true || packageRecord.type !== "module"
-    || engines.node !== cutFootageNodeCompatibility || dependencies["@huggingface/transformers"] !== "4.2.0") mismatch("the local footage adapter package recipe is invalid.");
+    || engines.node !== cutFootageNodeCompatibility || dependencies["@huggingface/transformers"] !== "4.2.0"
+    || overrides["adm-zip"] !== "0.6.0" || overrides.sharp !== "0.35.3") mismatch("the local footage adapter package recipe is invalid.");
 
   const lockRecord = record(packageLock, ["name", "version", "lockfileVersion", "requires", "packages"]);
   if (lockRecord.name !== packageRecord.name || lockRecord.version !== packageRecord.version || lockRecord.lockfileVersion !== 3 || lockRecord.requires !== true
@@ -1025,9 +1029,12 @@ function validateRecipePackages(packageJson: unknown, packageLock: unknown) {
     || !same(root.dependencies, dependencies) || (root.engines !== undefined && !same(root.engines, engines))) mismatch("the local footage adapter lock root is invalid.");
   const transformers = packages["node_modules/@huggingface/transformers"] as Record<string, unknown> | undefined;
   const ort = packages["node_modules/onnxruntime-node"] as Record<string, unknown> | undefined;
+  const admZip = packages["node_modules/adm-zip"] as Record<string, unknown> | undefined;
+  const sharp = packages["node_modules/sharp"] as Record<string, unknown> | undefined;
   const transformerDependencies = transformers?.dependencies && typeof transformers.dependencies === "object" && !Array.isArray(transformers.dependencies)
     ? transformers.dependencies as Record<string, unknown> : {};
-  if (transformers?.version !== "4.2.0" || ort?.version !== "1.24.3" || transformerDependencies["onnxruntime-node"] !== "1.24.3") mismatch("the local footage adapter lock is not pinned to its verified runtime.");
+  if (transformers?.version !== "4.2.0" || ort?.version !== "1.24.3" || transformerDependencies["onnxruntime-node"] !== "1.24.3"
+    || admZip?.version !== "0.6.0" || sharp?.version !== "0.35.3") mismatch("the local footage adapter lock is not pinned to its verified runtime.");
 }
 
 /** Publishes one verified immutable payload through a single create-only relative symlink. */

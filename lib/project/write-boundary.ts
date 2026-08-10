@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats, Stats } from "node:fs";
-import { link, lstat, mkdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { constants, type BigIntStats, type Stats } from "node:fs";
+import { link, lstat, mkdir, open, readlink, realpath, rename, rm, symlink, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { boundedDiagnosticString } from "../core/stable";
 import { validateProjectLocator } from "./manifest";
@@ -402,12 +402,38 @@ async function invokeFault(
   });
 }
 
+async function retainPreparedStageHandles(prepared: readonly PreparedPublication[]) {
+  const handles = new Map<string, FileHandle>();
+  let activePath: string | undefined;
+  try {
+    for (const entry of prepared) {
+      if (!entry.staged || !entry.stagedSnapshot) continue;
+      activePath = entry.staged;
+      const handle = await open(entry.staged, constants.O_RDONLY | constants.O_NOFOLLOW);
+      handles.set(entry.destination, handle);
+      const [handleMetadata, pathMetadata] = await Promise.all([
+        handle.stat({ bigint: true }),
+        lstat(entry.staged, { bigint: true }),
+      ]);
+      if (!sameSnapshot(handleMetadata, entry.stagedSnapshot) || !sameSnapshot(pathMetadata, entry.stagedSnapshot)
+        || !sameInteger(handleMetadata.dev, pathMetadata.dev) || !sameInteger(handleMetadata.ino, pathMetadata.ino)) {
+        throw new Error(`staged file changed while retaining its publication handle (${entry.staged})`);
+      }
+    }
+    return handles;
+  } catch (error) {
+    await Promise.allSettled([...handles.values()].map((handle) => handle.close()));
+    preflightFailure(`could not retain staged-file authority before publication (${errorCode(error) ?? "UNKNOWN"}).`, activePath, error);
+  }
+}
+
 async function rollbackStagedFileTransaction(
   promoted: readonly PreparedPublication[],
   backedUp: readonly PreparedPublication[],
   ordered: readonly PreparedPublication[],
   hooks: StagedFileTransactionTestHooks,
   backupSnapshots: ReadonlyMap<string, StagedFileDestinationSnapshot>,
+  retainedStageHandles: ReadonlyMap<string, FileHandle>,
 ) {
   const failures: Array<{ error: unknown; path: string }> = [];
   const indexes = new Map(ordered.map((entry, index) => [entry.destination, index]));
@@ -419,6 +445,12 @@ async function rollbackStagedFileTransaction(
       const destinationMetadata = await optionalEntry(entry.destination);
       if (!destinationMetadata) throw new Error(`promoted destination disappeared before rollback (${entry.destination})`);
       if (!sameSnapshot(destinationMetadata, entry.stagedSnapshot)) throw new Error(`promoted destination inode changed before rollback (${entry.destination})`);
+      const retainedHandle = retainedStageHandles.get(entry.destination);
+      if (!retainedHandle) throw new Error(`promoted publication has no retained authority handle (${entry.destination})`);
+      const retainedMetadata = await retainedHandle.stat({ bigint: true });
+      if (!sameInteger(destinationMetadata.dev, retainedMetadata.dev) || !sameInteger(destinationMetadata.ino, retainedMetadata.ino)) {
+        throw new Error(`promoted destination no longer matches its retained authority handle (${entry.destination})`);
+      }
       if (await optionalEntry(entry.staged)) throw new Error(`staged path appeared before promoted rollback (${entry.staged})`);
       await link(entry.destination, entry.staged);
       const restoredStage = await lstat(entry.staged);
@@ -477,79 +509,84 @@ async function executeStagedFileTransaction(
     if (error instanceof StagedFileTransactionError) throw error;
     throw new StagedFileTransactionError("CUT_PUBLISH_PREFLIGHT", `staged-file preflight failed (${errorCode(error) ?? "UNKNOWN"}).`, undefined, { cause: error });
   }
+  const retainedStageHandles = await retainPreparedStageHandles(prepared);
 
-  const backedUp: PreparedPublication[] = [];
-  const promoted: PreparedPublication[] = [];
-  const backupSnapshots = new Map<string, StagedFileDestinationSnapshot>();
-  let active = prepared[0];
-  let verifierFailed = false;
-  const verify = async (phase: StagedFileTransactionVerificationPhase) => {
-    if (!verifier) return;
-    try { await verifier(phase); }
-    catch (error) { verifierFailed = true; throw error; }
-  };
   try {
-    for (const [index, entry] of prepared.entries()) {
-      active = entry;
-      if (!entry.destinationSnapshot) continue;
-      await invokeFault(hooks, "backup", "before", index, entry);
-      const current = await optionalEntry(entry.destination);
-      if (!current) throw new Error(`destination disappeared before backup (${entry.destination})`);
-      if (!sameSnapshot(current, entry.destinationSnapshot)) throw new Error(`destination changed before backup (${entry.destination})`);
-      if (entry.expectedDestinationSnapshot && !await pathMatchesExpectedDestination(entry.destination, entry.expectedDestinationSnapshot)) {
-        throw new Error(`destination content changed before backup (${entry.destination})`);
+    const backedUp: PreparedPublication[] = [];
+    const promoted: PreparedPublication[] = [];
+    const backupSnapshots = new Map<string, StagedFileDestinationSnapshot>();
+    let active = prepared[0];
+    let verifierFailed = false;
+    const verify = async (phase: StagedFileTransactionVerificationPhase) => {
+      if (!verifier) return;
+      try { await verifier(phase); }
+      catch (error) { verifierFailed = true; throw error; }
+    };
+    try {
+      for (const [index, entry] of prepared.entries()) {
+        active = entry;
+        if (!entry.destinationSnapshot) continue;
+        await invokeFault(hooks, "backup", "before", index, entry);
+        const current = await optionalEntry(entry.destination);
+        if (!current) throw new Error(`destination disappeared before backup (${entry.destination})`);
+        if (!sameSnapshot(current, entry.destinationSnapshot)) throw new Error(`destination changed before backup (${entry.destination})`);
+        if (entry.expectedDestinationSnapshot && !await pathMatchesExpectedDestination(entry.destination, entry.expectedDestinationSnapshot)) {
+          throw new Error(`destination content changed before backup (${entry.destination})`);
+        }
+        await rename(entry.destination, entry.backup);
+        backedUp.push(entry);
+        backupSnapshots.set(entry.destination, await snapshotStagedFileDestination(entry.backup));
+        await invokeFault(hooks, "backup", "after", index, entry);
       }
-      await rename(entry.destination, entry.backup);
-      backedUp.push(entry);
-      backupSnapshots.set(entry.destination, await snapshotStagedFileDestination(entry.backup));
-      await invokeFault(hooks, "backup", "after", index, entry);
-    }
-    await verify("before-promotion");
-    for (const [index, entry] of prepared.entries()) {
-      if (entry.action === "remove") continue;
-      active = entry;
-      await invokeFault(hooks, "promotion", "before", index, entry);
-      if (!entry.staged || !entry.stagedSnapshot) throw new Error(`replacement publication has no staged file (${entry.destination})`);
-      const currentStage = await lstat(entry.staged);
-      if (!sameSnapshot(currentStage, entry.stagedSnapshot)) throw new Error(`staged file changed before promotion (${entry.staged})`);
-      if (await optionalEntry(entry.destination)) throw new Error(`destination appeared before promotion (${entry.destination})`);
-      await rename(entry.staged, entry.destination);
-      promoted.push(entry);
-      await invokeFault(hooks, "promotion", "after", index, entry);
-    }
-    await verify("before-finalize");
-  } catch (commitError) {
-    const rollbackFailures = await rollbackStagedFileTransaction(promoted, backedUp, prepared, hooks, backupSnapshots);
-    if (rollbackFailures.length) {
-      const first = rollbackFailures[0];
+      await verify("before-promotion");
+      for (const [index, entry] of prepared.entries()) {
+        if (entry.action === "remove") continue;
+        active = entry;
+        await invokeFault(hooks, "promotion", "before", index, entry);
+        if (!entry.staged || !entry.stagedSnapshot) throw new Error(`replacement publication has no staged file (${entry.destination})`);
+        const currentStage = await lstat(entry.staged);
+        if (!sameSnapshot(currentStage, entry.stagedSnapshot)) throw new Error(`staged file changed before promotion (${entry.staged})`);
+        if (await optionalEntry(entry.destination)) throw new Error(`destination appeared before promotion (${entry.destination})`);
+        await rename(entry.staged, entry.destination);
+        promoted.push(entry);
+        await invokeFault(hooks, "promotion", "after", index, entry);
+      }
+      await verify("before-finalize");
+    } catch (commitError) {
+      const rollbackFailures = await rollbackStagedFileTransaction(promoted, backedUp, prepared, hooks, backupSnapshots, retainedStageHandles);
+      if (rollbackFailures.length) {
+        const first = rollbackFailures[0];
+        throw new StagedFileTransactionError(
+          "CUT_PUBLISH_ROLLBACK",
+          `publication failed and rollback could not fully restore ${boundedDiagnosticString(first.path)} (${errorCode(first.error) ?? "UNKNOWN"}).`,
+          first.path,
+          { cause: commitError },
+        );
+      }
+      if (verifierFailed) throw commitError;
       throw new StagedFileTransactionError(
-        "CUT_PUBLISH_ROLLBACK",
-        `publication failed and rollback could not fully restore ${boundedDiagnosticString(first.path)} (${errorCode(first.error) ?? "UNKNOWN"}).`,
-        first.path,
+        "CUT_PUBLISH_COMMIT",
+        `publication failed at ${boundedDiagnosticString(active.destination)}; every prior destination was restored (${errorCode(commitError) ?? "UNKNOWN"}).`,
+        active.destination,
         { cause: commitError },
       );
     }
-    if (verifierFailed) throw commitError;
-    throw new StagedFileTransactionError(
-      "CUT_PUBLISH_COMMIT",
-      `publication failed at ${boundedDiagnosticString(active.destination)}; every prior destination was restored (${errorCode(commitError) ?? "UNKNOWN"}).`,
-      active.destination,
-      { cause: commitError },
-    );
-  }
 
-  // The publication is committed once every promotion succeeds. Backup
-  // cleanup is deliberately outside the rollback window: multiple directory
-  // entries (especially across filesystems) have no global atomic commit.
-  for (const entry of backedUp) {
-    try {
-      const backup = await optionalEntry(entry.backup);
-      if (!entry.destinationSnapshot || !backup || !sameSnapshot(backup, entry.destinationSnapshot)) continue;
-      const backupSnapshot = backupSnapshots.get(entry.destination);
-      if (backupSnapshot && !await pathMatchesExpectedDestination(entry.backup, backupSnapshot)) continue;
-      await rm(entry.backup, { force: true });
+    // The publication is committed once every promotion succeeds. Backup
+    // cleanup is deliberately outside the rollback window: multiple directory
+    // entries (especially across filesystems) have no global atomic commit.
+    for (const entry of backedUp) {
+      try {
+        const backup = await optionalEntry(entry.backup);
+        if (!entry.destinationSnapshot || !backup || !sameSnapshot(backup, entry.destinationSnapshot)) continue;
+        const backupSnapshot = backupSnapshots.get(entry.destination);
+        if (backupSnapshot && !await pathMatchesExpectedDestination(entry.backup, backupSnapshot)) continue;
+        await rm(entry.backup, { force: true });
+      }
+      catch { /* A stale hidden backup is safer than reporting a committed set as failed. */ }
     }
-    catch { /* A stale hidden backup is safer than reporting a committed set as failed. */ }
+  } finally {
+    await Promise.allSettled([...retainedStageHandles.values()].map((handle) => handle.close()));
   }
 }
 

@@ -48,13 +48,16 @@ async function fakeRecipe() {
     name: "@cut-lang/footage-local", version: "1.0.0", private: true, type: "module",
     engines: { node: ">=20.19.0 <21 || >=24.0.0 <25" },
     dependencies: { "@huggingface/transformers": "4.2.0" },
+    overrides: { "adm-zip": "0.6.0", sharp: "0.35.3" },
   };
   const packageLock = {
     name: "@cut-lang/footage-local", version: "1.0.0", lockfileVersion: 3, requires: true,
     packages: {
       "": { name: "@cut-lang/footage-local", version: "1.0.0", dependencies: { "@huggingface/transformers": "4.2.0" } },
       "node_modules/@huggingface/transformers": { version: "4.2.0", dependencies: { "onnxruntime-node": "1.24.3" } },
+      "node_modules/adm-zip": { version: "0.6.0" },
       "node_modules/onnxruntime-node": { version: "1.24.3" },
+      "node_modules/sharp": { version: "0.35.3" },
     },
   };
   await Promise.all([
@@ -81,11 +84,15 @@ function fakeOperations(model: Awaited<ReturnType<typeof fakeRecipe>>["model"], 
     async installRuntime({ stagingRoot }) {
       await mkdir(join(stagingRoot, "node_modules/@huggingface/transformers"), { recursive: true });
       await mkdir(join(stagingRoot, "node_modules/onnxruntime-node"), { recursive: true });
+      await mkdir(join(stagingRoot, "node_modules/adm-zip"), { recursive: true });
+      await mkdir(join(stagingRoot, "node_modules/sharp"), { recursive: true });
       await mkdir(join(stagingRoot, "node_modules/semver/bin"), { recursive: true });
       await mkdir(join(stagingRoot, "node_modules/.bin"), { recursive: true });
       await Promise.all([
         writeFile(join(stagingRoot, "node_modules/@huggingface/transformers/package.json"), '{"name":"@huggingface/transformers","version":"4.2.0"}\n'),
         writeFile(join(stagingRoot, "node_modules/onnxruntime-node/package.json"), '{"name":"onnxruntime-node","version":"1.24.3"}\n'),
+        writeFile(join(stagingRoot, "node_modules/adm-zip/package.json"), '{"name":"adm-zip","version":"0.6.0"}\n'),
+        writeFile(join(stagingRoot, "node_modules/sharp/package.json"), '{"name":"sharp","version":"0.35.3"}\n'),
         writeFile(join(stagingRoot, "node_modules/semver/bin/semver.js"), "fixture semver\n"),
       ]);
       await symlink("../semver/bin/semver.js", join(stagingRoot, "node_modules/.bin/semver"));
@@ -368,7 +375,11 @@ test("locked npm runner kills and drains output overflow and cancellation", asyn
   });
   let pid: number | undefined;
   for (let attempt = 0; attempt < 100 && pid === undefined; attempt += 1) {
-    try { pid = Number(await readFile(pidPath, "utf8")); } catch { await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
+    try {
+      const candidate = Number(await readFile(pidPath, "utf8"));
+      if (Number.isSafeInteger(candidate) && candidate > 0) pid = candidate;
+    } catch { /* The create-and-write marker may not exist yet. */ }
+    if (pid === undefined) await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
   }
   assert.ok(pid);
   controller.abort();
@@ -420,8 +431,9 @@ test("a TERM-responsive failed npm install settles on close and never signals it
   await mkdir(stagingRoot);
   await writeFile(npmCliPath, [
     'import { writeFile } from "node:fs/promises";',
-    'await writeFile("responsive.pid", String(process.pid));',
     'process.on("SIGTERM", () => process.exit(23));',
+    'process.on("SIGINT", () => process.exit(23));',
+    'await writeFile("responsive.pid", String(process.pid));',
     'setInterval(() => {}, 1000);',
   ].join("\n"));
   const environment = Object.freeze({
@@ -434,8 +446,11 @@ test("a TERM-responsive failed npm install settles on close and never signals it
   });
   let pid: number | undefined;
   for (let attempt = 0; attempt < 200 && pid === undefined; attempt += 1) {
-    try { pid = Number(await readFile(pidPath, "utf8")); }
-    catch { await new Promise((accept) => setTimeout(accept, 5)); }
+    try {
+      const candidate = Number(await readFile(pidPath, "utf8"));
+      if (Number.isSafeInteger(candidate) && candidate > 0) pid = candidate;
+    } catch { /* The create-and-write marker may not exist yet. */ }
+    if (pid === undefined) await new Promise((accept) => setTimeout(accept, 5));
   }
   assert.ok(pid);
   const originalKill = process.kill.bind(process), groupSignals: NodeJS.Signals[] = [];
@@ -591,6 +606,68 @@ test("setup refuses package scripts and removes the bounded recipe payload witho
   assert.equal(names.includes("local-clip-v1"), false);
   assert.equal(names.some((name) => name.endsWith(".lock")), false);
   assert.equal(names.filter((name) => name.startsWith(".local-clip-v1.payload-")).length, 0);
+});
+
+test("setup refuses security-override or resolved runtime drift before invoking npm", async () => {
+  type RecipeDocuments = {
+    packageJson: { overrides: Record<string, string> };
+    packageLock: { packages: Record<string, { version?: string }> };
+  };
+  const mutations: readonly { name: string; apply(documents: RecipeDocuments): void }[] = [
+    { name: "sharp override", apply: ({ packageJson }) => { packageJson.overrides.sharp = "0.34.5"; } },
+    { name: "adm-zip override", apply: ({ packageJson }) => { packageJson.overrides["adm-zip"] = "0.5.18"; } },
+    { name: "resolved sharp", apply: ({ packageLock }) => { packageLock.packages["node_modules/sharp"]!.version = "0.34.5"; } },
+    { name: "resolved adm-zip", apply: ({ packageLock }) => { packageLock.packages["node_modules/adm-zip"]!.version = "0.5.18"; } },
+  ];
+  for (const mutation of mutations) {
+    const recipe = await fakeRecipe();
+    const packageJsonPath = join(recipe.root, "package.json"), packageLockPath = join(recipe.root, "package-lock.json");
+    const documents: RecipeDocuments = {
+      packageJson: JSON.parse(await readFile(packageJsonPath, "utf8")),
+      packageLock: JSON.parse(await readFile(packageLockPath, "utf8")),
+    };
+    mutation.apply(documents);
+    await Promise.all([
+      writeFile(packageJsonPath, `${JSON.stringify(documents.packageJson)}\n`),
+      writeFile(packageLockPath, `${JSON.stringify(documents.packageLock)}\n`),
+    ]);
+    const home = join(await mkdtemp(join(tmpdir(), `cut-footage-${mutation.name.replaceAll(" ", "-")}-`)), "footage");
+    let installed = false;
+    const operations = fakeOperations(recipe.model);
+    await assert.rejects(setupCutFootageLocalBackend({
+      backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+      platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+      operations: { ...operations, async installRuntime() { installed = true; } },
+    }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
+    assert.equal(installed, false, mutation.name);
+  }
+});
+
+test("setup refuses installed security-override drift before launching the sidecar", async () => {
+  for (const dependency of [
+    { locator: "node_modules/adm-zip/package.json", name: "adm-zip", version: "0.5.18" },
+    { locator: "node_modules/sharp/package.json", name: "sharp", version: "0.34.5" },
+  ] as const) {
+    const recipe = await fakeRecipe();
+    const home = join(await mkdtemp(join(tmpdir(), `cut-footage-installed-${dependency.name}-drift-`)), "footage");
+    const base = fakeOperations(recipe.model);
+    let started = false;
+    await assert.rejects(setupCutFootageLocalBackend({
+      backend: "local", home, recipeRoot: recipe.root, npmCliPath: join(recipe.root, "local-clip-sidecar.mjs"),
+      platform: "linux", architecture: "x64", nodeVersion: "24.15.0",
+      operations: {
+        ...base,
+        async installRuntime(request) {
+          await base.installRuntime(request);
+          await writeFile(join(request.stagingRoot, dependency.locator), `${JSON.stringify({ name: dependency.name, version: dependency.version })}\n`);
+        },
+        async startSidecar(launch) { started = true; return fakeSession(launch.expectedHandshake); },
+      },
+    }), footageError("CUT_FOOTAGE_MODEL_MISMATCH"));
+    assert.equal(started, false, dependency.name);
+    assert.equal((await readdir(home)).some((name) => name === "local-clip-v1"
+      || name.startsWith(".local-clip-v1.payload-") || name.endsWith(".lock")), false);
+  }
 });
 
 test("doctor rehashes the complete runtime, model, and adapter trees before launching inference", async () => {

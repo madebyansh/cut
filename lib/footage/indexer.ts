@@ -88,6 +88,7 @@ export type FootageIndexerTestHooks = Readonly<{
   beforeSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
   afterSourceRecheck?: (plan: FootagePlan) => void | Promise<void>;
   beforePublication?: (plan: FootagePlan) => void | Promise<void>;
+  afterFirstFullReuseSourceMetadataRecheck?: () => void | Promise<void>;
   afterFirstFullReuseOutputSeal?: () => void;
   publication?: StagedFileTransactionTestHooks;
 }>;
@@ -257,8 +258,16 @@ async function verifyPlannedSourceHashes(snapshots: ReadonlyMap<string, PlannedS
   }
 }
 
-async function verifyPlannedSourceMetadata(snapshots: ReadonlyMap<string, PlannedSourceSnapshot>) {
-  for (const snapshot of snapshots.values()) await verifySourcePath(snapshot);
+async function verifyPlannedSourceMetadata(
+  snapshots: ReadonlyMap<string, PlannedSourceSnapshot>,
+  afterFirst?: () => void | Promise<void>,
+) {
+  let index = 0;
+  for (const snapshot of snapshots.values()) {
+    await verifySourcePath(snapshot);
+    if (index === 0) await afterFirst?.();
+    index += 1;
+  }
 }
 
 function sealPlannedSourceAuthority(
@@ -328,7 +337,7 @@ async function verifyFullReuseAuthority(
   abortIfRequested(signal);
   await recheckPriorPair(prior, indexPath, vectorPath, signal);
   abortIfRequested(signal);
-  await verifyPlannedSourceMetadata(snapshots);
+  await verifyPlannedSourceMetadata(snapshots, hooks?.afterFirstFullReuseSourceMetadataRecheck);
   abortIfRequested(signal);
   sealFullReuseAuthority(prior, indexPath, vectorPath, snapshots, signal, hooks);
 }

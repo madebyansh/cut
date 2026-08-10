@@ -88,7 +88,9 @@ cut footage extract .cut/footage/search.json --match 1 --handles 1s \
 Inspect `.cut/footage/search.json` before extraction when editorial judgement
 matters. Search results are candidates, not timeline edits. Extraction writes a
 new clip plus `selects/dog.mp4.cut-footage.json`; it refuses to replace either
-leaf. Run `cut footage index` again after source bytes change, and rerun setup
+leaf. The extracted candidate is deliberately picture-only: source audio is
+removed so editorial audio must be selected and authored explicitly. Run
+`cut footage index` again after source bytes change, and rerun setup
 when doctor says the immutable backend is missing. If doctor reports an invalid
 or identity-mismatched immutable backend, point `CUT_FOOTAGE_HOME` at a new
 empty absolute directory, then run setup again; CUT deliberately does not

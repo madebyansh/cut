@@ -569,7 +569,7 @@ test("full reuse rejects a source changed after the multi-source hash pass", { t
   assert.deepEqual(await Promise.all([readFile(indexPath), readFile(vectorPath)]), before);
 });
 
-test("full reuse seals all 301 sources after a timer mutation during the final awaited boundary", { timeout: 120_000, skip: process.platform === "win32" }, async () => {
+test("full reuse seals all 301 sources after a deterministic mutation during the final awaited boundary", { timeout: 120_000, skip: process.platform === "win32" }, async () => {
   const root = join(await mkdtemp(join(tmpdir(), "cut-footage-indexer-reuse-seal-")), "project");
   await createCutProject(root, "Footage full reuse seal");
   const locators = Array.from({ length: 301 }, (_unused, index) => `media/${String(index).padStart(3, "0")}.mp4`);
@@ -583,29 +583,15 @@ test("full reuse seals all 301 sources after a timer mutation during the final a
     const indexPath = join(root, output), vectorPath = join(root, ".cut/footage/index.vectors");
     const priorPair = await Promise.all([readFile(indexPath), readFile(vectorPath)]);
     const sourcePath = join(root, locators[0]!);
-    let mutationResolve!: () => void, mutationReject!: (error: unknown) => void;
-    const mutation = new Promise<void>((resolveMutation, rejectMutation) => {
-      mutationResolve = resolveMutation;
-      mutationReject = rejectMutation;
-    });
-    try {
-      await assert.rejects(indexProjectFootage({
-        projectRoot: root, rootLocator: "media", outputLocator: output, backend: backend(script),
-        ffmpegExecutable: process.execPath,
-        __testHooks: {
-          async afterSourceRecheck() {
-            const mutator = spawn("/bin/sh", ["-c", "sleep 0.005; printf x >> \"$1\"", "cut-source-mutator", sourcePath], {
-              stdio: "ignore",
-            });
-            mutator.once("error", mutationReject);
-            mutator.once("close", (code, signal) => {
-              if (code === 0 && signal === null) mutationResolve();
-              else mutationReject(new Error(`source mutator failed with ${code ?? signal ?? "unknown status"}`));
-            });
-          },
+    await assert.rejects(indexProjectFootage({
+      projectRoot: root, rootLocator: "media", outputLocator: output, backend: backend(script),
+      ffmpegExecutable: process.execPath,
+      __testHooks: {
+        async afterFirstFullReuseSourceMetadataRecheck() {
+          await appendFile(sourcePath, Buffer.from([0]));
         },
-      }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
-    } finally { await mutation; }
+      },
+    }), (error: unknown) => error instanceof CutFootageError && error.code === "CUT_FOOTAGE_INDEX_STALE");
     assert.deepEqual(await Promise.all([readFile(indexPath), readFile(vectorPath)]), priorPair);
   } finally {
     await rm(root, { recursive: true, force: true });

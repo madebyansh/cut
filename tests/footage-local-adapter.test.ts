@@ -157,6 +157,7 @@ const expectedPackage = {
   type: "module",
   engines: { node: ">=20.19.0 <21 || >=24.0.0 <25" },
   dependencies: { "@huggingface/transformers": "4.2.0" },
+  overrides: { "adm-zip": "0.6.0", sharp: "0.35.3" },
 };
 
 const expectedModel = {
@@ -215,8 +216,10 @@ test("bundled local adapter is the exact standalone five-file recipe", async () 
     engines: { node: ">=20.19.0 <21 || >=24.0.0 <25" },
     dependencies: { "@huggingface/transformers": "4.2.0" },
   });
+  assert.equal(lock.packages["node_modules/adm-zip"].version, "0.6.0");
   assert.equal(lock.packages["node_modules/@huggingface/transformers"].version, "4.2.0");
   assert.equal(lock.packages["node_modules/onnxruntime-node"].version, "1.24.3");
+  assert.equal(lock.packages["node_modules/sharp"].version, "0.35.3");
   for (const [locator, entry] of Object.entries(lock.packages) as [string, Record<string, unknown>][]) {
     if (!locator) continue;
     assert.match(String(entry.resolved), /^https:\/\/registry\.npmjs\.org\//u);
