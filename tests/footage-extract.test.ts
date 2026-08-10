@@ -170,8 +170,18 @@ test("exact extraction reads the held source, trims by frame index, and publishe
   assert.ok(encodedArguments.includes("[0:0]trim=start_frame=15:end_frame=75,setpts=PTS-STARTPTS[v]"));
   assert.ok(encodedArguments.includes("[v]") && encodedArguments.includes("-an") && encodedArguments.includes("-sn") && encodedArguments.includes("-dn"));
   assert.ok(encodedArguments.includes("-fs") && encodedArguments.includes(String(8 * 1024 * 1024 * 1024)));
+  const rateIndex = encodedArguments.indexOf("-r");
+  const sourceRate = fixture.index.sources[0]!.streams[0]!.frameRate!;
+  assert.deepEqual(encodedArguments.slice(rateIndex, rateIndex + 4), [
+    "-r", `${sourceRate.numerator}/${sourceRate.denominator}`, "-fps_mode", "cfr",
+  ]);
   assert.equal(encodedArguments.some((argument) => argument === "-ss" || argument === "-t" || argument === "copy"), false);
   assert.equal((await readdir(join(fixture.root, "selects"))).some((name) => name.includes("staging")), false);
+
+  const { stdout: probeOutput } = await exec("ffprobe", [
+    "-v", "error", "-show_entries", "format=duration", "-of", "json", result.outputPath,
+  ]);
+  assert.equal(JSON.parse(probeOutput).format?.duration, "2.000000");
 
   const originalHashes = [
     createHash("sha256").update(outputBytes).digest("hex"),

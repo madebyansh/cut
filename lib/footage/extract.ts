@@ -538,11 +538,12 @@ async function extractProjectFootageOperation(options: ExtractProjectFootageOpti
       });
       const stageLocator = relative(projectRoot, stageOutput).split(sep).join("/");
       const filter = `[0:${currentStream.index}]trim=start_frame=${startFrameIndex}:end_frame=${endFrameExclusive},setpts=PTS-STARTPTS[v]`;
+      const outputFrameRate = `${indexedStream.frameRate.numerator}/${indexedStream.frameRate.denominator}`;
       ffmpegArguments = [
         "-nostdin", "-v", "error", "-i", "/dev/fd/3", "-filter_complex", filter,
         "-map", "[v]", "-an", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
         "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "18",
-        "-fps_mode", "passthrough", "-movflags", "+faststart", "-fs", String(maximumExtractBytes), "-f", extension, stageOutput,
+        "-r", outputFrameRate, "-fps_mode", "cfr", "-movflags", "+faststart", "-fs", String(maximumExtractBytes), "-f", extension, stageOutput,
       ];
       await runBoundReferenceFfmpeg(ffmpeg.executablePath, ffmpegArguments, maximumNativeTimeoutMs, { stderrBytes: 128_000, totalBytes: 128_000 }, {
         authority: ffmpeg, collector: ffmpegCollector,

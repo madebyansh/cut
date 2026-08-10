@@ -144,7 +144,6 @@ test("bound native process authority detects mutation during an active child and
     assert.notEqual(children[0].pid, children[1].pid);
     await writeFile(path, "#!/bin/sh\nexit 0\n");
     await chmod(path, 0o700);
-    await Promise.all(children.map(waitForClose));
     await assert.rejects(collector.seal(), executableMutationFailure);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
