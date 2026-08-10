@@ -87,6 +87,16 @@ import {
   renderReferencePreviewArtifact,
 } from "../lib/runtime/reference/authoring-review";
 import { referenceVideoColorInterpretationWarnings } from "../lib/runtime/reference/color-management";
+import {
+  collectCutFootageLocalDoctorReport,
+  createCutFootageLocalIndexBackend,
+  extractProjectFootage,
+  indexProjectFootage,
+  inspectCutFootageLocalInstall,
+  parseCutFootageHandle,
+  searchProjectFootage,
+  setupCutFootageLocalBackend,
+} from "../lib/footage";
 
 const colorsEnabled = !process.env.NO_COLOR && process.env.FORCE_COLOR !== "0" && (process.stdout.isTTY || process.stderr.isTTY);
 const color = (code: string, text: string) => colorsEnabled ? `\x1b[${code}m${text}\x1b[0m` : text;
@@ -132,6 +142,14 @@ Typed audiovisual source (canonical)
 Provenance-bearing asset discovery (candidate bytes are never trusted implicitly)
 
   cut asset search <catalog.json> --query "cargo ship" [--kind video] [--limit 20] [--json]
+
+Optional local semantic footage search (setup is the only network-bearing command)
+
+  cut footage setup --backend local [--json]
+  cut footage doctor [--json]
+  cut footage index <media-root> --out <index.json> [--json]
+  cut footage search <index.json> --query <text> --out <search.json> [--json]
+  cut footage extract <search.json> --match <rank-or-id> [--handles <time>] --out <clip.mp4> [--json]
 
 Local/file packages (no implicit registry)
 
@@ -193,6 +211,19 @@ const maximumCliStdinBytes = 8 * 1024 * 1024;
 
 function codedCliError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
+}
+
+async function withFootageSignals<T>(operation: (signal: AbortSignal) => Promise<T>) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  process.once("SIGINT", abort);
+  process.once("SIGTERM", abort);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    process.off("SIGINT", abort);
+    process.off("SIGTERM", abort);
+  }
 }
 
 async function readBoundedCliStdin() {
@@ -307,6 +338,11 @@ const cliCommandSchemas: Readonly<Record<string, CliCommandSchema>> = Object.fre
   "package-lock": schema(0, { "--project": "value", "--json": "flag" }),
   "package-verify": schema(0, { "--project": "value", "--json": "flag" }),
   "asset-search": schema(1, { "--query": "value", "--kind": "value", "--limit": "value", "--json": "flag" }, ["--query"]),
+  "footage-setup": schema(0, { "--backend": "value", "--json": "flag" }, ["--backend"]),
+  "footage-doctor": schema(0, { "--json": "flag" }),
+  "footage-index": schema(1, { "--out": "value", "--json": "flag" }, ["--out"]),
+  "footage-search": schema(1, { "--query": "value", "--out": "value", "--json": "flag" }, ["--query", "--out"]),
+  "footage-extract": schema(1, { "--match": "value", "--handles": "value", "--out": "value", "--json": "flag" }, ["--match", "--out"]),
 
   "legacy-auth": schema(1),
   "legacy-ingest": schema(1, { "--out": "value", "--transcribe": "flag" }),
@@ -330,13 +366,14 @@ function commandLabel(command: string) {
   if (command.startsWith("package-")) return `package ${command.slice("package-".length)}`;
   if (command.startsWith("agent-")) return `agent ${command.slice("agent-".length)}`;
   if (command.startsWith("asset-")) return `asset ${command.slice("asset-".length)}`;
+  if (command.startsWith("footage-")) return `footage ${command.slice("footage-".length)}`;
   return command.replace("otio-", "otio ");
 }
 
 function cliHelpReport() {
   const commands = Object.entries(cliCommandSchemas).map(([command, contract]) => ({
     command: commandLabel(command),
-    category: command.startsWith("legacy-") ? "legacy" : command.startsWith("package-") ? "package" : command.startsWith("agent-") ? "agent" : command.startsWith("otio-") ? "interchange" : "formal",
+    category: command.startsWith("legacy-") ? "legacy" : command.startsWith("package-") ? "package" : command.startsWith("agent-") ? "agent" : command.startsWith("footage-") ? "footage" : command.startsWith("otio-") ? "interchange" : "formal",
     stability: command.startsWith("legacy-") ? "legacy" : "alpha",
     positionals: contract.positionals,
     options: Object.entries(contract.options).sort(([left], [right]) => left.localeCompare(right)).map(([name, kind]) => ({ name, kind, required: contract.requiredOptions.includes(name) })),
@@ -371,6 +408,7 @@ function cliHelpReport() {
       interchange: commands.filter((command) => command.category === "interchange").length,
       package: commands.filter((command) => command.category === "package").length,
       agent: commands.filter((command) => command.category === "agent").length,
+      footage: commands.filter((command) => command.category === "footage").length,
       legacy: commands.filter((command) => command.category === "legacy").length,
     },
   };
@@ -383,6 +421,7 @@ function requestedCommandLabel() {
   if (raw === "package") return `package ${process.argv[3] ?? ""}`.trim();
   if (raw === "agent") return `agent ${process.argv[3] ?? ""}`.trim();
   if (raw === "asset") return `asset ${process.argv[3] ?? ""}`.trim();
+  if (raw === "footage") return `footage ${process.argv[3] ?? ""}`.trim();
   if (raw === "--version" || raw === "-v") return "version";
   return raw ?? "cut";
 }
@@ -518,7 +557,96 @@ async function main() {
     command = "asset-search";
     subject = process.argv[4];
   }
-  validateCliInvocation(command, process.argv.slice(command.startsWith("otio-") || command.startsWith("legacy-") || command.startsWith("package-") || command.startsWith("agent-") || command.startsWith("asset-") ? 4 : 3));
+  if (command === "footage") {
+    const footageCommands = ["setup", "doctor", "index", "search", "extract"];
+    if (!subject || !footageCommands.includes(subject)) {
+      throw new CutCliUsageError("CUTC1007", "footage", `footage needs one of: ${footageCommands.join(", ")}.`);
+    }
+    command = `footage-${subject}`;
+    subject = process.argv[4];
+  }
+  validateCliInvocation(command, process.argv.slice(command.startsWith("otio-") || command.startsWith("legacy-") || command.startsWith("package-") || command.startsWith("agent-") || command.startsWith("asset-") || command.startsWith("footage-") ? 4 : 3));
+  if (command === "footage-setup") {
+    const report = await withFootageSignals((signal) => setupCutFootageLocalBackend({ backend: option("--backend")!, signal }));
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else console.log(`${green("✓")} local footage backend ${report.status} · ${report.identity.model}`);
+    return;
+  }
+  if (command === "footage-doctor") {
+    const report = await withFootageSignals((signal) => collectCutFootageLocalDoctorReport({ signal }));
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      for (const check of report.checks) {
+        const marker = check.status === "pass" ? green("PASS") : red("FAIL");
+        console.log(`${marker} ${check.name.padEnd(22)} ${check.detail}`);
+        if (check.remedy) console.log(dim(`     ${check.remedy}`));
+      }
+    }
+    if (report.status === "fail") process.exitCode = 1;
+    return;
+  }
+  if (command === "footage-index") {
+    const indexed = await withFootageSignals(async (signal) => {
+      const backend = await createCutFootageLocalIndexBackend({ signal });
+      return indexProjectFootage({
+        projectRoot: process.cwd(),
+        rootLocator: subject!,
+        outputLocator: option("--out")!,
+        backend,
+        signal,
+      });
+    });
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(indexed.index)}\n`);
+    else {
+      console.log(`${green("✓")} ${indexed.index.sources.length} source(s) · ${indexed.index.chunks.length} chunk(s) → ${indexed.indexLocator}`);
+      console.log(dim(`  ${indexed.indexedChunkIds.length} indexed · ${indexed.reusedChunkIds.length} reused · vectors ${indexed.vectorLocator}`));
+    }
+    return;
+  }
+  if (command === "footage-search") {
+    const searched = await withFootageSignals(async (signal) => {
+      const backendInstall = await inspectCutFootageLocalInstall({ signal });
+      return searchProjectFootage({
+        projectRoot: process.cwd(),
+        indexLocator: subject!,
+        outputLocator: option("--out")!,
+        query: option("--query")!,
+        backendInstall,
+        signal,
+      });
+    });
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(searched.report)}\n`);
+    else console.log(`${green("✓")} ${searched.report.matches.length} semantic match(es) → ${option("--out")!}`);
+    return;
+  }
+  if (command === "footage-extract") {
+    const match = option("--match")!;
+    let selector: Readonly<{ rank: number }> | Readonly<{ id: string }>;
+    if (/^[0-9]+$/u.test(match)) {
+      const rank = Number(match);
+      if (!/^[1-9][0-9]*$/u.test(match) || !Number.isSafeInteger(rank)) throw new CutCliUsageError("CUTC1007", "footage extract", "--match rank must be one canonical positive safe integer.");
+      selector = Object.freeze({ rank });
+    } else {
+      if (!/^match-[a-f0-9]{64}$/u.test(match)) throw new CutCliUsageError("CUTC1007", "footage extract", "--match must be one positive rank or canonical stable match ID.");
+      selector = Object.freeze({ id: match });
+    }
+    const handleText = option("--handles");
+    const handles = handleText === undefined ? undefined : parseCutFootageHandle(handleText);
+    const extracted = await withFootageSignals((signal) => extractProjectFootage({
+      projectRoot: process.cwd(),
+      searchLocator: subject!,
+      outputLocator: option("--out")!,
+      selector,
+      signal,
+      ...(handles === undefined ? {} : { requestedHandles: Object.freeze({ head: handles, tail: handles }) }),
+    }));
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(extracted.manifest)}\n`);
+    else {
+      console.log(`${green("✓")} extracted ${extracted.manifest.matchId} → ${option("--out")!}`);
+      console.log(dim(`  ${extracted.manifestPath}`));
+    }
+    return;
+  }
   if (command === "asset-search") {
     if (!subject) throw new Error("asset search needs one catalog JSON file");
     const query = option("--query")!;

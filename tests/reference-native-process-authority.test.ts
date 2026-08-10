@@ -144,7 +144,6 @@ test("bound native process authority detects mutation during an active child and
     assert.notEqual(children[0].pid, children[1].pid);
     await writeFile(path, "#!/bin/sh\nexit 0\n");
     await chmod(path, 0o700);
-    await Promise.all(children.map(waitForClose));
     await assert.rejects(collector.seal(), executableMutationFailure);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -234,6 +233,8 @@ test("bound native process context enforces operation-specific stream-index pres
       "decoded-audio-samples",
       "audio-proxy-alignment",
       "video-proxy-alignment",
+      "footage-frame-sample",
+      "footage-range-extract",
     ].entries()) {
       await assert.rejects(
         spawnBoundReferenceNativeProcess(collector, { ...context(ordinal + 1), operation } as ReferenceNativeProcessContext, [], { shell: false, stdio: "ignore" }),
@@ -242,11 +243,22 @@ test("bound native process context enforces operation-specific stream-index pres
     }
     const child = await spawnBoundReferenceNativeProcess(
       collector,
-      { ...context(9), operation: "decoded-audio-samples", streamIndex: 0 },
+      { ...context(9), operation: "footage-frame-sample", streamIndex: 0 },
       [],
       { shell: false, stdio: "ignore" },
     );
     await waitForClose(child);
-    assert.equal((await collector.seal()).receipts[0].context.streamIndex, 0);
+    const extractChild = await spawnBoundReferenceNativeProcess(
+      collector,
+      { ...context(10), operation: "footage-range-extract", streamIndex: 1 },
+      [],
+      { shell: false, stdio: "ignore" },
+    );
+    await waitForClose(extractChild);
+    const evidence = await collector.seal();
+    assert.equal(evidence.receipts[0].context.operation, "footage-frame-sample");
+    assert.equal(evidence.receipts[0].context.streamIndex, 0);
+    assert.equal(evidence.receipts[1].context.operation, "footage-range-extract");
+    assert.equal(evidence.receipts[1].context.streamIndex, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

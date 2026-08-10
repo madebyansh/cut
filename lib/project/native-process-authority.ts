@@ -83,7 +83,9 @@ export type ReferenceNativeProcessContext = Readonly<{
     | "toolchain-version"
     | "picture-encode"
     | "picture-artifact-probe"
-    | "picture-rgba-decode";
+    | "picture-rgba-decode"
+    | "footage-frame-sample"
+    | "footage-range-extract";
   resourceId: string;
   resourceSha256: string;
   resourceBytes: number;
@@ -101,7 +103,7 @@ export type ReferenceNativeProcessLifecycleReceipt = Readonly<{
   parentPid: number;
   expectedProcessGroupId: number | null;
   childPid: number;
-  detached: false;
+  detached: boolean;
   spawned: true;
   exit: Readonly<{ code: number | null; signal: NodeJS.Signals | null }>;
   close: Readonly<{ code: number | null; signal: NodeJS.Signals | null }>;
@@ -165,6 +167,7 @@ type MutableReceipt = {
   argvSha256: string;
   parentPid: number;
   expectedProcessGroupId: number | null;
+  detached: boolean;
   childPid?: number;
   spawned: boolean;
   spawnConfirmed: boolean;
@@ -397,6 +400,8 @@ function normalizedContext(value: ReferenceNativeProcessContext) {
       "picture-encode",
       "picture-artifact-probe",
       "picture-rgba-decode",
+      "footage-frame-sample",
+      "footage-range-extract",
     ].includes(value.operation)
     || typeof value.resourceId !== "string" || value.resourceId.length < 1 || value.resourceId.length > 1_024
     || typeof value.resourceSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(value.resourceSha256)
@@ -442,8 +447,11 @@ function normalizedSpawnOptions(value: SpawnOptions): SpawnOptions {
     if (!supportedSpawnOptionNames.has(name)) fail(`bound native process option ${name} is unsupported.`);
   }
   if (value.shell !== false) fail("bound native processes require an explicit shell:false option.");
-  if (!(value.detached === undefined || value.detached === false)) {
-    fail("bound native processes require detached:false when detached is specified.");
+  if (!(value.detached === undefined || typeof value.detached === "boolean")) {
+    fail("bound native process detached must be boolean when specified.");
+  }
+  if (value.detached === true && process.platform === "win32") {
+    fail("bound native process groups are unavailable on Windows.");
   }
   if (!(value.windowsHide === undefined || typeof value.windowsHide === "boolean")) {
     fail("bound native process windowsHide must be boolean when specified.");
@@ -453,7 +461,7 @@ function normalizedSpawnOptions(value: SpawnOptions): SpawnOptions {
   }
   return {
     shell: false,
-    detached: false,
+    detached: value.detached ?? false,
     stdio: value.stdio,
     ...(value.windowsHide === undefined ? {} : { windowsHide: value.windowsHide }),
   };
@@ -525,7 +533,7 @@ export function createReferenceNativeProcessCollector(
         parentPid: receipt.parentPid,
         expectedProcessGroupId: receipt.expectedProcessGroupId,
         childPid: receipt.childPid,
-        detached: false as const,
+        detached: receipt.detached,
         spawned: true as const,
         exit: Object.freeze({ ...receipt.exit }),
         close: Object.freeze({ ...receipt.close }),
@@ -633,6 +641,7 @@ export async function spawnBoundReferenceNativeProcess(
     argvSha256,
     parentPid: collector.parentPid,
     expectedProcessGroupId: collector.expectedProcessGroupId,
+    detached: safeOptions.detached === true,
     spawned: false,
     spawnConfirmed: false,
     executableRevalidatedAfterClose: false,

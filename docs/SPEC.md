@@ -1,6 +1,6 @@
 # CUT 0.4 alpha language and IR specification
 
-Status: implementation specification for the CUT 0.4 language in `cut-lang` 0.4.0-alpha.3. This document describes the formal language path implemented by the repository. It is not yet a frozen compatibility standard.
+Status: implementation specification for the CUT 0.4 language in `cut-lang` 0.4.0-alpha.4. This document describes the formal language path implemented by the repository. It is not yet a frozen compatibility standard.
 
 CUT is a programming language for audiovisual graphs. The canonical authoring artifact is UTF-8 `.cut` source. The compiler parses and type-checks that source, lowers it to CutAVIR v3, and binds it to content-locked resources and package implementations. A runtime executes the graph. JSON production plans and the earlier line-oriented editorial DSL are legacy compatibility formats, not CUT 0.4 source.
 
@@ -274,7 +274,7 @@ Inside a component declared `-> Visual`, `self` is an implicit writable `Visual`
 
 Except for the structurally closed `-> DiagramNode` case above, the compiler expands each invocation into a `cut.kernel.fragment` node whose children are the component body followed by any explicit invocation children. Writes through `self` attach ordinary signals to that fragment; they add no operation or special runtime primitive. IR provenance records both the definition and invocation spans. Components are ordinary language abstractions; the runtime does not receive film-specific component names or code.
 
-The `0.4.0-alpha.3` reference runtime executes one closed retained-component
+The `0.4.0-alpha.4` reference runtime executes one closed retained-component
 shape: a pure `-> Visual` invocation used directly as a scene visual root may
 lower to one `cut.kernel.fragment` whose only child is one
 `LocalSpace`. The fragment and `LocalSpace` must have exactly equal intervals;

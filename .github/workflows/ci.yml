@@ -26,6 +26,29 @@ jobs:
       - run: npm run cli:build
       - run: npm run verify
       - run: npm pack --dry-run
+      - name: Smoke clean macOS package without the optional footage backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          pack_dir="$RUNNER_TEMP/cut-pack"
+          consumer="$RUNNER_TEMP/cut-consumer"
+          reports="$RUNNER_TEMP/cut-reports"
+          missing_home="$RUNNER_TEMP/cut-missing-footage-home"
+          mkdir -p "$pack_dir" "$consumer" "$reports"
+          version="$(node -p 'require("./package.json").version')"
+          tarball="$pack_dir/cut-lang-$version.tgz"
+          npm pack --json --foreground-scripts=false --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-package-footprint.mjs" "$reports/npm-pack.json"
+          test -s "$tarball"
+          cd "$consumer"
+          npm init --yes > /dev/null
+          npm install --ignore-scripts --omit=dev --save-exact "$tarball"
+          cut="$consumer/node_modules/.bin/cut"
+          test -x "$cut"
+          doctor_status=0
+          CUT_FOOTAGE_HOME="$missing_home" "$cut" footage doctor --json > "$reports/footage-doctor-missing.json" || doctor_status=$?
+          test "$doctor_status" -eq 1
+          node "$GITHUB_WORKSPACE/scripts/assert-footage-missing-install.mjs" "$reports/footage-doctor-missing.json" "$missing_home"
 
   linux-experimental-package-smoke:
     name: linux-experimental-package-smoke (node ${{ matrix.node-version }})
@@ -47,22 +70,37 @@ jobs:
           sudo apt-get install --yes ffmpeg
       - run: npm ci --ignore-scripts
       - run: npm run test:portable
-      - name: Smoke installed package through Linux fallback
-        if: matrix.node-version == '24.15.0'
+      - name: Pack and install CUT without the optional footage backend
         shell: bash
         run: |
           set -euo pipefail
           pack_dir="$RUNNER_TEMP/cut-pack"
           consumer="$RUNNER_TEMP/cut-consumer"
           reports="$RUNNER_TEMP/cut-reports"
+          missing_home="$RUNNER_TEMP/cut-missing-footage-home"
           mkdir -p "$pack_dir" "$consumer" "$reports"
           version="$(node -p 'require("./package.json").version')"
           tarball="$pack_dir/cut-lang-$version.tgz"
-          npm pack --json --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          npm pack --json --foreground-scripts=false --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-package-footprint.mjs" "$reports/npm-pack.json"
           test -s "$tarball"
           cd "$consumer"
           npm init --yes > /dev/null
           npm install --ignore-scripts --omit=dev --save-exact "$tarball"
+          cut="$consumer/node_modules/.bin/cut"
+          test -x "$cut"
+          doctor_status=0
+          CUT_FOOTAGE_HOME="$missing_home" "$cut" footage doctor --json > "$reports/footage-doctor-missing.json" || doctor_status=$?
+          test "$doctor_status" -eq 1
+          node "$GITHUB_WORKSPACE/scripts/assert-footage-missing-install.mjs" "$reports/footage-doctor-missing.json" "$missing_home"
+      - name: Smoke installed package through Linux fallback
+        if: matrix.node-version == '24.15.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer="$RUNNER_TEMP/cut-consumer"
+          reports="$RUNNER_TEMP/cut-reports"
+          cd "$consumer"
           cut="$consumer/node_modules/.bin/cut"
           test -x "$cut"
           "$cut" --version
@@ -89,3 +127,91 @@ jobs:
           ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name,duration -of json review/range-preview.mp4 > "$reports/preview-ffprobe.json"
           ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name,duration -of json output/preview-render.mp4 > "$reports/render-ffprobe.json"
           node "$GITHUB_WORKSPACE/scripts/assert-linux-package-smoke.mjs" "$consumer/film" "$reports"
+
+  semantic-footage-real:
+    name: semantic-footage-real (${{ matrix.os }}, node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            node-version: '24.15.0'
+            evidence-name: macos-node24
+          - os: ubuntu-24.04
+            node-version: '20.19.0'
+            evidence-name: linux-node20
+          - os: ubuntu-24.04
+            node-version: '24.15.0'
+            evidence-name: linux-node24
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install macOS FFmpeg baseline
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg@7
+          echo "$(brew --prefix ffmpeg@7)/bin" >> "$GITHUB_PATH"
+      - name: Install Linux FFmpeg
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+      - run: npm ci --ignore-scripts
+      - run: npm run cli:build
+      - run: npm run audit:package-footprint
+      - name: Install the audited tarball into a clean consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          pack_dir="$RUNNER_TEMP/cut-real-pack"
+          consumer="$RUNNER_TEMP/cut-real-consumer"
+          reports="$RUNNER_TEMP/cut-real-pack-reports"
+          mkdir -p "$pack_dir" "$consumer" "$reports"
+          version="$(node -p 'require("./package.json").version')"
+          tarball="$pack_dir/cut-lang-$version.tgz"
+          npm pack --json --foreground-scripts=false --pack-destination "$pack_dir" > "$reports/npm-pack.json"
+          node "$GITHUB_WORKSPACE/scripts/assert-package-footprint.mjs" "$reports/npm-pack.json"
+          test -s "$tarball"
+          cd "$consumer"
+          npm init --yes > /dev/null
+          npm install --ignore-scripts --omit=dev --save-exact "$tarball"
+          test -x "$consumer/node_modules/.bin/cut"
+      - name: Run real offline CLIP index, search, and exact extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer="$RUNNER_TEMP/cut-real-consumer"
+          project="$RUNNER_TEMP/cut-footage-real-project"
+          reports="$RUNNER_TEMP/cut-footage-real-reports"
+          footage_home="$RUNNER_TEMP/cut-footage-real-home"
+          test ! -e "$project"
+          test ! -e "$reports"
+          test ! -e "$footage_home"
+          node "$GITHUB_WORKSPACE/scripts/run-footage-real-smoke.mjs" \
+            "$consumer/node_modules/.bin/cut" \
+            "$(command -v ffmpeg)" \
+            "$(command -v ffprobe)" \
+            "$GITHUB_WORKSPACE/tests/fixtures/footage-real" \
+            "$consumer/node_modules/cut-lang" \
+            "$project" \
+            "$reports" \
+            "$footage_home" \
+            > "$RUNNER_TEMP/cut-footage-real-result.json"
+          test -s "$RUNNER_TEMP/cut-footage-real-result.json"
+      - name: Upload semantic footage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-footage-real-${{ matrix.evidence-name }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/cut-footage-real-result.json
+            ${{ runner.temp }}/cut-footage-real-reports
+            ${{ runner.temp }}/cut-footage-real-project/.cut/footage
+            ${{ runner.temp }}/cut-footage-real-project/selects

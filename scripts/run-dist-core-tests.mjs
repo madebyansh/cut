@@ -22,6 +22,7 @@ const lockFormat = "cut-dist-core-test-lock";
 const lockVersion = 2;
 const invocationFormat = "cut-dist-core-test-invocation";
 const invocationVersion = 2;
+const coreTestFileConcurrency = 2;
 const signalExitCodes = Object.freeze({ SIGINT: 130, SIGTERM: 143 });
 const runtimeEvidenceLocators = Object.freeze([
   "package.json",
@@ -346,6 +347,10 @@ export async function enumerateDistCoreTests(repositoryRoot = defaultRepositoryR
   return Object.freeze(names.map((name) => `dist-cli/tests/${name}`));
 }
 
+function coreTestChildArguments(files) {
+  return Object.freeze(["--test", `--test-concurrency=${coreTestFileConcurrency}`, ...files]);
+}
+
 async function fileBindings(repositoryRoot, locators, label) {
   const bindings = [];
   for (const locator of locators) bindings.push(await repositoryFileBinding(repositoryRoot, locator, `${label} ${locator}`));
@@ -358,7 +363,7 @@ export async function coreTestInvocationIdentity({
   runIdentity = null,
   evidenceLocators = runtimeEvidenceLocators,
 }) {
-  const childArguments = Object.freeze(["--test", ...files]);
+  const childArguments = coreTestChildArguments(files);
   const testFiles = await fileBindings(repositoryRoot, files, "compiled test");
   const boundRuntimeFiles = await fileBindings(repositoryRoot, [...evidenceLocators].sort(), "runtime evidence");
   const node = await externalExecutableIdentity(process.execPath, "Node executable");
@@ -502,7 +507,7 @@ export async function runDistCoreTests({
       output(JSON.stringify(identity));
       result = await spawnAndSupervise({
         command: process.execPath,
-        arguments: ["--test", ...files],
+        arguments: coreTestChildArguments(files),
         cwd: canonicalRoot,
         environment: childEnvironment,
         spawnProcess,

@@ -27,6 +27,7 @@ test("machine CLI reference is deterministic, closed, and separates formal from 
   assert.equal(report.product.version, cutProductVersion);
   assert.equal(report.summary.commands, report.commands.length);
   assert.ok(report.summary.formal > 10);
+  assert.equal(report.summary.footage, 5);
   assert.ok(report.summary.package >= 7);
   assert.ok(report.summary.legacy >= 10);
   assert.deepEqual(report.aliases["av-build"], "build");
@@ -39,6 +40,39 @@ test("machine CLI reference is deterministic, closed, and separates formal from 
   const legacyRender = report.commands.find((command: { command: string }) => command.command === "legacy render");
   assert.equal(legacyRender.category, "legacy");
   assert.equal(legacyRender.stability, "legacy");
+
+  const footage = Object.fromEntries(report.commands
+    .filter((entry: { category: string }) => entry.category === "footage")
+    .map((entry: { command: string }) => [entry.command, entry]));
+  assert.deepEqual(Object.keys(footage).sort(), [
+    "footage doctor",
+    "footage extract",
+    "footage index",
+    "footage search",
+    "footage setup",
+  ]);
+  assert.deepEqual(footage["footage setup"].options, [
+    { name: "--backend", kind: "value", required: true },
+    { name: "--json", kind: "flag", required: false },
+  ]);
+  assert.deepEqual(footage["footage doctor"].options, [
+    { name: "--json", kind: "flag", required: false },
+  ]);
+  assert.deepEqual(footage["footage index"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+  ]);
+  assert.deepEqual(footage["footage search"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+    { name: "--query", kind: "value", required: true },
+  ]);
+  assert.deepEqual(footage["footage extract"].options, [
+    { name: "--handles", kind: "value", required: false },
+    { name: "--json", kind: "flag", required: false },
+    { name: "--match", kind: "value", required: true },
+    { name: "--out", kind: "value", required: true },
+  ]);
 
   const documentation = readFileSync(resolve("docs", "CLI.md"), "utf8");
   for (const command of report.commands.filter((entry: { category: string }) => entry.category !== "legacy")) {

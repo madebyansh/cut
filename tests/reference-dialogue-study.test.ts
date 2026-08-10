@@ -431,7 +431,7 @@ test("the synthetic 15-second study executes captions, J/L audio, dynamic duckin
     };
     assert.equal(writtenStemManifest.format, "cut-reference-stems");
     assert.equal(writtenStemManifest.version, 5);
-    assert.equal(writtenStemManifest.runtime, "cut-reference/0.4.0-alpha.3");
+    assert.equal(writtenStemManifest.runtime, "cut-reference/0.4.0-alpha.4");
     assert.deepEqual(writtenStemManifest.lock, { sha256: testRenderLockSha256 });
     assert.equal(writtenStemManifest.buildId, manifest.executionBuildId, "stem identity must bind the verified-input execution graph used for delivery");
     assert.equal(manifest.buildId, ir.buildId, "the render manifest must preserve the canonical pre-snapshot graph identity separately");

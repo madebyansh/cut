@@ -1,15 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, copyFile, link, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdtemp, mkdir, open, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import {
   RawVideoReader,
   ReferenceMediaProcessError,
+  runBoundReferenceFfmpeg,
+  runBoundReferenceFfmpegCapture,
   runFfmpeg,
   runFfmpegCapture,
   runFfprobeCapture,
 } from "../lib/runtime/reference/ffmpeg";
+import { bindReferenceNativeMediaTool, createReferenceNativeProcessCollector } from "../lib/project/native-process-authority";
 
 function pathEnvironmentKey() {
   return Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
@@ -55,7 +58,8 @@ async function waitForPidFile(pidPath: string) {
 async function writeHelper(root: string) {
   const helper = resolve(root, "media-process-helper.mjs");
   await writeFile(helper, [
-    'import { closeSync, openSync, writeFileSync, writeSync } from "node:fs";',
+    'import { closeSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";',
+    'import { spawn } from "node:child_process";',
     "const [mode, pidPath, heldPath, countText] = process.argv.slice(2);",
     "writeFileSync(pidPath, String(process.pid));",
     'const handle = openSync(heldPath, "w");',
@@ -75,6 +79,13 @@ async function writeHelper(root: string) {
     '  process.stdout.write(Buffer.alloc(Number(countText), "x"));',
     '  setInterval(() => writeSync(handle, "x"), 5);',
     '} else if (mode === "timeout") {',
+    '  setInterval(() => writeSync(handle, "x"), 5);',
+    '} else if (mode === "fd") {',
+    '  process.stdout.write(readFileSync(countText));',
+    "  closeSync(handle);",
+    '} else if (mode === "tree") {',
+    '  const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "ignore", "inherit"] });',
+    '  writeFileSync(countText, String(descendant.pid));',
     '  setInterval(() => writeSync(handle, "x"), 5);',
     "}",
   ].join("\n"));
@@ -170,6 +181,57 @@ test("reference FFmpeg helpers enforce byte and lifecycle boundaries before retu
         mediaError("CUT_MEDIA_PROCESS_OUTPUT_LIMIT", "output"),
       );
       await assertProcessExited(pid);
+      await rm(held, { force: true });
+    });
+
+    await context.test("bound capture reads an inherited no-follow descriptor after its pathname is replaced", async () => {
+      const source = resolve(root, "fd-source.bin"), replacement = resolve(root, "fd-replacement.bin");
+      const pid = resolve(root, "fd.pid"), held = resolve(root, "fd-held.bin");
+      await writeFile(source, "locked source bytes");
+      const handle = await open(source, "r");
+      try {
+        await writeFile(replacement, "replacement bytes");
+        await rename(replacement, source);
+        const authority = await bindReferenceNativeMediaTool("ffmpeg", resolve(root, "ffmpeg"));
+        const collector = createReferenceNativeProcessCollector(authority);
+        const result = await runBoundReferenceFfmpegCapture(
+          authority.executablePath,
+          [helper, "fd", pid, held, "/dev/fd/3"],
+          2_000,
+          { stdoutBytes: 64, stderrBytes: 64, totalBytes: 128 },
+          {
+            authority, collector,
+            context: { ordinal: 0, operation: "footage-range-extract", resourceId: "fd-source", resourceSha256: "a".repeat(64), resourceBytes: 19, variant: "master", streamIndex: 0 },
+          },
+          { inheritedFileDescriptors: [handle.fd] },
+        );
+        assert.equal(result.stdout, "locked source bytes");
+        assert.equal((await collector.seal()).receiptCount, 1);
+      } finally { await handle.close(); }
+    });
+
+    await context.test("abort kills and drains the complete bound process group", { skip: process.platform === "win32" }, async () => {
+      const pid = resolve(root, "tree.pid"), descendantPid = resolve(root, "tree-descendant.pid"), held = resolve(root, "tree-held.bin");
+      const authority = await bindReferenceNativeMediaTool("ffmpeg", resolve(root, "ffmpeg"));
+      const collector = createReferenceNativeProcessCollector(authority);
+      const controller = new AbortController();
+      const running = runBoundReferenceFfmpeg(
+        authority.executablePath,
+        [helper, "tree", pid, held, descendantPid],
+        10_000,
+        { stderrBytes: 1_024, totalBytes: 1_024 },
+        {
+          authority, collector,
+          context: { ordinal: 0, operation: "footage-range-extract", resourceId: "tree-source", resourceSha256: "a".repeat(64), resourceBytes: 1, variant: "master", streamIndex: 0 },
+        },
+        { signal: controller.signal, terminateProcessTree: true, terminationGraceMs: 100 },
+      );
+      await Promise.all([waitForPidFile(pid), waitForPidFile(descendantPid)]);
+      controller.abort();
+      await assert.rejects(running, mediaError("CUT_MEDIA_PROCESS_ABORTED", "abort"));
+      await assertProcessExited(pid);
+      await assertProcessExited(descendantPid);
+      await assert.rejects(collector.seal());
       await rm(held, { force: true });
     });
 

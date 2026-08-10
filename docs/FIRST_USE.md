@@ -14,7 +14,7 @@ version—is the authority for `CUT_TARBALL`.
 ```sh
 mkdir cut-consumer && cd cut-consumer
 export CONSUMER_ROOT="$PWD"
-export CUT_TARBALL=/absolute/path/to/cut-lang-0.4.0-alpha.3.tgz
+export CUT_TARBALL=/absolute/path/to/cut-lang-0.4.0-alpha.4.tgz
 
 npm init -y
 npm install --ignore-scripts --omit=dev --save-exact "$CUT_TARBALL"
@@ -52,6 +52,49 @@ cut render main.cut --lock cut.lock --output release \
 cut build main.cut --lock cut.lock --out .cut/replay.cutir.json --json
 cut diff .cut/graph.cutir.json .cut/replay.cutir.json --json
 ```
+
+## Optional local semantic footage search
+
+The default package stays lightweight. It ships a locked setup recipe, not the
+ML runtime or model weights. On supported macOS or Linux with Node/npm already
+installed, explicitly install the local CPU backend once:
+
+```sh
+export CUT_FOOTAGE_HOME="$CONSUMER_ROOT/.cut-footage-home" # optional automation isolation
+cut footage setup --backend local --json
+cut footage doctor --json
+```
+
+This setup step requires network access and can install several hundred MB.
+Homebrew is not required. Normal indexing and searching are offline and bind the
+exact verified runtime, q8 model revision, source hashes, and vector bytes.
+Indexing and extraction still need working FFmpeg and ffprobe executables from
+any supported installation, so run `cut doctor --json` before real media work.
+
+Copy authorized MP4/MOV source files into the project, then run the complete
+candidate-to-clip handoff:
+
+```sh
+mkdir -p media .cut/footage selects
+cp /absolute/path/to/authorized/dog-source.mp4 media/dog-source.mp4
+
+cut footage index media/ --out .cut/footage/index.json --json
+cut footage search .cut/footage/index.json --query "a dog outdoors" \
+  --out .cut/footage/search.json --json
+cut footage extract .cut/footage/search.json --match 1 --handles 1s \
+  --out selects/dog.mp4 --json
+```
+
+Inspect `.cut/footage/search.json` before extraction when editorial judgement
+matters. Search results are candidates, not timeline edits. Extraction writes a
+new clip plus `selects/dog.mp4.cut-footage.json`; it refuses to replace either
+leaf. The extracted candidate is deliberately picture-only: source audio is
+removed so editorial audio must be selected and authored explicitly. Run
+`cut footage index` again after source bytes change, and rerun setup
+when doctor says the immutable backend is missing. If doctor reports an invalid
+or identity-mismatched immutable backend, point `CUT_FOOTAGE_HOME` at a new
+empty absolute directory, then run setup again; CUT deliberately does not
+delete or overwrite an existing backend tree automatically.
 
 ## Transparent cold-to-warm cache workflow
 
@@ -228,4 +271,4 @@ your project policy; do not convert a no-clobber failure into overwrite.
 This path proves installed CLI authoring, not an installed VSIX, a language
 server, registry packages, automatic acquisition, rights approval, Windows
 media execution, independent-user usability, or human playback. Those remain
-separate gates while the package is `0.4.0-alpha.3`.
+separate gates while the package is `0.4.0-alpha.4`.

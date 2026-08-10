@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "$id": "https://cut.dev/schemas/cut-footage-index-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "root", "sources", "chunkPolicy", "chunks", "backend", "vectorArtifact", "creation", "indexSha256"],
+  "properties": {
+    "format": { "const": "cut-footage-index" }, "version": { "const": 1 }, "root": { "$ref": "#/definitions/locator" },
+    "sources": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/definitions/source" } },
+    "chunkPolicy": { "$ref": "#/definitions/chunkPolicy" }, "chunks": { "type": "array", "maxItems": 100000, "items": { "$ref": "#/definitions/chunk" } },
+    "backend": { "$ref": "#/definitions/backend" }, "vectorArtifact": { "$ref": "#/definitions/artifact" },
+    "creation": { "type": "object", "additionalProperties": false, "required": ["cutVersion", "backendProtocolVersion"], "properties": { "cutVersion": { "$ref": "#/definitions/text" }, "backendProtocolVersion": { "const": 1 } } },
+    "indexSha256": { "$ref": "#/definitions/sha256" }
+  },
+  "definitions": {
+    "text": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000-\\u001f\\u007f]+$" },
+    "locator": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/]+(?:/[^/]+)*$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+    "integer": { "type": "integer", "minimum": 0, "maximum": 1024 },
+    "positiveInteger": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "rational": { "type": "object", "additionalProperties": false, "required": ["numerator", "denominator"], "properties": { "numerator": { "type": "string", "pattern": "^(?:0|-?[1-9][0-9]*)$", "maxLength": 256 }, "denominator": { "type": "string", "pattern": "^[1-9][0-9]*$", "maxLength": 256 } }, "cutSemantic": "cut-rational-reduced-v1" },
+    "range": { "type": "object", "additionalProperties": false, "required": ["semantics", "start", "end"], "properties": { "semantics": { "const": "half-open" }, "start": { "$ref": "#/definitions/rational" }, "end": { "$ref": "#/definitions/rational" } }, "cutSemantic": "cut-half-open-range-v1" },
+    "stream": { "type": "object", "additionalProperties": false, "required": ["index", "type", "timeBase"], "properties": { "index": { "$ref": "#/definitions/integer" }, "type": { "enum": ["video", "audio"] }, "timeBase": { "allOf": [{ "$ref": "#/definitions/rational" }, { "cutSemantic": "cut-rational-positive-v1" }] }, "frameRate": { "allOf": [{ "$ref": "#/definitions/rational" }, { "cutSemantic": "cut-rational-positive-v1" }] } } },
+    "source": { "type": "object", "additionalProperties": false, "required": ["locator", "bytes", "sha256", "duration", "probeSha256", "streams"], "properties": { "locator": { "$ref": "#/definitions/locator" }, "bytes": { "$ref": "#/definitions/positiveInteger" }, "sha256": { "$ref": "#/definitions/sha256" }, "duration": { "allOf": [{ "$ref": "#/definitions/rational" }, { "cutSemantic": "cut-rational-non-negative-v1" }] }, "probeSha256": { "$ref": "#/definitions/sha256" }, "streams": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/definitions/stream" } } } },
+    "chunkPolicy": { "type": "object", "additionalProperties": false, "required": ["duration", "overlap"], "properties": { "duration": { "allOf": [{ "$ref": "#/definitions/rational" }, { "cutSemantic": "cut-rational-positive-v1" }] }, "overlap": { "allOf": [{ "$ref": "#/definitions/rational" }, { "cutSemantic": "cut-rational-non-negative-v1" }] } } },
+    "chunk": { "type": "object", "additionalProperties": false, "required": ["id", "sourceLocator", "sourceSha256", "streamIndex", "range"], "properties": { "id": { "$ref": "#/definitions/id" }, "sourceLocator": { "$ref": "#/definitions/locator" }, "sourceSha256": { "$ref": "#/definitions/sha256" }, "streamIndex": { "$ref": "#/definitions/integer" }, "range": { "$ref": "#/definitions/range" } } },
+    "backend": { "type": "object", "additionalProperties": false, "required": ["protocolVersion", "provider", "model", "dimensions", "normalization"], "properties": { "protocolVersion": { "const": 1 }, "provider": { "$ref": "#/definitions/text" }, "model": { "$ref": "#/definitions/text" }, "dimensions": { "type": "integer", "minimum": 1, "maximum": 65536 }, "normalization": { "const": "l2" } } },
+    "artifact": { "type": "object", "additionalProperties": false, "required": ["locator", "bytes", "sha256"], "properties": { "locator": { "$ref": "#/definitions/locator" }, "bytes": { "$ref": "#/definitions/positiveInteger" }, "sha256": { "$ref": "#/definitions/sha256" } } }
+  }
+}

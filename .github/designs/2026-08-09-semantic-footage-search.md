@@ -17,19 +17,19 @@ Search results are non-authoritative candidate evidence. Extraction is reproduci
 
 ## Approaches Considered
 
-### 1. CUT-owned contracts with an optional local sidecar (recommended)
+### 1. CUT-owned contracts with an optional local Node sidecar (selected)
 
-The npm package owns CLI parsing, manifests, validation, process limits, source hashing, search-result normalization, and exact extraction. A separately installed Python sidecar owns model loading and vector search. The two processes communicate through a small versioned JSON-lines protocol.
+The npm package owns CLI parsing, manifests, validation, process limits, source hashing, search-result normalization, and exact extraction. An explicitly installed Node sidecar owns CLIP model loading and frame/text embedding. The two processes communicate through a small versioned JSON-lines protocol.
 
-This keeps `npm install -g cut-lang` lightweight, works on macOS and Linux, lets the local model evolve without changing CUT's public result format, and keeps untrusted model output outside the compositor. It requires one explicit setup step for users who want semantic search.
+This keeps `npm install -g cut-lang` lightweight, works on CPU-only macOS and Linux, lets the local model evolve without changing CUT's public result format, and keeps untrusted model output outside the compositor. It requires one explicit setup step for users who want semantic search.
 
 ### 2. Wrap SentrySearch's current CLI directly
 
 This is the quickest demo, but CUT would depend on human-formatted output, SentrySearch's private local state, and command behavior it does not own. Stable provenance, stale-source checks, and live-preview handoff would be fragile. This is acceptable as a research spike, not as CUT's public contract.
 
-### 3. Put the model runtime in the Node/npm package
+### 3. Put the model runtime in CUT's default npm dependency tree
 
-This gives one installer, but it would add large platform-specific ML dependencies to every CUT install and make Apple Metal, CUDA, and CPU compatibility part of the core package. It would also make Linux packaging much harder. The convenience is not worth the install and maintenance cost during alpha.
+This removes the explicit setup command, but it would add large platform-specific ML dependencies to every CUT install and make Apple Metal, CUDA, and CPU compatibility part of the core package. CUT instead uses npm as the explicit backend installer in a versioned user cache. The core package does not depend on the ML runtime.
 
 ## Implementation Scope
 
@@ -40,12 +40,13 @@ The implementation will establish the complete CUT-owned boundary without depend
 - a bounded sidecar runner with handshake, time, memory/output, and cancellation limits
 - recursive MP4/MOV discovery with stable ordering and stale-source detection
 - overlapping chunk planning and near-duplicate result suppression
-- text-search normalization through a deterministic executable adapter used by tests
+- a real local CPU CLIP adapter with pinned runtime, model revision, and setup smoke
+- text-search normalization through the same executable protocol used by the real and deterministic test adapters
 - exact half-open extraction through CUT's existing bound FFmpeg/FFprobe authority
 - a stable handoff object that live preview can consume later
-- macOS and Linux smoke coverage without adding ML packages to default npm dependencies
+- real-model macOS and Linux smoke coverage without adding ML packages to default npm dependencies
 
-The heavyweight local-model package is a follow-up because it has its own Python, Metal, CUDA, model-download, and quality-validation surface. The implementation includes the real adapter protocol and process boundary, not a fake claim that npm alone performs semantic inference. Image queries, anomaly/highlight discovery, hosted backends, VLM reranking, automatic timeline mutation, and a persistent player are also follow-up work. They must fit the same manifests without changing the v1 contract.
+The selected v1 backend is OpenAI CLIP `ViT-B/32`, converted for ONNX and pinned through `Xenova/clip-vit-base-patch32`. It performs real frame-text retrieval at 512 dimensions on CPU. Native-video Qwen embeddings, image queries, anomaly/highlight discovery, hosted backends, VLM reranking, Metal/CUDA acceleration, automatic timeline mutation, and a persistent player are follow-up work. They must fit the same manifests without changing the v1 contract.
 
 The quarantined legacy `lib/core/indexer.ts` is not promoted. Its floating-point seconds, absolute roots, mutable JSON, and API-coupled analysis do not meet these contracts.
 
@@ -67,7 +68,7 @@ Embeddings stay in the sidecar-owned artifact rather than bloating JSON. Search 
 
 ### Search report
 
-`cut-footage-search` version 1 contains the index identity, normalized text query, threshold, and sorted matches. Each match has a stable ID, canonical integer `scorePpm`, source locator and SHA-256, selected stream, exact half-open source range, matched chunk IDs, and optional adjacent handles.
+`cut-footage-search` version 1 contains the canonical project-relative index locator and index identity, normalized text query, threshold, and sorted matches. Binding the locator into `searchSha256` lets `footage extract <search-report>` load the exact index without guessing a sibling filename or requiring another CLI argument. Each match has a stable ID, canonical integer `scorePpm`, source locator and SHA-256, selected stream, exact half-open source range, matched chunk IDs, and optional adjacent handles.
 
 The adapter's floating score is admitted once, clamped, and quantized to integer parts per million before it enters a public report. Ordering is deterministic: descending `scorePpm`, then source locator, start time, end time, and stable match ID. Overlapping hits from the same source are merged or suppressed by one documented policy before ranking. A low-confidence result is reported honestly; CUT never pretends it found a confident match.
 
@@ -91,7 +92,9 @@ V1 requests are:
 
 CUT validates every response, normalizes scores, performs deduplication/range construction itself, and rejects unsolicited output. The runner caps request bytes, response bytes, stderr bytes, elapsed time, candidate count, and child lifetime. It terminates and drains the child on failure or cancellation.
 
-The bundled setup recipe pins an audited sidecar version. Default CUT installation ships only the small protocol/client files; Python, model weights, and GPU libraries are installed only after `cut footage setup --backend local` is explicitly run.
+The bundled setup recipe installs `@huggingface/transformers@4.2.0`, including its pinned `onnxruntime-node@1.24.3` runtime, in a versioned CUT user cache. It downloads `Xenova/clip-vit-base-patch32` revision `d15189d7028b43f1d3e65039190477f6af591c2a`, loads the q8 text and vision graphs on CPU, embeds one bundled probe image and text query, and records the exact installed identities and model-file hashes. A failed setup never replaces the last verified backend.
+
+Normal indexing and search disable remote model access and load the exact verified revision directory by its absolute local path; they do not ask the hub client to rediscover cached repository metadata. Setup is the sole network-bearing footage command. Default CUT installation ships only the small sidecar and protocol/client files. The exact pinned macOS arm64 install currently occupies roughly 387 MB for the npm runtime closure and 161 MB for the model cache; platform totals may differ and setup reports measured bytes rather than promising one download size. Those bytes are installed only after `cut footage setup --backend local` is explicitly run. The sidecar samples each chunk deterministically, L2-normalizes its frame embeddings, and writes a CUT-bound float32 vector artifact. Search embeds the normalized text query and uses cosine similarity through dot products. CPU is the required v1 execution mode so macOS and Linux produce one supported behavior; hardware acceleration is not claimed in v1.
 
 ## Data Flow
 
@@ -115,12 +118,12 @@ Failures do not leave partial indexes, clips, manifests, child processes, or tem
 Implementation follows test-first development.
 
 - Pure contract tests cover canonical encoding, hostile JSON, path/range bounds, deterministic ranking, overlap dedupe, and stale identities.
-- A deterministic fake sidecar exercises the real subprocess protocol, timeouts, malformed messages, crashes, cancellation, and cleanup.
+- A deterministic executable sidecar exercises the real subprocess protocol, timeouts, malformed messages, crashes, cancellation, and cleanup.
 - Fixture MP4/MOV files exercise discovery, probing, exact chunk planning, handled-range clamping, extraction, no-clobber publication, and manifest hashes.
 - Package tests install the built tarball and confirm normal CUT commands work without Python or ML dependencies.
-- Optional local-backend smoke runs only in an environment provisioned for the pinned sidecar; macOS and Linux CI still verify missing-backend diagnostics.
+- A cached real-backend smoke on macOS arm64 and Linux x64 installs the pinned runtime/model, ranks two visibly different fixture clips for one text query, extracts the first match, and validates its hashes and probe facts. Deterministic tests remain independent of model-network availability.
 - Live-preview tests consume a frozen `sourceSelection` fixture, so the future UI does not depend on model execution.
 
 ## Acceptance Criteria
 
-The implementation is ready when the deterministic executable adapter can index fixture footage, return candidate chunks, produce a validated and deterministically ranked search report, extract one stable match ID, and verify its manifest on macOS and Linux. The adapter subprocess boundary must be the same one used later by the local-model package. A default npm install remains the same size class and all existing authoritative preview/render bytes remain unchanged. The issue remains open until a separately installable real local-model adapter passes its own quality and hardware matrix.
+The implementation is ready when a fresh public `cut-lang` install can run `footage setup --backend local`, index fixture footage with the real pinned CLIP adapter, rank the expected semantic match, produce a validated deterministic search report, extract one stable match ID, and verify its manifest on macOS and Linux. The deterministic executable adapter must pass the same protocol boundary for exhaustive failure testing. A default npm install remains the same size class, no ML package or model enters CUT's default dependency tree or tarball, and all existing authoritative preview/render bytes remain unchanged. The issue remains open only for explicitly deferred quality backends and live-preview integration, not for basic usable semantic search.

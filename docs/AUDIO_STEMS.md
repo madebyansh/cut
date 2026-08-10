@@ -1,6 +1,6 @@
 # Deterministic audio stems
 
-Status: implemented in the current `0.4.0-alpha.3` development line. This is a
+Status: implemented in the current `0.4.0-alpha.4` development line. This is a
 narrow pre-master delivery contract, not a claim that arbitrary routing or
 every professional audio workflow is complete. Explicit Send/Return/Submix
 routing is supported inside one delivered program Bus and across program buses

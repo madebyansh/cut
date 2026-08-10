@@ -34,6 +34,18 @@ user's separately installed and authenticated Codex CLI.
 Formal checking, locking, building, inspection, testing, framing, auditioning,
 previewing, and rendering do not require a model.
 
+## Optional semantic-footage backend
+
+`cut footage setup --backend local` is an explicit network and native-code
+installation step. It installs the lockfile-pinned Transformers.js, ONNX
+Runtime, Sharp/libvips, and model closure below the selected CUT footage home.
+Normal indexing and search are offline and revalidate those exact bytes, but
+the backend still decodes media and executes native dependencies with the
+invoking user's permissions. It is not an isolation boundary for hostile
+media; use a container or disposable account for untrusted files. Keep the
+backend lock current, review `npm audit --prefix adapters/footage-local
+--omit=dev`, and run both `cut doctor` and `cut footage doctor` before use.
+
 ## Secrets and publication
 
 - Never commit `.env` files, tokens, private keys, credentials, or signed URLs.
@@ -46,8 +58,10 @@ previewing, and rendering do not require a model.
 
 ## Supported boundary
 
-The current alpha supports local macOS arm64 execution with Node.js 20 and
-FFmpeg 7. Linux and Windows media lifecycle behavior is not yet a supported or
-security-reviewed claim. A hosted render service would additionally require
-isolated workers, authentication, rate/concurrency limits, storage boundaries,
-and retention controls; this repository does not provide such a service.
+The current alpha supports local macOS arm64 and experimental Linux x64/arm64
+execution with the Node.js and FFmpeg versions documented in the README. Linux
+uses the JavaScript compositor fallback; cross-platform pixel or encoded-byte
+parity is not claimed. Windows media lifecycle behavior is not yet supported.
+A hosted render service would additionally require isolated workers,
+authentication, rate/concurrency limits, storage boundaries, and retention
+controls; this repository does not provide such a service.

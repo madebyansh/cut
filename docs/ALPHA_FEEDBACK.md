@@ -1,6 +1,6 @@
 # CUT alpha feedback
 
-`cut-lang@0.4.0-alpha.3` is a controlled early-access build, not CUT 1.0.
+`cut-lang@0.4.0-alpha.4` is a controlled early-access build, not CUT 1.0.
 It is useful for evaluating typed authoring, deterministic compilation, locked
 assets, picture/audio execution, interchange, packages, and compact workflows.
 

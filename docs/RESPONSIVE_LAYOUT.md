@@ -1,6 +1,6 @@
 # Responsive layout design slice
 
-Status: public bounded alpha vertical for CUT `0.4.0-alpha.3`. Source, typed
+Status: public bounded alpha vertical for CUT `0.4.0-alpha.4`. Source, typed
 IR, renderer, inspect/diff/cache identity, hostile-IR and three-aspect
 pixel/wrapping proofs pass. A second closed branch now renders one
 signal-driven source-resolution `MediaCamera2D` directly into a slot across

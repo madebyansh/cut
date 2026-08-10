@@ -13,7 +13,7 @@ First install the exact audited CUT CLI artifact. For example, after the root
 clean-room pack step has produced a tarball:
 
 ```bash
-npm install --global /absolute/path/to/cut-lang-0.4.0-alpha.3.tgz
+npm install --global /absolute/path/to/cut-lang-0.4.0-alpha.4.tgz
 cut --version
 cut doctor
 ```

@@ -106,7 +106,7 @@ export type CutImageProbe = {
   };
 };
 
-export type ProbeBudget = { maxFileBytes?: number; maxOutputBytes?: number; timeoutMs?: number };
+export type ProbeBudget = { maxFileBytes?: number; maxOutputBytes?: number; timeoutMs?: number; signal?: AbortSignal };
 export type ProbeNativeExecutables = Readonly<{
   ffmpeg?: string;
   ffprobe?: string;
@@ -115,6 +115,8 @@ export type ProbeNativeProcessExecution = Readonly<{
   authority: BoundReferenceNativeMediaTool;
   collector: ReferenceNativeProcessCollector;
   context: ReferenceNativeProcessContext;
+  signal?: AbortSignal;
+  terminateProcessTree?: boolean;
 }>;
 export type ProbeDecodedAudioNativeProcessExecutions = Readonly<{
   pcm: ProbeNativeProcessExecution;
@@ -149,6 +151,13 @@ const HARD_BUDGET = {
   timeoutMs: 5 * 60_000,
 };
 
+const probeTerminationGraceMs = 250;
+
+type ProbeNativeProcessControl = Readonly<{
+  child: ChildProcess;
+  terminate: () => void;
+}>;
+
 function errorCode(error: unknown) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
@@ -161,17 +170,73 @@ async function spawnProbeNativeProcess(
   args: readonly string[],
   options: SpawnOptions,
   execution?: ProbeNativeProcessExecution,
-): Promise<ChildProcess> {
-  if (execution === undefined) return spawn(executable, args, options);
-  if (execution.authority.tool !== tool || execution.collector.authority !== execution.authority) {
-    throw new CutProjectError("CUTP2008", `${tool} native process authority is inconsistent.`);
+): Promise<ProbeNativeProcessControl> {
+  if (execution?.signal?.aborted) throw new CutProjectError("CUTP2008", `${tool} native process launch was cancelled.`);
+  const detached = execution?.terminateProcessTree === true && platform() !== "win32";
+  const controlledOptions = detached ? { ...options, detached: true } : options;
+  let child: ChildProcess;
+  if (execution === undefined) child = spawn(executable, args, controlledOptions);
+  else {
+    if (execution.authority.tool !== tool || execution.collector.authority !== execution.authority) {
+      throw new CutProjectError("CUTP2008", `${tool} native process authority is inconsistent.`);
+    }
+    child = await spawnBoundReferenceNativeProcess(execution.collector, execution.context, args, controlledOptions);
   }
-  return spawnBoundReferenceNativeProcess(execution.collector, execution.context, args, options);
+  let terminating = false;
+  const signalTree = (value: NodeJS.Signals) => {
+    if (detached && child.pid !== undefined) {
+      try { process.kill(-child.pid, value); return; }
+      catch { /* direct-child fallback still closes the bound process */ }
+    }
+    if (child.exitCode === null && child.signalCode === null) child.kill(value);
+  };
+  const terminate = () => {
+    if (terminating) return;
+    terminating = true;
+    signalTree("SIGTERM");
+    setTimeout(() => {
+      signalTree("SIGKILL");
+      setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        child.stdin?.destroy();
+      }, probeTerminationGraceMs);
+    }, probeTerminationGraceMs);
+  };
+  const signal = execution?.signal;
+  if (signal) {
+    child.once("close", () => signal.removeEventListener("abort", terminate));
+    signal.addEventListener("abort", terminate, { once: true });
+    if (signal.aborted) terminate();
+  }
+  return Object.freeze({ child, terminate });
 }
 
-function probeBudget(options: ProbeBudget): Required<ProbeBudget> {
-  const result = { ...DEFAULT_BUDGET, ...options };
-  for (const key of Object.keys(result) as Array<keyof Required<ProbeBudget>>) {
+type ResolvedProbeBudget = Required<Omit<ProbeBudget, "signal">>;
+
+function probeBudget(options: ProbeBudget): ResolvedProbeBudget {
+  const allowedKeys = new Set<PropertyKey>(["maxFileBytes", "maxOutputBytes", "timeoutMs", "signal"]);
+  if (!options || typeof options !== "object" || Array.isArray(options)
+    || Reflect.ownKeys(options).some((key) => !allowedKeys.has(key))) {
+    throw new CutProjectError("CUTP2007", "Probe budget must contain only maxFileBytes, maxOutputBytes, timeoutMs, and signal.");
+  }
+  if (options.signal !== undefined) {
+    let validSignal = false;
+    try {
+      validSignal = typeof options.signal === "object" && options.signal !== null
+        && typeof options.signal.aborted === "boolean"
+        && typeof options.signal.addEventListener === "function"
+        && typeof options.signal.removeEventListener === "function"
+        && typeof options.signal.throwIfAborted === "function";
+    } catch { /* Accessor-bearing signal lookalikes are invalid. */ }
+    if (!validSignal) throw new CutProjectError("CUTP2007", "signal must be one AbortSignal.");
+  }
+  const result: ResolvedProbeBudget = {
+    maxFileBytes: options.maxFileBytes ?? DEFAULT_BUDGET.maxFileBytes,
+    maxOutputBytes: options.maxOutputBytes ?? DEFAULT_BUDGET.maxOutputBytes,
+    timeoutMs: options.timeoutMs ?? DEFAULT_BUDGET.timeoutMs,
+  };
+  for (const key of Object.keys(result) as Array<keyof ResolvedProbeBudget>) {
     const value = result[key];
     if (!Number.isSafeInteger(value) || value <= 0 || value > HARD_BUDGET[key]) {
       throw new CutProjectError(
@@ -307,11 +372,12 @@ async function assertStableLocator(projectRoot: string, locator: string, expecte
   }
 }
 
-async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: number) {
+async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: number, signal?: AbortSignal) {
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   let position = 0;
   while (position < expectedBytes) {
+    if (signal?.aborted) throw new CutProjectError("CUTP2009", "Media hashing was cancelled.");
     const length = Math.min(buffer.length, expectedBytes - position);
     const { bytesRead } = await handle.read(buffer, 0, length, position);
     if (bytesRead === 0) {
@@ -320,6 +386,7 @@ async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: n
     hash.update(buffer.subarray(0, bytesRead));
     position += bytesRead;
   }
+  if (signal?.aborted) throw new CutProjectError("CUTP2009", "Media hashing was cancelled.");
   const trailing = Buffer.allocUnsafe(1);
   if ((await handle.read(trailing, 0, 1, expectedBytes)).bytesRead !== 0) {
     throw new CutProjectError("CUTP2009", "Media grew while it was being hashed.");
@@ -330,16 +397,16 @@ async function sha256(handle: Awaited<ReturnType<typeof open>>, expectedBytes: n
 async function ffprobe(
   path: string,
   sourceFd: number,
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   executable = "ffprobe",
   execution?: ProbeNativeProcessExecution,
 ) {
   const inheritedDescriptor = platform() !== "win32";
   const input = inheritedDescriptor ? "/dev/fd/3" : path;
   const args = ["-v", "error", "-print_format", "json", "-show_program_version", "-show_format", "-show_streams", "-show_chapters", input];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffprobe",
       executable,
       args,
@@ -349,7 +416,7 @@ async function ffprobe(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffprobe executable was not found on PATH.")
@@ -372,7 +439,7 @@ async function ffprobe(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(
       () => abort(new CutProjectError("CUTP2001", `ffprobe timed out after ${budget.timeoutMs}ms.`)),
@@ -428,7 +495,7 @@ async function ffmpegDecodedAudioPcmIdentity(
   path: string,
   sourceFd: number,
   stream: { index: number; channels: number },
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   executable = "ffmpeg",
   execution?: ProbeNativeProcessExecution,
 ) {
@@ -439,9 +506,9 @@ async function ffmpegDecodedAudioPcmIdentity(
     "-map", `0:${stream.index}`, "-vn", "-sn", "-dn",
     "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1",
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffmpeg",
       executable,
       args,
@@ -451,7 +518,7 @@ async function ffmpegDecodedAudioPcmIdentity(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffmpeg executable was not found on PATH.", path)
@@ -471,7 +538,7 @@ async function ffmpegDecodedAudioPcmIdentity(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(() => abort(new CutProjectError("CUTP2001", `ffmpeg decoded-audio PCM scan timed out after ${budget.timeoutMs}ms.`, path)), budget.timeoutMs);
     if (!child.stdout || !child.stderr) abort(new CutProjectError("CUTP2008", "ffmpeg decoded-audio PCM scan did not expose bounded output pipes.", path));
@@ -539,9 +606,9 @@ async function ffmpegAudioProxyAnalysisPcm(
     "-map", "[cut_audio_proxy_alignment]", "-map_metadata", "-1",
     "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1",
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffmpeg",
       executable,
       args,
@@ -551,7 +618,7 @@ async function ffmpegAudioProxyAnalysisPcm(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffmpeg executable was not found on PATH.", path)
@@ -569,7 +636,7 @@ async function ffmpegAudioProxyAnalysisPcm(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(
       () => abort(new CutProjectError("CUTP2001", `ffmpeg audio-proxy alignment scan timed out after ${budget.timeoutMs}ms.`, path)),
@@ -800,7 +867,7 @@ async function scanAudioProxyAlignmentVariant(
         ffmpegExecutable,
         execution,
       ),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, execution?.signal),
     ]);
     const [hashFinal, scanFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pathFinal)], path);
@@ -950,9 +1017,9 @@ async function ffmpegVideoProxyAnalysisRgb(
     "-map", "[cut_video_proxy_alignment]", "-map_metadata", "-1",
     "-fps_mode", "passthrough", "-c:v", "rawvideo", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffmpeg",
       executable,
       args,
@@ -962,7 +1029,7 @@ async function ffmpegVideoProxyAnalysisRgb(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffmpeg executable was not found on PATH.", path)
@@ -980,7 +1047,7 @@ async function ffmpegVideoProxyAnalysisRgb(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const timer = setTimeout(
       () => abort(new CutProjectError("CUTP2001", `ffmpeg video-proxy alignment scan timed out after ${budget.timeoutMs}ms.`, path)),
@@ -1082,7 +1149,7 @@ async function scanVideoProxyAlignmentVariant(
     if (initial.size !== BigInt(identity.file.bytes)) throw new CutProjectError("CUTP2009", "Media byte count changed before video-proxy alignment scanning.", path);
     const results = await Promise.allSettled([
       ffmpegVideoProxyAnalysisRgb(path, scanHandle.fd, stream.index, witness.frameCount, budget, ffmpegExecutable, execution),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, execution?.signal),
     ]);
     const [hashFinal, scanFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pathFinal)], path);
@@ -1191,7 +1258,7 @@ async function ffprobeDecodedAudioSamples(
   path: string,
   sourceFd: number,
   stream: { index: number; timeBase: Rational; sampleRate: number; channels: number; duration?: Rational },
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   pcm: { sampleCount: string; sha256: string },
   executable = "ffprobe",
   execution?: ProbeNativeProcessExecution,
@@ -1206,9 +1273,9 @@ async function ffprobeDecodedAudioSamples(
     "-of", "compact=p=1:nk=0",
     input,
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffprobe",
       executable,
       args,
@@ -1218,7 +1285,7 @@ async function ffprobeDecodedAudioSamples(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffprobe executable was not found on PATH.", path)
@@ -1247,7 +1314,7 @@ async function ffprobeDecodedAudioSamples(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const invalid = (message: string) => abort(new CutProjectError("CUTP2016", `Audio stream ${stream.index} has no safe decoded sample witness: ${message}`, path));
     const parseLine = (line: string) => {
@@ -1418,7 +1485,7 @@ async function ffprobeDecodedVideoCadence(
   path: string,
   sourceFd: number,
   stream: { index: number; timeBase: Rational; start: Rational; frameRates: Rational[] },
-  budget: Required<ProbeBudget>,
+  budget: ResolvedProbeBudget,
   executable = "ffprobe",
   execution?: ProbeNativeProcessExecution,
 ): Promise<CutDecodedVideoCadence> {
@@ -1446,9 +1513,9 @@ async function ffprobeDecodedVideoCadence(
     "-of", "compact=p=1:nk=0",
     input,
   ];
-  let child: ChildProcess;
+  let child: ChildProcess, terminate: () => void;
   try {
-    child = await spawnProbeNativeProcess(
+    ({ child, terminate } = await spawnProbeNativeProcess(
       "ffprobe",
       executable,
       args,
@@ -1458,7 +1525,7 @@ async function ffprobeDecodedVideoCadence(
         stdio: inheritedDescriptor ? ["ignore", "pipe", "pipe", sourceFd] : ["ignore", "pipe", "pipe"],
       },
       execution,
-    );
+    ));
   } catch (error) {
     throw errorCode(error) === "ENOENT"
       ? new CutProjectError("CUTP2008", "ffprobe executable was not found on PATH.", path)
@@ -1481,7 +1548,7 @@ async function ffprobeDecodedVideoCadence(
     };
     const abort = (error: Error) => {
       if (!terminalError) terminalError = error;
-      child.kill("SIGKILL");
+      terminate();
     };
     const invalid = (message: string) => abort(new CutProjectError("CUTP2014", `Video stream ${stream.index} has no safe decoded cadence witness: ${message}`, path));
     const parseLine = (line: string) => {
@@ -1674,7 +1741,7 @@ export async function probeProjectMedia(
 
     const results = await Promise.allSettled([
       ffprobe(path, probeHandle.fd, budget, nativeExecutables.ffprobe, execution),
-      sha256(hashHandle, bytes),
+      sha256(hashHandle, bytes, execution?.signal),
     ]);
     let after: SourceSnapshot[];
     try {
@@ -1821,7 +1888,7 @@ export async function probeProjectDecodedVideoCadence(
     if (initial.size !== BigInt(identity.file.bytes)) throw new CutProjectError("CUTP2009", "Media byte count changed before decoded-cadence scanning.", path);
     const results = await Promise.allSettled([
       ffprobeDecodedVideoCadence(path, scanHandle.fd, { index: stream.index, timeBase: stream.timeBase, start: stream.start, frameRates }, cadenceBudget, nativeExecutables.ffprobe, execution),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, execution?.signal),
     ]);
     const [hashFinal, scanFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pathFinal)], path);
@@ -1897,7 +1964,7 @@ export async function probeProjectDecodedAudioSamples(
         nativeExecutables.ffprobe,
         executions?.frames,
       ),
-      sha256(hashHandle, identity.file.bytes),
+      sha256(hashHandle, identity.file.bytes, executions?.frames.signal ?? executions?.pcm.signal),
     ]);
     const [hashFinal, scanFinal, pcmFinal, pathFinal] = await Promise.all([hashHandle.stat({ bigint: true }), scanHandle.stat({ bigint: true }), pcmHandle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(hashFinal), sourceSnapshot(scanFinal), sourceSnapshot(pcmFinal), sourceSnapshot(pathFinal)], path);
@@ -1936,7 +2003,7 @@ async function probeFileIdentity(projectRoot: string, locator: string, options: 
     if (initial.size > BigInt(budget.maxFileBytes) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {
       throw new CutProjectError("CUTP2006", `Resource exceeds the ${budget.maxFileBytes}-byte lock budget.`, path);
     }
-    const bytes = Number(initial.size), digest = await sha256(handle, bytes);
+    const bytes = Number(initial.size), digest = await sha256(handle, bytes, options.signal);
     const [handleFinal, pathFinal] = await Promise.all([handle.stat({ bigint: true }), stat(path, { bigint: true })]);
     assertStableSource(initial, [sourceSnapshot(handleFinal), sourceSnapshot(pathFinal)], path);
     await assertStableLocator(projectRoot, safeLocator, path);

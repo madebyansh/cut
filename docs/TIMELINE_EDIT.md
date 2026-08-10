@@ -248,4 +248,4 @@ intersecting/layered transitions, custom curve extensions,
 generic/external-NLE nested execution parity, exact packed replay of the next
 shipped-byte freeze, and human workflow review remain open. CCH-05,
 cross-platform install, signing, rights, and human playback/creative gates
-also remain open. CUT remains `0.4.0-alpha.3`.
+also remain open. CUT remains `0.4.0-alpha.4`.
