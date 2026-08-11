@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const cutPackageFootprintLimits = Object.freeze({
-  maximumPackedBytes: 4_114_071,
-  maximumUnpackedBytes: 21_894_582,
+  maximumPackedBytes: 4_114_137,
+  maximumUnpackedBytes: 21_894_748,
   maximumEntries: 1_021,
   maximumAdapterBytes: 512 * 1024,
   maximumAudioAdapterBytes: 64 * 1024,

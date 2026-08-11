@@ -5,6 +5,7 @@ import {
   cutAudioIntelligenceRequiredFiles,
   cutAudioKokoroMlxAdapterFiles,
   cutAudioYamnetAdapterFiles,
+  cutPackageFootprintLimits,
 } from "./assert-package-footprint.mjs";
 
 const adapterFiles = [
@@ -147,9 +148,9 @@ test("package footprint requires the exact audited YAMNet adapter inventory", ()
 
 test("package footprint rejects bloat, hidden model payloads, ML root dependencies, and lifecycle installs", () => {
   for (const mutate of [
-    (value) => { value.pack[0].size = 4_114_072; },
-    (value) => { value.pack[0].unpackedSize = 21_894_583; },
-    (value) => { value.pack[0].entryCount = 1_022; },
+    (value) => { value.pack[0].size = cutPackageFootprintLimits.maximumPackedBytes + 1; },
+    (value) => { value.pack[0].unpackedSize = cutPackageFootprintLimits.maximumUnpackedBytes + 1; },
+    (value) => { value.pack[0].entryCount = cutPackageFootprintLimits.maximumEntries + 1; },
     (value) => { value.pack[0].files.push({ path: "adapters/footage-local/models/model.onnx", size: 1, mode: 0o644 }); value.pack[0].entryCount += 1; },
     (value) => { value.pack[0].files.push({ path: "models/yamnet.tflite", size: 1, mode: 0o644 }); value.pack[0].entryCount += 1; },
     (value) => { value.pack[0].files.push({ path: "runtime/ai_edge_litert.whl", size: 1, mode: 0o644 }); value.pack[0].entryCount += 1; },
