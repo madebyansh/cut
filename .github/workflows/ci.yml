@@ -127,6 +127,22 @@ jobs:
           ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name,duration -of json review/range-preview.mp4 > "$reports/preview-ffprobe.json"
           ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name,duration -of json output/preview-render.mp4 > "$reports/render-ffprobe.json"
           node "$GITHUB_WORKSPACE/scripts/assert-linux-package-smoke.mjs" "$consumer/film" "$reports"
+      - name: Verify installed audio workflow with fake YAMNet wiring only
+        if: matrix.node-version == '24.15.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer="$RUNNER_TEMP/cut-consumer"
+          reports="$RUNNER_TEMP/cut-reports"
+          audio_work="$RUNNER_TEMP/cut-audio-audition-installed"
+          cut="$consumer/node_modules/.bin/cut"
+          test -x "$cut"
+          test ! -e "$audio_work"
+          node "$GITHUB_WORKSPACE/scripts/verify-audio-audition-installed.mjs" \
+            --cut-bin "$cut" \
+            --work-root "$audio_work" \
+            > "$reports/audio-audition-installed.json"
+          test -s "$reports/audio-audition-installed.json"
 
   semantic-footage-real:
     name: semantic-footage-real (${{ matrix.os }}, node ${{ matrix.node-version }})

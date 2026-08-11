@@ -69,6 +69,77 @@ URLs, creator, license and attribution. The catalog identity covers the
 normalized complete content. CUT never infers a kind, license, or trust level
 from a filename, URL, search rank, or tag.
 
+## Optional audio metadata and rights evidence
+
+Existing `kind: "audio"` entries remain valid without either extension. An
+audio entry may additionally carry closed `audio` analysis metadata, closed
+`rights` evidence metadata, or both. Neither field is valid on another kind.
+
+```json
+{
+  "audio": {
+    "role": "music",
+    "durationSamples": 5760000,
+    "sampleRate": 48000,
+    "channels": 2,
+    "bpmMilli": 120000,
+    "key": "D minor",
+    "energy": "high",
+    "moods": ["restrained", "tense"],
+    "loopable": true
+  },
+  "rights": {
+    "basis": "source-asserted",
+    "licenseId": "CC-BY-4.0",
+    "licenseVersion": "4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "evidenceSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "compositionGrant": {
+      "commercialUse": true,
+      "modification": true,
+      "audiovisualSynchronization": true,
+      "standaloneRedistribution": false,
+      "attributionRequired": true,
+      "shareAlike": false
+    },
+    "masterGrant": {
+      "commercialUse": true,
+      "modification": true,
+      "audiovisualSynchronization": true,
+      "standaloneRedistribution": false,
+      "attributionRequired": true,
+      "shareAlike": false
+    },
+    "reviewStatus": "approved"
+  }
+}
+```
+
+`role` is `music`, `sfx`, `ambience`, or `dialogue`. `durationSamples` is
+bounded to 2,147,483,647; `sampleRate` to 768,000; `channels` to 64; and the
+optional integer `bpmMilli` to 1,000,000. Optional `energy` is `low`, `medium`,
+or `high`. `key` is a normalized string of at most 32 UTF-8 bytes. `moods`
+contains at most 16 unique normalized lowercase ASCII tokens of at most 32
+bytes each. Audio values, including role, BPM, key, energy, moods and
+loopability, participate in the existing deterministic textual query. There
+are no implicit audio-specific CLI filters.
+
+`basis` is `source-asserted`, `user-attested`, or `contract-receipt`.
+`reviewStatus` is `pending`, `approved`, or `rejected`. Composition and master
+grants are deliberately separate, and every permission is explicit. The
+evidence digest identifies the exact saved license or contract receipt used by
+the catalog publisher; it does not make CUT a license adjudicator.
+
+The exported `doesCutAudioCatalogMetadataDeclareCommercialSyncUse` predicate
+is a deliberately narrow, deterministic metadata policy, not a statement of
+legal clearance. It returns true only for reviewed `approved` audio rights that use exact
+`CC0-1.0`/version `1.0`, exact `CC-BY-4.0`/version `4.0`, or an explicit
+`contract-receipt`; both composition and master grants must permit commercial
+use, modification and audiovisual synchronization, and neither may require
+share-alike. Unknown, NC, ND and SA identifiers fail closed. The predicate
+does not waive attribution, project scope, territory, expiry, source
+verification, standalone-redistribution limits, or human/legal review.
+
 ## Selection to runtime authority
 
 1. Search the catalog and inspect the source page, license, attribution and
@@ -107,6 +178,9 @@ and [CLI reference](CLI.md).
 - No bundled remote marketplace, web crawler, credential store, downloader, or
   license adjudicator.
 - No automatic acceptance of a catalog publisher or candidate.
+- No automatic rights clearance;
+  `doesCutAudioCatalogMetadataDeclareCommercialSyncUse` only classifies
+  declared, reviewed metadata under CUT's narrow fail-closed policy.
 - No filename/co-location guessing and no system-font fallback.
 - Search proves deterministic filtering of declared metadata, not suitability,
   factual relevance, sync, visual quality, listening quality, or rights.

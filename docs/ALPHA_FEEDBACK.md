@@ -29,9 +29,10 @@ repository. Useful feedback includes:
 - whether `cut init`, format, check, lint, lock, build, inspect, test, frame,
   contact, audition, preview, and render form a clear authoring loop;
 - whether source-located diagnostics make a broken program easy to repair;
-- whether the documentary, product, podcast/social, education/data, and
-  travel/social constructs in [PRACTICAL_WORKFLOWS.md](PRACTICAL_WORKFLOWS.md)
-  are understandable and reusable; and
+- whether the reusable constructs in the
+  [agent guide](AGENT_GUIDE.md#reference-safe-primitives) and shipped examples
+  are understandable across documentary, product, podcast/social,
+  education/data, and travel/social work; and
 - whether the exact supported semantics produce deterministic pixels, samples,
   and media on an unchanged replay.
 

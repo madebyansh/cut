@@ -1,0 +1,18 @@
+{
+  "format": "cut-audio-audition-bindings",
+  "version": 2,
+  "entries": [
+    {
+      "id": "local-music-bed",
+      "audioLocator": "assets/local-music-bed.wav",
+      "rightsEvidenceLocator": "rights/local-music-bed-license.txt",
+      "semanticAnalysis": {
+        "locator": ".cut/audio/local-music-bed.analysis.json",
+        "bytes": 40000,
+        "fileSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "analysisSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  ],
+  "bindingsSha256": "f63ed080905db73e9f9bc06db37057418dcb436a081df10d0aa8ac822f474e46"
+}

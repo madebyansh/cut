@@ -2,6 +2,10 @@
 
 ## 0.4.0-alpha.4
 
+- Added optional local Whisper transcription, YAMNet semantic analysis and search, dialogue-prosody analysis, and Kokoro MLX narration.
+- Added source- and rights-evidence-bound audio indexing, candidate auditions, and deterministic ranking receipts without treating metadata as legal clearance.
+- Added a documentary/podcast arrangement command that emits ordinary editable CUT source plus a canonical manifest; locking, rendering, and creative approval remain explicit later steps.
+- Kept model/runtime installation outside CUT and model execution outside authoritative preview and final render; generated artifacts and their hashes are the deterministic boundary.
 - Added optional local semantic footage setup, doctor, indexing, search, and exact candidate extraction commands.
 - Kept the main package lightweight by installing the pinned CPU q8 CLIP runtime and model only after explicit setup; normal inference is offline.
 - Bound indexes, vectors, searches, sources, ranges, and extracted clips with deterministic identities, stale-input checks, and no-clobber publication.

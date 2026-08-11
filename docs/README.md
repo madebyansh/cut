@@ -32,6 +32,7 @@ Picture and motion:
 
 Audio and delivery:
 
+- [Audio intelligence](AUDIO_INTELLIGENCE.md) — local transcription, semantic analysis and search, prosody, narration, audition, and arrangement into editable CUT source
 - [Audio stems](AUDIO_STEMS.md)
 - [Audio regions](AUDIO_REGIONS.md)
 - [Sidechain routing](SIDECHAIN.md)

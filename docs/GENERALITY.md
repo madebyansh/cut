@@ -42,5 +42,6 @@ requires six substantially different redistributable projects plus a traceable
 data, narrative/title and documentary grammar. At least 90% of those patterns
 must be cleanly executable, mandatory editorial/audio foundations may have no
 unexpressible pattern, and remaining limits may not force one visual house
-style. The authoritative rows and evidence requirements live in
-[`CUT_1_0_CONTRACT.md`](CUT_1_0_CONTRACT.md#12-generality-pattern-benchmark-and-agent-dogfood).
+style. This document defines the public benchmark boundary; the current
+supported surface and remaining release gates are summarized in
+[`CAPABILITIES.md`](CAPABILITIES.md) and [`ROADMAP_1_0.md`](ROADMAP_1_0.md).

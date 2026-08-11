@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cut:schema:audio-analysis:1",
+  "title": "CUT audio analysis v1",
+  "description": "Hash-bound sample-domain observations plus explicitly non-authoritative semantic suggestions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["analysisSha256", "backend", "format", "global", "policy", "sections", "semanticStatus", "source", "version", "windows"],
+  "properties": {
+    "format": { "const": "cut-audio-analysis" },
+    "version": { "const": 1 },
+    "semanticStatus": { "const": "editorial-suggestions-not-ground-truth" },
+    "source": { "$ref": "#/$defs/source" },
+    "backend": { "$ref": "#/$defs/backend" },
+    "policy": { "$ref": "#/$defs/policy" },
+    "windows": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/window" }
+    },
+    "global": { "$ref": "#/$defs/global" },
+    "sections": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/section" }
+    },
+    "analysisSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!\\s)(?!.*\\s$)(?!/)(?![A-Za-z]:)(?!.*(?:^|/)(?:\\.\\.?|__proto__|prototype|constructor)(?:/|$))(?!.*[\\\\%?#:])(?!.*//).+$"
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]+$"
+    },
+    "sample": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 33177600000
+    },
+    "positiveSample": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 33177600000
+    },
+    "ppm": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "positivePpm": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "role": {
+      "enum": ["speech", "music", "ambience", "sfx", "silence"]
+    },
+    "mood": {
+      "enum": ["calm", "tense", "hopeful", "energetic", "reflective", "somber", "joyful", "ominous", "intimate", "triumphant"]
+    },
+    "label": {
+      "enum": ["speech", "music", "ambience", "sfx", "silence", "calm", "tense", "hopeful", "energetic", "reflective", "somber", "joyful", "ominous", "intimate", "triumphant"]
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endSample", "startSample"],
+      "properties": {
+        "startSample": { "$ref": "#/$defs/sample" },
+        "endSample": { "$ref": "#/$defs/positiveSample" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "channels", "durationSamples", "locator", "normalizedPcmSha256", "sampleRate", "sha256", "streamIndex"],
+      "properties": {
+        "locator": { "$ref": "#/$defs/locator" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "streamIndex": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "sampleRate": { "type": "integer", "minimum": 8000, "maximum": 384000 },
+        "channels": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "durationSamples": { "$ref": "#/$defs/positiveSample" },
+        "normalizedPcmSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "modelFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "license", "locator", "sha256"],
+      "properties": {
+        "locator": { "$ref": "#/$defs/locator" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "license": { "allOf": [{ "$ref": "#/$defs/boundedText" }], "maxLength": 512 }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterSha256", "model", "modelFiles", "provider", "revision"],
+      "properties": {
+        "provider": { "allOf": [{ "$ref": "#/$defs/boundedText" }], "maxLength": 256 },
+        "model": { "allOf": [{ "$ref": "#/$defs/boundedText" }], "maxLength": 512 },
+        "revision": { "allOf": [{ "$ref": "#/$defs/boundedText" }], "maxLength": 256 },
+        "adapterSha256": { "$ref": "#/$defs/sha256" },
+        "semanticInference": { "$ref": "#/$defs/semanticInference" },
+        "modelFiles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/modelFile" }
+        }
+      }
+    },
+    "semanticPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "prompt"],
+      "properties": {
+        "label": { "$ref": "#/$defs/label" },
+        "prompt": { "$ref": "#/$defs/boundedText" }
+      }
+    },
+    "semanticPromptGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "prompts"],
+      "properties": {
+        "id": { "enum": ["role", "mood"] },
+        "prompts": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/semanticPrompt" }
+        }
+      }
+    },
+    "semanticPromptPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backendFamily", "format", "groups", "normalization", "policySha256", "scoreToPpm", "version", "window"],
+      "properties": {
+        "format": { "const": "cut-audio-semantic-prompt-policy" },
+        "version": { "const": 1 },
+        "backendFamily": { "const": "clap-zero-shot-audio-text-v1" },
+        "groups": {
+          "const": [
+            {
+              "id": "role",
+              "prompts": [
+                { "label": "speech", "prompt": "This audio contains spoken human voice." },
+                { "label": "music", "prompt": "This audio contains music." },
+                { "label": "ambience", "prompt": "This audio contains environmental ambience." },
+                { "label": "sfx", "prompt": "This audio contains a distinct sound effect." },
+                { "label": "silence", "prompt": "This audio is silence or near-silence." }
+              ]
+            },
+            {
+              "id": "mood",
+              "prompts": [
+                { "label": "calm", "prompt": "This audio feels calm." },
+                { "label": "tense", "prompt": "This audio feels tense." },
+                { "label": "hopeful", "prompt": "This audio feels hopeful." },
+                { "label": "energetic", "prompt": "This audio feels energetic." },
+                { "label": "reflective", "prompt": "This audio feels reflective." },
+                { "label": "somber", "prompt": "This audio feels somber." },
+                { "label": "joyful", "prompt": "This audio feels joyful." },
+                { "label": "ominous", "prompt": "This audio feels ominous." },
+                { "label": "intimate", "prompt": "This audio feels intimate." },
+                { "label": "triumphant", "prompt": "This audio feels triumphant." }
+              ]
+            }
+          ]
+        },
+        "normalization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["audioEmbedding", "comparison", "groupScores", "text", "textEmbedding"],
+          "properties": {
+            "text": { "const": "unicode-nfc-control-free-exact-utf8-v1" },
+            "audioEmbedding": { "const": "l2-f32-unit-vector-v1" },
+            "textEmbedding": { "const": "l2-f32-unit-vector-v1" },
+            "comparison": { "const": "model-logit-scale-cosine-dot-f32-v1" },
+            "groupScores": { "const": "stable-softmax-f64-independent-per-group-v1" }
+          }
+        },
+        "scoreToPpm": { "const": "unit-interval-round-half-up-to-ppm-v1" },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channelMix", "channels", "hopSamples", "sampleRate", "terminalWindow", "windowSamples"],
+          "properties": {
+            "sampleRate": { "const": 48000 },
+            "channels": { "const": 1 },
+            "windowSamples": { "const": 480000 },
+            "hopSamples": { "const": 480000 },
+            "channelMix": { "const": "arithmetic-mean-f32-v1" },
+            "terminalWindow": { "const": "right-zero-pad-to-window-v1" }
+          }
+        },
+        "policySha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "semanticInference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "promptPolicy"],
+      "properties": {
+        "kind": { "const": "clap-zero-shot-audio-text" },
+        "promptPolicy": { "$ref": "#/$defs/semanticPromptPolicy" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hopSamples", "taxonomyId", "tempoMaxBpm", "tempoMinBpm", "windowSamples"],
+      "properties": {
+        "windowSamples": { "$ref": "#/$defs/positiveSample" },
+        "hopSamples": { "$ref": "#/$defs/positiveSample" },
+        "taxonomyId": { "const": "cut-audio-taxonomy-v1" },
+        "tempoMinBpm": { "type": "integer", "minimum": 20, "maximum": 400 },
+        "tempoMaxBpm": { "type": "integer", "minimum": 20, "maximum": 400 }
+      }
+    },
+    "semanticLabel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "scorePpm"],
+      "properties": {
+        "label": { "$ref": "#/$defs/label" },
+        "scorePpm": { "$ref": "#/$defs/positivePpm" }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["labels", "onsetStrengthPpm", "peakDbfsMilli", "range", "rmsDbfsMilli"],
+      "properties": {
+        "range": { "$ref": "#/$defs/range" },
+        "rmsDbfsMilli": { "type": "integer", "minimum": -200000, "maximum": 24000 },
+        "peakDbfsMilli": { "type": "integer", "minimum": -200000, "maximum": 24000 },
+        "onsetStrengthPpm": { "$ref": "#/$defs/ppm" },
+        "labels": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/semanticLabel" }
+        }
+      }
+    },
+    "tempoCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bpmMilli", "scorePpm"],
+      "properties": {
+        "bpmMilli": { "type": "integer", "minimum": 20000, "maximum": 400000 },
+        "scorePpm": { "$ref": "#/$defs/positivePpm" }
+      }
+    },
+    "beat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample", "scorePpm"],
+      "properties": {
+        "sample": { "$ref": "#/$defs/sample" },
+        "scorePpm": { "$ref": "#/$defs/positivePpm" }
+      }
+    },
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["beats", "tempoCandidates"],
+      "properties": {
+        "tempoCandidates": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/tempoCandidate" }
+        },
+        "beats": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": { "$ref": "#/$defs/beat" }
+        }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confidencePpm", "range", "role"],
+      "properties": {
+        "range": { "$ref": "#/$defs/range" },
+        "role": { "$ref": "#/$defs/role" },
+        "mood": { "$ref": "#/$defs/mood" },
+        "confidencePpm": { "$ref": "#/$defs/positivePpm" }
+      }
+    }
+  },
+  "x-cut-semanticConstraints": [
+    "all text is NFC-normalized and runtime byte ceilings apply to UTF-8 bytes rather than JSON Schema code-point length",
+    "analysisSha256 equals SHA-256 of canonical JSON for every field except analysisSha256",
+    "modelFiles are strictly sorted by unique locator",
+    "window ranges are hop-grid aligned, windowSamples long except for one bounded terminal partial window, in bounds, and nonoverlapping",
+    "window labels are unique and sorted by descending score then label and include at least one role",
+    "tempo candidates are unique and sorted by descending score then bpmMilli within policy bounds",
+    "beats are strictly sample-ordered and sections are sample-ordered and nonoverlapping",
+    "semantic labels and moods are editorial suggestions, not factual or creative ground truth",
+    "semanticInference is omitted for legacy or non-prompt backends; when present its prompt policy contains exactly the canonical role group followed by the canonical mood group and is hash-bound into analysisSha256"
+  ]
+}

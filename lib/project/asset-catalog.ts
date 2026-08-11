@@ -11,6 +11,20 @@ export const cutAssetCatalogKinds = Object.freeze([
 ] as const);
 export type CutAssetCatalogKind = (typeof cutAssetCatalogKinds)[number];
 
+export const cutAudioCatalogRoles = Object.freeze(["music", "sfx", "ambience", "dialogue"] as const);
+export type CutAudioCatalogRole = (typeof cutAudioCatalogRoles)[number];
+
+export const cutAudioCatalogEnergyLevels = Object.freeze(["low", "medium", "high"] as const);
+export type CutAudioCatalogEnergy = (typeof cutAudioCatalogEnergyLevels)[number];
+
+export const cutAudioCatalogRightsBases = Object.freeze([
+  "source-asserted", "user-attested", "contract-receipt",
+] as const);
+export type CutAudioCatalogRightsBasis = (typeof cutAudioCatalogRightsBases)[number];
+
+export const cutAudioCatalogReviewStatuses = Object.freeze(["pending", "approved", "rejected"] as const);
+export type CutAudioCatalogReviewStatus = (typeof cutAudioCatalogReviewStatuses)[number];
+
 export const cutAssetCatalogLimits = Object.freeze({
   maximumBytes: 1024 * 1024,
   maximumEntries: 1_000,
@@ -20,7 +34,46 @@ export const cutAssetCatalogLimits = Object.freeze({
   maximumResults: 100,
   maximumTextBytes: 4_096,
   maximumTotalStringBytes: 512 * 1024,
+  maximumAudioDurationSamples: 2_147_483_647,
+  maximumAudioSampleRate: 768_000,
+  maximumAudioChannels: 64,
+  maximumAudioBpmMilli: 1_000_000,
+  maximumAudioKeyBytes: 32,
+  maximumAudioMoods: 16,
+  maximumAudioMoodBytes: 32,
 });
+
+export type CutAudioCatalogMetadata = Readonly<{
+  role: CutAudioCatalogRole;
+  durationSamples: number;
+  sampleRate: number;
+  channels: number;
+  bpmMilli?: number;
+  key?: string;
+  energy?: CutAudioCatalogEnergy;
+  moods: readonly string[];
+  loopable: boolean;
+}>;
+
+export type CutAudioCatalogRightsGrant = Readonly<{
+  commercialUse: boolean;
+  modification: boolean;
+  audiovisualSynchronization: boolean;
+  standaloneRedistribution: boolean;
+  attributionRequired: boolean;
+  shareAlike: boolean;
+}>;
+
+export type CutAudioCatalogRights = Readonly<{
+  basis: CutAudioCatalogRightsBasis;
+  licenseId: string;
+  licenseVersion: string;
+  licenseUrl: string;
+  evidenceSha256: string;
+  compositionGrant: CutAudioCatalogRightsGrant;
+  masterGrant: CutAudioCatalogRightsGrant;
+  reviewStatus: CutAudioCatalogReviewStatus;
+}>;
 
 export type CutAssetCatalogEntry = Readonly<{
   id: string;
@@ -38,6 +91,8 @@ export type CutAssetCatalogEntry = Readonly<{
     sourceUrl: string;
     attribution: string;
   }>;
+  audio?: CutAudioCatalogMetadata;
+  rights?: CutAudioCatalogRights;
 }>;
 
 export type CutAssetCatalog = Readonly<{
@@ -141,6 +196,48 @@ function positiveSafeInteger(value: unknown, path: string) {
   return Number(value);
 }
 
+function boundedPositiveSafeInteger(value: unknown, path: string, maximum: number) {
+  const result = positiveSafeInteger(value, path);
+  if (result > maximum) fail("CUT_ASSET_CATALOG_LIMIT", path, `must be at most ${maximum}.`);
+  return result;
+}
+
+function booleanValue(value: unknown, path: string) {
+  if (typeof value !== "boolean") fail("CUT_ASSET_CATALOG_TYPE", path, "must be one boolean.");
+  return value;
+}
+
+function oneOf<const Values extends readonly string[]>(value: unknown, path: string, values: Values): Values[number] {
+  if (typeof value !== "string" || !values.includes(value)) {
+    fail("CUT_ASSET_CATALOG_TYPE", path, `must be one of ${values.join(", ")}.`);
+  }
+  return value as Values[number];
+}
+
+function boundedNormalizedText(value: unknown, path: string, maximumBytes: number) {
+  const result = text(value, path).normalize("NFKC").trim();
+  if (Buffer.byteLength(result, "utf8") > maximumBytes) {
+    fail("CUT_ASSET_CATALOG_LIMIT", path, `must be at most ${maximumBytes} UTF-8 bytes after normalization.`);
+  }
+  return result;
+}
+
+function audioMood(value: unknown, path: string) {
+  const result = boundedNormalizedText(value, path, cutAssetCatalogLimits.maximumAudioMoodBytes).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]*$/u.test(result)) {
+    fail("CUT_ASSET_CATALOG_TEXT", path, "must normalize to one lowercase ASCII token containing only letters, digits, or hyphens.");
+  }
+  return result;
+}
+
+function licenseIdentifier(value: unknown, path: string) {
+  const result = boundedNormalizedText(value, path, 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9.+-]*$/u.test(result)) {
+    fail("CUT_ASSET_CATALOG_TEXT", path, "must be one bounded SPDX-style or LicenseRef identifier token.");
+  }
+  return result;
+}
+
 function stableId(value: unknown, path: string) {
   const result = text(value, path);
   if (!/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(result)) {
@@ -149,13 +246,97 @@ function stableId(value: unknown, path: string) {
   return result;
 }
 
+function parseAudioMetadata(value: unknown, path: string): CutAudioCatalogMetadata {
+  const object = closed(value, path, [
+    "role", "durationSamples", "sampleRate", "channels", "moods", "loopable",
+  ], ["bpmMilli", "key", "energy"]);
+  if (!Array.isArray(object.moods) || object.moods.length > cutAssetCatalogLimits.maximumAudioMoods) {
+    fail("CUT_ASSET_CATALOG_LIMIT", `${path}.moods`, `must contain at most ${cutAssetCatalogLimits.maximumAudioMoods} moods.`);
+  }
+  const moods = object.moods.map((mood, index) => audioMood(mood, `${path}.moods[${index}]`));
+  if (new Set(moods).size !== moods.length) {
+    fail("CUT_ASSET_CATALOG_DUPLICATE", `${path}.moods`, "must not contain duplicate normalized moods.");
+  }
+  return Object.freeze({
+    role: oneOf(object.role, `${path}.role`, cutAudioCatalogRoles),
+    durationSamples: boundedPositiveSafeInteger(
+      object.durationSamples,
+      `${path}.durationSamples`,
+      cutAssetCatalogLimits.maximumAudioDurationSamples,
+    ),
+    sampleRate: boundedPositiveSafeInteger(
+      object.sampleRate,
+      `${path}.sampleRate`,
+      cutAssetCatalogLimits.maximumAudioSampleRate,
+    ),
+    channels: boundedPositiveSafeInteger(
+      object.channels,
+      `${path}.channels`,
+      cutAssetCatalogLimits.maximumAudioChannels,
+    ),
+    ...(object.bpmMilli === undefined ? {} : {
+      bpmMilli: boundedPositiveSafeInteger(
+        object.bpmMilli,
+        `${path}.bpmMilli`,
+        cutAssetCatalogLimits.maximumAudioBpmMilli,
+      ),
+    }),
+    ...(object.key === undefined ? {} : {
+      key: boundedNormalizedText(object.key, `${path}.key`, cutAssetCatalogLimits.maximumAudioKeyBytes),
+    }),
+    ...(object.energy === undefined ? {} : {
+      energy: oneOf(object.energy, `${path}.energy`, cutAudioCatalogEnergyLevels),
+    }),
+    moods: Object.freeze(moods),
+    loopable: booleanValue(object.loopable, `${path}.loopable`),
+  });
+}
+
+function parseRightsGrant(value: unknown, path: string): CutAudioCatalogRightsGrant {
+  const object = closed(value, path, [
+    "commercialUse", "modification", "audiovisualSynchronization", "standaloneRedistribution",
+    "attributionRequired", "shareAlike",
+  ]);
+  return Object.freeze({
+    commercialUse: booleanValue(object.commercialUse, `${path}.commercialUse`),
+    modification: booleanValue(object.modification, `${path}.modification`),
+    audiovisualSynchronization: booleanValue(
+      object.audiovisualSynchronization,
+      `${path}.audiovisualSynchronization`,
+    ),
+    standaloneRedistribution: booleanValue(object.standaloneRedistribution, `${path}.standaloneRedistribution`),
+    attributionRequired: booleanValue(object.attributionRequired, `${path}.attributionRequired`),
+    shareAlike: booleanValue(object.shareAlike, `${path}.shareAlike`),
+  });
+}
+
+function parseAudioRights(value: unknown, path: string): CutAudioCatalogRights {
+  const object = closed(value, path, [
+    "basis", "licenseId", "licenseVersion", "licenseUrl", "evidenceSha256",
+    "compositionGrant", "masterGrant", "reviewStatus",
+  ]);
+  return Object.freeze({
+    basis: oneOf(object.basis, `${path}.basis`, cutAudioCatalogRightsBases),
+    licenseId: licenseIdentifier(object.licenseId, `${path}.licenseId`),
+    licenseVersion: boundedNormalizedText(object.licenseVersion, `${path}.licenseVersion`, 64),
+    licenseUrl: httpsUrl(object.licenseUrl, `${path}.licenseUrl`),
+    evidenceSha256: sha256(object.evidenceSha256, `${path}.evidenceSha256`),
+    compositionGrant: parseRightsGrant(object.compositionGrant, `${path}.compositionGrant`),
+    masterGrant: parseRightsGrant(object.masterGrant, `${path}.masterGrant`),
+    reviewStatus: oneOf(object.reviewStatus, `${path}.reviewStatus`, cutAudioCatalogReviewStatuses),
+  });
+}
+
 function parseEntry(value: unknown, index: number): CutAssetCatalogEntry {
   const path = `$.entries[${index}]`;
   const object = closed(value, path, [
     "id", "label", "kind", "description", "tags", "downloadUrl", "sha256", "bytes", "provenance",
-  ]);
+  ], ["audio", "rights"]);
   if (typeof object.kind !== "string" || !cutAssetCatalogKinds.includes(object.kind as CutAssetCatalogKind)) {
     fail("CUT_ASSET_CATALOG_KIND", `${path}.kind`, `must be one of ${cutAssetCatalogKinds.join(", ")}.`);
+  }
+  if (object.kind !== "audio" && (object.audio !== undefined || object.rights !== undefined)) {
+    fail("CUT_ASSET_CATALOG_KIND", path, "audio and rights metadata are only valid for kind=audio entries.");
   }
   if (!Array.isArray(object.tags) || object.tags.length > cutAssetCatalogLimits.maximumTagsPerEntry) {
     fail("CUT_ASSET_CATALOG_LIMIT", `${path}.tags`, `must contain at most ${cutAssetCatalogLimits.maximumTagsPerEntry} tags.`);
@@ -181,7 +362,34 @@ function parseEntry(value: unknown, index: number): CutAssetCatalogEntry {
       sourceUrl: httpsUrl(provenance.sourceUrl, `${path}.provenance.sourceUrl`),
       attribution: text(provenance.attribution, `${path}.provenance.attribution`),
     }),
+    ...(object.audio === undefined ? {} : { audio: parseAudioMetadata(object.audio, `${path}.audio`) }),
+    ...(object.rights === undefined ? {} : { rights: parseAudioRights(object.rights, `${path}.rights`) }),
   });
+}
+
+function grantsCommercialAudiovisualUse(grant: CutAudioCatalogRightsGrant) {
+  return grant.commercialUse
+    && grant.modification
+    && grant.audiovisualSynchronization
+    && !grant.shareAlike;
+}
+
+/**
+ * Matches catalog metadata against CUT's narrow commercial-sync policy. This
+ * does not authenticate the referenced evidence bytes and is never legal
+ * clearance; callers must verify those bytes and retain human rights review.
+ */
+export function doesCutAudioCatalogMetadataDeclareCommercialSyncUse(entry: CutAssetCatalogEntry) {
+  if (entry.kind !== "audio" || !entry.rights || entry.rights.reviewStatus !== "approved") return false;
+  const rights = entry.rights;
+  const cc0 = rights.licenseId === "CC0-1.0" && rights.licenseVersion === "1.0";
+  const ccBy = rights.licenseId === "CC-BY-4.0" && rights.licenseVersion === "4.0";
+  const forbiddenPublicLicense = /^CC-(?:[A-Z0-9.]+-)*(?:NC|ND|SA)(?:-|$)/iu.test(rights.licenseId);
+  const unknownLicense = /(?:^|[-.])(?:unknown|noassertion|none)(?:[-.]|$)/iu.test(rights.licenseId);
+  if (forbiddenPublicLicense || unknownLicense) return false;
+  if (!cc0 && !ccBy && rights.basis !== "contract-receipt") return false;
+  return grantsCommercialAudiovisualUse(rights.compositionGrant)
+    && grantsCommercialAudiovisualUse(rights.masterGrant);
 }
 
 export function parseCutAssetCatalog(input: string | Uint8Array): CutAssetCatalog {
@@ -280,6 +488,23 @@ export function searchCutAssetCatalog(
       const haystack = normalizedSearchText([
         entry.id, entry.label, entry.kind, entry.description, ...entry.tags,
         entry.provenance.creator, entry.provenance.license,
+        ...(entry.audio ? [
+          entry.audio.role,
+          String(entry.audio.durationSamples),
+          String(entry.audio.sampleRate),
+          String(entry.audio.channels),
+          ...(entry.audio.bpmMilli === undefined ? [] : [String(entry.audio.bpmMilli)]),
+          ...(entry.audio.key === undefined ? [] : [entry.audio.key]),
+          ...(entry.audio.energy === undefined ? [] : [entry.audio.energy]),
+          ...entry.audio.moods,
+          entry.audio.loopable ? "loopable" : "nonlooping",
+        ] : []),
+        ...(entry.rights ? [
+          entry.rights.basis,
+          entry.rights.licenseId,
+          entry.rights.licenseVersion,
+          entry.rights.reviewStatus,
+        ] : []),
       ].join(" "));
       return { entry, haystack };
     })

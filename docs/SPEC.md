@@ -407,8 +407,10 @@ locked fixed `FontAsset`, explicit geometry/colors, and an optional closed
 `mode`. `claim-card` is the pixel-stable default and shows source identity plus
 the bounded claim. `source-chip` shows only a compact derived source label, with
 `size` as its visible label size. Both emit only locked glyph paths. Their
-schema, layout, resource, and failure semantics are specified in
-[Locked Evidence](EVIDENCE.md).
+public constructor is summarized under
+[reference-safe primitives](AGENT_GUIDE.md#reference-safe-primitives); its
+schema, layout, resource, and failure semantics are defined by this
+specification and the reference runtime.
 
 `AVNode` is the common accepted result type for visual, audio, and linked audiovisual nodes. `GeoPoint` is structurally compatible with a record containing `latitude` or `lat` and `longitude`, `lon`, or `lng`, where both fields are scalar or angle quantities.
 

@@ -28,6 +28,7 @@ test("machine CLI reference is deterministic, closed, and separates formal from 
   assert.equal(report.summary.commands, report.commands.length);
   assert.ok(report.summary.formal > 10);
   assert.equal(report.summary.footage, 5);
+  assert.equal(report.summary.audio, 12);
   assert.ok(report.summary.package >= 7);
   assert.ok(report.summary.legacy >= 10);
   assert.deepEqual(report.aliases["av-build"], "build");
@@ -72,6 +73,97 @@ test("machine CLI reference is deterministic, closed, and separates formal from 
     { name: "--json", kind: "flag", required: false },
     { name: "--match", kind: "value", required: true },
     { name: "--out", kind: "value", required: true },
+  ]);
+
+  const audio = Object.fromEntries(report.commands
+    .filter((entry: { category: string }) => entry.category === "audio")
+    .map((entry: { command: string }) => [entry.command, entry]));
+  assert.deepEqual(Object.keys(audio).sort(), [
+    "audio analyze",
+    "audio analyze-doctor",
+    "audio analyze-setup",
+    "audio arrange",
+    "audio audition",
+    "audio doctor",
+    "audio index",
+    "audio narrate",
+    "audio prosody",
+    "audio search",
+    "audio setup",
+    "audio transcribe",
+  ]);
+  assert.deepEqual(audio["audio setup"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio doctor"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--setup", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio transcribe"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--language", kind: "value", required: false },
+    { name: "--out", kind: "value", required: true },
+    { name: "--receipt", kind: "value", required: true },
+    { name: "--setup", kind: "value", required: true },
+    { name: "--stream", kind: "value", required: false },
+    { name: "--threads", kind: "value", required: false },
+  ]);
+  assert.deepEqual(audio["audio prosody"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+    { name: "--transcript", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio analyze-setup"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio analyze-doctor"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--setup", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio analyze"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+    { name: "--setup", kind: "value", required: true },
+    { name: "--top", kind: "value", required: false },
+  ]);
+  assert.deepEqual(audio["audio arrange"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--manifest", kind: "value", required: true },
+    { name: "--out", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio narrate"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--language", kind: "value", required: false },
+    { name: "--out", kind: "value", required: true },
+    { name: "--receipt", kind: "value", required: true },
+    { name: "--recipe", kind: "value", required: true },
+    { name: "--sample-rate", kind: "value", required: false },
+    { name: "--seed", kind: "value", required: false },
+    { name: "--speed", kind: "value", required: false },
+  ]);
+  assert.deepEqual(audio["audio index"].options, [
+    { name: "--bindings", kind: "value", required: true },
+    { name: "--json", kind: "flag", required: false },
+    { name: "--out", kind: "value", required: true },
+  ]);
+  assert.deepEqual(audio["audio search"].options, [
+    { name: "--json", kind: "flag", required: false },
+    { name: "--limit", kind: "value", required: false },
+    { name: "--query", kind: "value", required: true },
+    { name: "--rights", kind: "value", required: false },
+    { name: "--role", kind: "value", required: false },
+  ]);
+  assert.deepEqual(audio["audio audition"].options, [
+    { name: "--bindings", kind: "value", required: true },
+    { name: "--catalog", kind: "value", required: true },
+    { name: "--dialogue", kind: "value", required: true },
+    { name: "--json", kind: "flag", required: false },
+    { name: "--music-start-sample", kind: "value", required: false },
+    { name: "--out", kind: "value", required: true },
+    { name: "--samples", kind: "value", required: true },
+    { name: "--top", kind: "value", required: false },
   ]);
 
   const documentation = readFileSync(resolve("docs", "CLI.md"), "utf8");

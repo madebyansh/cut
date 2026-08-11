@@ -1,0 +1,597 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cut:schema:audio-semantic-analysis:1",
+  "title": "CUT YAMNet semantic audio analysis v1",
+  "description": "Closed pre-release v1 materialized YAMNet evidence with exact embedded replay bytes and deterministic signal evidence. Suggestions are editorial aids, not ground truth, emotion, provenance, licensing, or rights clearance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "analysisSha256",
+    "derivationInputs",
+    "format",
+    "limitations",
+    "normalization",
+    "provider",
+    "signal",
+    "source",
+    "taxonomy",
+    "version"
+  ],
+  "properties": {
+    "format": { "const": "cut-audio-semantic-analysis" },
+    "version": { "const": 1 },
+    "source": { "$ref": "#/definitions/source" },
+    "normalization": { "$ref": "#/definitions/normalization" },
+    "provider": { "$ref": "#/definitions/provider" },
+    "derivationInputs": { "$ref": "#/definitions/derivationInputs" },
+    "taxonomy": { "$ref": "#/definitions/taxonomy" },
+    "signal": { "$ref": "#/definitions/signal" },
+    "limitations": { "$ref": "#/definitions/limitations" },
+    "analysisSha256": { "$ref": "#/definitions/sha256" }
+  },
+  "definitions": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeNonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "safePositiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sample160k": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 160000
+    },
+    "positiveSample160k": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 160000
+    },
+    "ppm": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]+$"
+    },
+    "declaredName": {
+      "allOf": [{ "$ref": "#/definitions/boundedText" }],
+      "maxLength": 512
+    },
+    "declaredLicense": {
+      "allOf": [{ "$ref": "#/definitions/boundedText" }],
+      "maxLength": 1024
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!\\s)(?!.*\\s$)(?!/)(?![A-Za-z]:)(?!.*(?:^|/)(?:\\.\\.?|__proto__|prototype|constructor)(?:/|$))(?!.*[\\\\%?#:])(?!.*//)[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "locator", "sha256"],
+      "properties": {
+        "locator": { "$ref": "#/definitions/locator" },
+        "bytes": { "$ref": "#/definitions/safePositiveInteger" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceSha256", "format", "output", "policy", "source", "version", "wave", "work"],
+      "properties": {
+        "format": { "const": "cut-wave-normalization-evidence" },
+        "version": { "const": 1 },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bytes", "sha256"],
+          "properties": {
+            "bytes": { "type": "integer", "minimum": 44, "maximum": 67108864 },
+            "sha256": { "$ref": "#/definitions/sha256" }
+          }
+        },
+        "wave": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["audioFormat", "bitsPerSample", "blockAlign", "byteRate", "channelMask", "channels", "container", "dataBytes", "dataPadBytes", "duration", "formatVariant", "frames", "sampleRate", "validBitsPerSample"],
+          "properties": {
+            "container": { "const": "RIFF/WAVE" },
+            "audioFormat": { "const": 1 },
+            "formatVariant": { "enum": ["classic-pcm", "extensible-pcm"] },
+            "sampleRate": { "type": "integer", "minimum": 8000, "maximum": 192000 },
+            "channels": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "bitsPerSample": { "enum": [16, 24, 32] },
+            "validBitsPerSample": { "enum": [16, 24, 32] },
+            "channelMask": { "type": "integer", "minimum": 0, "maximum": 262143 },
+            "blockAlign": { "type": "integer", "minimum": 2, "maximum": 32 },
+            "byteRate": { "type": "integer", "minimum": 16000, "maximum": 6144000 },
+            "frames": { "type": "integer", "minimum": 1, "maximum": 1920000 },
+            "dataBytes": { "type": "integer", "minimum": 2, "maximum": 67108820 },
+            "dataPadBytes": { "enum": [0, 1] },
+            "duration": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["denominatorSampleRate", "numeratorSamples"],
+              "properties": {
+                "numeratorSamples": { "type": "integer", "minimum": 1, "maximum": 1920000 },
+                "denominatorSampleRate": { "type": "integer", "minimum": 8000, "maximum": 192000 }
+              }
+            }
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["downmix", "policySha256", "resampler"],
+          "properties": {
+            "policySha256": { "const": "e4b16bcc7255640330694aacd207a2a2cd644a1b4bb220a6f66970f76b78063d" },
+            "downmix": { "const": "equal-weight-arithmetic-mean-f64-v1" },
+            "resampler": { "enum": ["target-rate-identity-v1", "32-tap-blackman-windowed-sinc-lowpass-v1"] }
+          }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bytes", "channels", "sampleFormat", "sampleRate", "samples", "sha256"],
+          "properties": {
+            "sampleFormat": { "const": "f32le" },
+            "sampleRate": { "const": 16000 },
+            "channels": { "const": 1 },
+            "samples": { "type": "integer", "minimum": 1, "maximum": 160000 },
+            "bytes": { "type": "integer", "minimum": 4, "maximum": 640000 },
+            "sha256": { "$ref": "#/definitions/sha256" }
+          }
+        },
+        "work": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "boundaryExtendedTaps",
+            "candidateTapEvaluations",
+            "channelSampleReads",
+            "coefficientEvaluations",
+            "contributingCoefficients",
+            "downmixAdditions",
+            "float32Writes",
+            "inputFrames",
+            "multiplyAccumulateOperations",
+            "outputSamples",
+            "saturatedOutputSamples"
+          ],
+          "properties": {
+            "inputFrames": { "type": "integer", "minimum": 1, "maximum": 1920000 },
+            "channelSampleReads": { "type": "integer", "minimum": 1, "maximum": 15360000 },
+            "downmixAdditions": { "type": "integer", "minimum": 1, "maximum": 15360000 },
+            "outputSamples": { "type": "integer", "minimum": 1, "maximum": 160000 },
+            "candidateTapEvaluations": { "type": "integer", "minimum": 0, "maximum": 5120000 },
+            "coefficientEvaluations": { "type": "integer", "minimum": 0, "maximum": 5120000 },
+            "contributingCoefficients": { "type": "integer", "minimum": 0, "maximum": 5120000 },
+            "boundaryExtendedTaps": { "type": "integer", "minimum": 0, "maximum": 5120000 },
+            "multiplyAccumulateOperations": { "type": "integer", "minimum": 0, "maximum": 5120000 },
+            "saturatedOutputSamples": { "type": "integer", "minimum": 0, "maximum": 160000 },
+            "float32Writes": { "type": "integer", "minimum": 1, "maximum": 160000 }
+          }
+        },
+        "evidenceSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "providerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "channels", "sampleFormat", "sampleRate", "samples", "sha256"],
+      "properties": {
+        "sampleFormat": { "const": "f32le" },
+        "sampleRate": { "const": 16000 },
+        "channels": { "const": 1 },
+        "samples": { "type": "integer", "minimum": 1, "maximum": 160000 },
+        "bytes": { "type": "integer", "minimum": 4, "maximum": 640000 },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "providerFraming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["patchCount", "patchHopSamples", "patchSamples", "rightPadFinalPatch"],
+      "properties": {
+        "patchSamples": { "const": 15600 },
+        "patchHopSamples": { "const": 7680 },
+        "rightPadFinalPatch": { "const": true },
+        "patchCount": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    },
+    "rawScores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "classCount", "sampleFormat", "sha256"],
+      "properties": {
+        "classCount": { "const": 521 },
+        "sampleFormat": { "const": "f32le" },
+        "bytes": { "type": "integer", "minimum": 2084, "maximum": 41680 },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "embeddedRawScores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "data", "encoding", "sha256"],
+      "properties": {
+        "encoding": { "const": "base64" },
+        "bytes": { "type": "integer", "minimum": 2084, "maximum": 41680 },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "data": {
+          "type": "string",
+          "minLength": 2780,
+          "maxLength": 55576,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
+      }
+    },
+    "embeddedClassMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "data", "encoding", "sha256"],
+      "properties": {
+        "encoding": { "const": "base64" },
+        "bytes": { "const": 6230 },
+        "sha256": { "const": "8e1267a120c1932b7273c0d0e0c5529edbb9a35512b437b1c8982baa59047051" },
+        "data": {
+          "type": "string",
+          "minLength": 8308,
+          "maxLength": 8308,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
+      }
+    },
+    "derivationInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classMap", "rawScores"],
+      "properties": {
+        "rawScores": { "$ref": "#/definitions/embeddedRawScores" },
+        "classMap": { "$ref": "#/definitions/embeddedClassMap" }
+      }
+    },
+    "topClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classIndex", "label", "score"],
+      "properties": {
+        "classIndex": { "type": "integer", "minimum": 0, "maximum": 520 },
+        "label": { "allOf": [{ "$ref": "#/definitions/boundedText" }], "maxLength": 512 },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "topClasses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "$ref": "#/definitions/topClass" }
+    },
+    "providerPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["patchIndex", "startSample", "topClasses", "validSamples"],
+      "properties": {
+        "patchIndex": { "type": "integer", "minimum": 0, "maximum": 19 },
+        "startSample": { "$ref": "#/definitions/sample160k" },
+        "validSamples": { "type": "integer", "minimum": 1, "maximum": 15600 },
+        "topClasses": { "$ref": "#/definitions/topClasses" }
+      }
+    },
+    "authorities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterSha256", "classMapSha256", "environmentTreeSha256", "liteRtTreeSha256", "modelSha256", "pythonSha256"],
+      "properties": {
+        "pythonSha256": { "$ref": "#/definitions/sha256" },
+        "adapterSha256": { "$ref": "#/definitions/sha256" },
+        "environmentTreeSha256": { "$ref": "#/definitions/sha256" },
+        "liteRtTreeSha256": { "$ref": "#/definitions/sha256" },
+        "modelSha256": { "$ref": "#/definitions/sha256" },
+        "classMapSha256": { "const": "8e1267a120c1932b7273c0d0e0c5529edbb9a35512b437b1c8982baa59047051" }
+      }
+    },
+    "declaredAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["license", "name", "provenance", "revision"],
+      "properties": {
+        "name": { "$ref": "#/definitions/declaredName" },
+        "revision": { "$ref": "#/definitions/declaredName" },
+        "license": { "$ref": "#/definitions/declaredLicense" },
+        "provenance": { "$ref": "#/definitions/boundedText" }
+      }
+    },
+    "declarations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callerDeclared", "classMap", "liteRtLicense", "model"],
+      "properties": {
+        "callerDeclared": { "const": true },
+        "liteRtLicense": { "$ref": "#/definitions/declaredLicense" },
+        "model": { "$ref": "#/definitions/declaredAsset" },
+        "classMap": { "$ref": "#/definitions/declaredAsset" }
+      }
+    },
+    "evidenceScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "inference", "licenses", "locality"],
+      "properties": {
+        "authority": { "const": "CUT authenticates the caller-selected CPython, environment, LiteRT subset, adapter, model, and class-map bytes. It does not authenticate the operating system or every dynamically loaded system library." },
+        "licenses": { "const": "License and provenance strings are caller declarations recorded for traceability; CUT does not verify licensing rights or upstream provenance." },
+        "locality": { "const": "The adapter accepts PCM only through stdin and invokes the staged direct LiteRT interpreter with a local model. It has no setup, download, MediaPipe Tasks, or telemetry path. This is not an operating-system network sandbox." },
+        "inference": { "const": "Raw float32 score bytes and their SHA-256 are the deterministic result boundary; reproducible floating-point inference across different runtime or hardware identities is not claimed." }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aggregateTopClasses", "analysisSha256", "authorities", "declarations", "evidenceScope", "format", "framing", "input", "patches", "provider", "rawScores", "stderr", "topK", "version"],
+      "properties": {
+        "format": { "const": "cut-yamnet-local-analysis" },
+        "version": { "const": 1 },
+        "provider": { "const": "cut-yamnet-litert-local-v1" },
+        "analysisSha256": { "$ref": "#/definitions/sha256" },
+        "input": { "$ref": "#/definitions/providerInput" },
+        "framing": { "$ref": "#/definitions/providerFraming" },
+        "rawScores": { "$ref": "#/definitions/rawScores" },
+        "stderr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bytes", "sha256"],
+          "properties": {
+            "bytes": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+            "sha256": { "$ref": "#/definitions/sha256" }
+          }
+        },
+        "topK": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "aggregateTopClasses": { "$ref": "#/definitions/topClasses" },
+        "patches": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": { "$ref": "#/definitions/providerPatch" }
+        },
+        "authorities": { "$ref": "#/definitions/authorities" },
+        "declarations": { "$ref": "#/definitions/declarations" },
+        "evidenceScope": { "$ref": "#/definitions/evidenceScope" }
+      }
+    },
+    "editorialSuggestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scorePpm"],
+      "properties": {
+        "id": { "type": "string" },
+        "scorePpm": { "$ref": "#/definitions/ppm" }
+      }
+    },
+    "roleSuggestions": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "additionalItems": false,
+      "items": [
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "speech" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "music" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "silence" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "sfx" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "ambience" } } }] }
+      ]
+    },
+    "musicMoodSuggestions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "additionalItems": false,
+      "items": [
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "joyful" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "somber" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "intimate" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "energetic" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "tense" } } }] },
+        { "allOf": [{ "$ref": "#/definitions/editorialSuggestion" }, { "properties": { "id": { "const": "ominous" } } }] }
+      ]
+    },
+    "taxonomyPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["musicMoodSuggestions", "patchIndex", "roleSuggestions", "startSample", "validSamples"],
+      "properties": {
+        "patchIndex": { "type": "integer", "minimum": 0, "maximum": 19 },
+        "startSample": { "$ref": "#/definitions/sample160k" },
+        "validSamples": { "type": "integer", "minimum": 1, "maximum": 15600 },
+        "roleSuggestions": { "$ref": "#/definitions/roleSuggestions" },
+        "musicMoodSuggestions": { "$ref": "#/definitions/musicMoodSuggestions" }
+      }
+    },
+    "taxonomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aggregate", "aggregatePatchWeightSamples", "format", "interpretation", "musicMoodScope", "patches", "policyId", "policySha256", "sourceScores", "suggestionsSha256", "version"],
+      "properties": {
+        "format": { "const": "cut-yamnet-audioset-editorial-suggestions" },
+        "version": { "const": 1 },
+        "policyId": { "const": "cut-yamnet-audioset-map-v1" },
+        "policySha256": { "const": "9c62b23d62a05871aa1b124afc509fc2edbdeddca5b7c43e5e4facfcf4508efc" },
+        "sourceScores": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bytes", "classCount", "labelMapSha256", "ordering", "sampleFormat", "sha256"],
+          "properties": {
+            "sampleFormat": { "const": "f32le" },
+            "classCount": { "const": 521 },
+            "ordering": { "const": "patch-major-class-index-ascending-v1" },
+            "bytes": { "type": "integer", "minimum": 2084, "maximum": 41680 },
+            "sha256": { "$ref": "#/definitions/sha256" },
+            "labelMapSha256": { "const": "8e1267a120c1932b7273c0d0e0c5529edbb9a35512b437b1c8982baa59047051" }
+          }
+        },
+        "interpretation": { "const": "editorial-suggestions-not-ground-truth-v1" },
+        "musicMoodScope": { "const": "music-only-no-unmapped-mood-inference-v1" },
+        "aggregatePatchWeightSamples": { "type": "integer", "minimum": 1, "maximum": 312000 },
+        "aggregate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["musicMoodSuggestions", "roleSuggestions"],
+          "properties": {
+            "roleSuggestions": { "$ref": "#/definitions/roleSuggestions" },
+            "musicMoodSuggestions": { "$ref": "#/definitions/musicMoodSuggestions" }
+          }
+        },
+        "patches": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": { "$ref": "#/definitions/taxonomyPatch" }
+        },
+        "suggestionsSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "signalRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endSample", "startSample"],
+      "properties": {
+        "startSample": { "$ref": "#/definitions/sample160k" },
+        "endSample": { "$ref": "#/definitions/positiveSample160k" }
+      }
+    },
+    "activityWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meanAbsolutePpm", "peakDbfsMilli", "range", "rmsDbfsMilli", "state"],
+      "properties": {
+        "range": { "$ref": "#/definitions/signalRange" },
+        "state": { "enum": ["active", "silence"] },
+        "rmsDbfsMilli": { "type": "integer", "minimum": -120000, "maximum": 0 },
+        "peakDbfsMilli": { "type": "integer", "minimum": -120000, "maximum": 0 },
+        "meanAbsolutePpm": { "$ref": "#/definitions/ppm" }
+      }
+    },
+    "onset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["range", "strengthPpm"],
+      "properties": {
+        "range": { "$ref": "#/definitions/signalRange" },
+        "strengthPpm": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+      }
+    },
+    "tempoCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bpmMilli", "confidencePpm", "lagWindows"],
+      "properties": {
+        "bpmMilli": { "type": "integer", "minimum": 50000, "maximum": 200000 },
+        "confidencePpm": { "$ref": "#/definitions/ppm" },
+        "lagWindows": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "signalSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumOnsetStrengthPpm", "range", "state", "windowCount"],
+      "properties": {
+        "range": { "$ref": "#/definitions/signalRange" },
+        "state": { "enum": ["active", "silence"] },
+        "windowCount": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "maximumOnsetStrengthPpm": { "$ref": "#/definitions/ppm" }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activity", "onsets", "policy", "sections", "tempo"],
+      "properties": {
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hopSamples", "sampleRate", "sectionLaw", "silenceThresholdDbfsMilli", "tempoMaxBpm", "tempoMinBpm", "windowSamples"],
+          "properties": {
+            "sampleRate": { "const": 16000 },
+            "windowSamples": { "type": "integer", "minimum": 1, "maximum": 1600 },
+            "hopSamples": { "type": "integer", "minimum": 1, "maximum": 1600 },
+            "silenceThresholdDbfsMilli": { "const": -50000 },
+            "tempoMinBpm": { "const": 50 },
+            "tempoMaxBpm": { "const": 200 },
+            "sectionLaw": { "const": "contiguous-dsp-window-activity-runs-v1" }
+          }
+        },
+        "activity": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/activityWindow" }
+        },
+        "onsets": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/onset" }
+        },
+        "tempo": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["beatSamples", "candidates"],
+          "properties": {
+            "candidates": {
+              "type": "array",
+              "maxItems": 3,
+              "items": { "$ref": "#/definitions/tempoCandidate" }
+            },
+            "beatSamples": {
+              "type": "array",
+              "maxItems": 100,
+              "items": { "type": "integer", "minimum": 0, "maximum": 159999 }
+            }
+          }
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/signalSection" }
+        }
+      }
+    },
+    "limitations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["emotion", "legal", "providerAuthority", "semantics"],
+      "properties": {
+        "semantics": { "const": "editorial-suggestions-not-ground-truth" },
+        "emotion": { "const": "no-emotion-inference-claim" },
+        "legal": { "const": "no-license-provenance-or-rights-claim" },
+        "providerAuthority": { "const": "upstream-provider-evidence-not-reauthenticated-by-pure-materializer-public-cli-is-authenticated-composition-boundary" }
+      }
+    }
+  },
+  "x-cut-semanticConstraints": [
+    "analysisSha256 equals SHA-256 of CUT canonical JSON over the object with analysisSha256 omitted",
+    "normalization evidenceSha256 equals SHA-256 of CUT canonical JSON over the normalization object with evidenceSha256 omitted",
+    "provider analysisSha256 binds the complete canonical upstream provider analysis body, including stderr identity",
+    "taxonomy suggestionsSha256 binds the canonical taxonomy body",
+    "derivationInputs contains canonical padded base64 for the exact raw-score and official class-map bytes; byte counts and SHA-256 identities cross-bind provider.rawScores, provider.authorities.classMapSha256, and taxonomy.sourceScores",
+    "source equals normalization.source and provider.input equals normalization.output by exact bytes, samples, and hashes",
+    "normalization byte-rate, block-align, duration, output-byte, and work counters obey the closed normalization policy",
+    "normalization classic-pcm requires the exact 16-byte PCM fmt law with validBitsPerSample equal to bitsPerSample and channelMask zero; extensible-pcm requires the exact 40-byte WAVE_FORMAT_EXTENSIBLE law, cbSize 22, integer-PCM GUID, validBitsPerSample equal to bitsPerSample, and a zero mask or standard-speaker mask whose popcount equals channels",
+    "provider framing, score bytes, topK arrays, patch geometry, labels, scores, and taxonomy are independently recomputed from the embedded exact score and class-map bytes",
+    "signal ranges are ordered, contiguous where required, nonempty, and bounded by normalization.output.samples"
+  ]
+}
