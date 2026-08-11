@@ -5,11 +5,46 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
-import { cutAudioAuditionBindingsSha256 } from "../lib/audio-intelligence/audition";
+import { cutAudioAuditionBindingsSha256, cutAudioAuditionSelectionSha256 } from "../lib/audio-intelligence/audition";
 import { cutAudioBriefSha256 } from "../lib/audio-intelligence/brief";
 import { createYamnetSemanticTestArtifact } from "./yamnet-semantic-test-fixture";
 
 const cli = resolve("dist-cli/cli/cut.js"), sha = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
+
+type V1AuditionReceipt = Readonly<{
+  selectionSha256: string;
+  ranking: Readonly<{
+    candidates: readonly Readonly<{
+      lock: Readonly<{ bytes: number; sha256: string; [key: string]: unknown }>;
+      audition: Readonly<{
+        manifest: Readonly<{ bytes: number; sha256: string; [key: string]: unknown }>;
+        [key: string]: unknown;
+      }>;
+      [key: string]: unknown;
+    }>[];
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}>;
+
+function portableV1ReceiptSha256(receipt: V1AuditionReceipt) {
+  const { selectionSha256: receiptSelfHash, ...body } = receipt;
+  assert.equal(cutAudioAuditionSelectionSha256(body), receiptSelfHash, "the selection receipt must authenticate its exact environment-bound body");
+  const candidates = receipt.ranking.candidates.map((candidate) => ({
+    ...candidate,
+    // Locks deliberately bind ffprobe identity, while exact WAVE bytes and
+    // manifests bind the selected FFmpeg/reference backend. Their native-authority
+    // bytes/hashes can vary across valid toolchain versions even when the stable
+    // v1 plan, source, sample contract, and receipt structure remain unchanged.
+    lock: { ...candidate.lock, bytes: "environment-bound-native-authority", sha256: "environment-bound-native-authority" },
+    audition: {
+      ...candidate.audition,
+      sha256: "environment-bound-native-authority",
+      manifest: { ...candidate.audition.manifest, bytes: "environment-bound-native-authority", sha256: "environment-bound-native-authority" },
+    },
+  }));
+  return cutAudioAuditionSelectionSha256({ ...body, ranking: { ...receipt.ranking, candidates } });
+}
 
 function wave(kind: "voice" | "click", seconds = 1) {
   const sampleRate = 8_000, frames = sampleRate * seconds, channels = 2, dataBytes = frames * channels * 2, bytes = Buffer.alloc(44 + dataBytes);
@@ -105,11 +140,11 @@ test("audio audition CLI authenticates, ranks, emits public source+lock, and ren
       assert.deepEqual(JSON.parse(await readFile(resolve(root, "review/audio/selection.json"), "utf8")), receipt);
       assert.deepEqual(await readdir(resolve(root, ".cut/audio-audition-staging")), [], "owned renderer staging must be empty after publication");
     }
-    assert.equal(receipts[0].selectionSha256, receipts[1].selectionSha256);
+    assert.deepEqual(receipts[0], receipts[1], "same-environment independent roots must emit the exact same complete receipt");
     assert.equal(
-      receipts[0].selectionSha256,
-      "d76eb433d8ad940f7a3cc7d5b3f6cc7a936b43d41117ea796be249e89ea9923b",
-      "the frozen v1 omission receipt must remain byte-semantic compatible while v2 is additive",
+      portableV1ReceiptSha256(receipts[0]),
+      "782a739e10264c95543574ef4d1d62130c1fe0761eb92e5f70b6bcd9616e1e64",
+      "the frozen portable v1 omission receipt must remain byte-semantic compatible while v2 is additive",
     );
     assert.equal(receipts[0].ranking.candidates[0].source.sha256, receipts[1].ranking.candidates[0].source.sha256);
     assert.equal(receipts[0].ranking.candidates[0].audition.sha256, receipts[1].ranking.candidates[0].audition.sha256);
