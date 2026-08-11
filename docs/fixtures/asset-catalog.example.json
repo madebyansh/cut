@@ -47,6 +47,42 @@
         "licenseUrl": "https://example.invalid/licenses/catalog-fixture",
         "sourceUrl": "https://archive.example.invalid/items/harbour-water-ambience",
         "attribution": "Synthetic catalog fixture - no media bytes are included or authorized"
+      },
+      "audio": {
+        "role": "ambience",
+        "durationSamples": 2880000,
+        "sampleRate": 48000,
+        "channels": 2,
+        "energy": "low",
+        "moods": [
+          "atmospheric",
+          "calm"
+        ],
+        "loopable": true
+      },
+      "rights": {
+        "basis": "source-asserted",
+        "licenseId": "LicenseRef-CUT-Synthetic-Fixture",
+        "licenseVersion": "1",
+        "licenseUrl": "https://example.invalid/licenses/catalog-fixture",
+        "evidenceSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "compositionGrant": {
+          "commercialUse": false,
+          "modification": false,
+          "audiovisualSynchronization": false,
+          "standaloneRedistribution": false,
+          "attributionRequired": false,
+          "shareAlike": false
+        },
+        "masterGrant": {
+          "commercialUse": false,
+          "modification": false,
+          "audiovisualSynchronization": false,
+          "standaloneRedistribution": false,
+          "attributionRequired": false,
+          "shareAlike": false
+        },
+        "reviewStatus": "pending"
       }
     }
   ]

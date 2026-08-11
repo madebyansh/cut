@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { access, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { buildArtifact } from "../lib/core/build";
 import { createMediaIndex, transcribeMediaIndex } from "../lib/core/indexer";
@@ -32,12 +32,19 @@ import {
   generateCutVideoProxy,
   loadCutAssetCatalogFile,
   loadCutProject,
+  probeProjectBytes,
+  probeProjectDecodedAudioSamples,
   probeProjectMedia,
   relinkCutSource,
   searchCutAssetCatalog,
   type CutAssetCatalogKind,
+  validateProjectLocator,
 } from "../lib/project";
-import { writeProjectArtifacts } from "../lib/project/write-boundary";
+import {
+  ensureProjectWriteDirectory,
+  StagedFileTransactionError,
+  writeProjectArtifacts,
+} from "../lib/project/write-boundary";
 import { stableJsonStringify } from "../lib/core/stable";
 import { collectCutDoctorReport } from "../lib/system/doctor";
 import {
@@ -53,6 +60,7 @@ import { formatCutSource } from "../lib/language/formatter";
 import { lintCutModule } from "../lib/language/linter";
 import { exportCutTimelineToOtio } from "../lib/interchange/otio";
 import { importOtioTimeline } from "../lib/interchange/otio-import";
+import { parseCutTranscript } from "../lib/interchange/transcript";
 import { cutDiagnosticsFromError } from "../lib/runtime/diagnostics";
 import { inspectCutIr } from "../lib/runtime/inspect";
 import { createCutExternalPackageContext, type CutExternalPackageContext } from "../lib/package/context";
@@ -76,6 +84,7 @@ import {
   updateCutPackageDependencies,
 } from "../lib/package/project";
 import { loadCutPackageLock, resolveVerifiedCutPackageGraph } from "../lib/package/resolver";
+import { parseStrictPackageJson } from "../lib/package/json";
 import { runCutAgent, type CutAgentProvider } from "../lib/agent/author";
 import { reviewProfessionalOutputFile } from "../lib/review/professional-output";
 import { reviewReferenceStudyFile } from "../lib/review/reference-study";
@@ -85,6 +94,7 @@ import {
   renderReferenceDraftPreviewArtifact,
   renderReferenceFrameArtifact,
   renderReferencePreviewArtifact,
+  parseReferenceSampleRange,
 } from "../lib/runtime/reference/authoring-review";
 import { referenceVideoColorInterpretationWarnings } from "../lib/runtime/reference/color-management";
 import {
@@ -97,6 +107,72 @@ import {
   searchProjectFootage,
   setupCutFootageLocalBackend,
 } from "../lib/footage";
+import { parseCutAudioBrief } from "../lib/audio-intelligence/brief";
+import {
+  assertCutAudioAuditionRenderAuthorities,
+  createCutAudioAuditionSource,
+  cutAudioAuditionLimits,
+  cutAudioAuditionSelectionSha256,
+  loadCutAudioAuditionProjectFile,
+  parseCutAudioAuditionBindings,
+  rankCutAudioAuditionCandidates,
+  releaseCutAudioAuditionOwnedArtifact,
+  releaseCutAudioAuditionOwnedDirectory,
+  removeCutAudioAuditionOwnedArtifact,
+  removeCutAudioAuditionOwnedDirectory,
+  retainCutAudioAuditionOwnedArtifact,
+  retainCutAudioAuditionOwnedDirectory,
+  verifyCutAudioAuditionInputs,
+  type CutAudioAuditionOwnedArtifact,
+  type CutAudioAuditionOwnedDirectory,
+} from "../lib/audio-intelligence/audition";
+import {
+  cutWhisperLocalWorkflowContract,
+  doctorCutWhisperLocalSetup,
+  parseCutWhisperLocalSetup,
+  transcribeProjectAudioWithWhisperLocal,
+} from "../lib/audio-intelligence/whisper-workflow";
+import { collectCutWhisperLocalSetup } from "../lib/audio-intelligence/whisper-setup";
+import {
+  analyzeWithYamnetLocal,
+  collectBundledYamnetLocalSetup,
+  cutYamnetLocalPolicy,
+  cutYamnetLocalSetupBytes,
+  doctorYamnetLocal,
+  parseCutYamnetLocalSetup,
+} from "../lib/audio-intelligence/yamnet-local";
+import {
+  cutDialogueProsodyWaveDecodeLimits,
+  decodeCutWaveIntegerPcmNativeRate,
+  normalizeCutWaveForYamnet,
+} from "../lib/audio-intelligence/wave-normalize";
+import { materializeCutYamnetSemanticAnalysis } from "../lib/audio-intelligence/yamnet-materialize";
+import {
+  analyzeDialogueProsody,
+  dialogueProsodyLimits,
+  hashDialogueProsodyPcmF32,
+  hashDialogueProsodyTranscript,
+} from "../lib/audio-intelligence/dialogue-prosody";
+import {
+  buildAuthenticatedProjectAudioSemanticIndex,
+  collectBundledKokoroMlxLocalAuthorities,
+  cutAudioSemanticIndexFileLimits,
+  cutKokoroMlxLocalPolicy,
+  cutKokoroMlxLocalRecipePolicy,
+  isCutKokoroMlxLocalPlatformSupported,
+  narrateWithKokoroMlxLocal,
+  parseCutAudioSemanticIndexSnapshot,
+  prepareAuthenticatedProjectAudioArrangement,
+  searchCutAudioSemanticIndex,
+  cutAudioArrangementLimits,
+  cutAudioArrangementWorkflowLimits,
+} from "../lib/audio-intelligence/index";
+import {
+  bindReferenceNativeMediaTool,
+  createReferenceNativeProcessCollector,
+  type ReferenceNativeProcessContext,
+} from "../lib/project/native-process-authority";
+import { parseCutAssetCatalog } from "../lib/project/asset-catalog";
 
 const colorsEnabled = !process.env.NO_COLOR && process.env.FORCE_COLOR !== "0" && (process.stdout.isTTY || process.stderr.isTTY);
 const color = (code: string, text: string) => colorsEnabled ? `\x1b[${code}m${text}\x1b[0m` : text;
@@ -150,6 +226,21 @@ Optional local semantic footage search (setup is the only network-bearing comman
   cut footage index <media-root> --out <index.json> [--json]
   cut footage search <index.json> --query <text> --out <search.json> [--json]
   cut footage extract <search.json> --match <rank-or-id> [--handles <time>] --out <clip.mp4> [--json]
+
+Optional local audio intelligence (model suggestions are not ground truth or rights clearance)
+
+  cut audio setup <whisper-local.recipe.json> --out <whisper-local.setup.json> [--json]
+  cut audio doctor --setup <whisper-local.setup.json> [--json]
+  cut audio transcribe <project-relative-media> --setup <whisper-local.setup.json> --out <transcript.json> --receipt <receipt.json> [--stream 0] [--language en] [--threads 8] [--json]
+  cut audio prosody <project-relative-integer-pcm.wav> --transcript <cut-transcript-v1.json> --out <analysis.json> [--json]
+  cut audio analyze-setup <yamnet-local.recipe.json> --out <yamnet-local.setup.json> [--json]
+  cut audio analyze-doctor --setup <yamnet-local.setup.json> [--json]
+  cut audio analyze <project-relative-integer-pcm.wav> --setup <yamnet-local.setup.json> --out <analysis.json> [--top 8] [--json]
+  cut audio narrate <project-relative-script.txt> --recipe <kokoro-mlx-local.recipe.json> --out <voice.wav> --receipt <receipt.json> [--language en-us] [--speed 0.96] [--seed N] [--sample-rate 48000] [--json]
+  cut audio arrange <project-relative-input.json> --out <root-level-arrangement.cut> --manifest <manifest.json> [--json]
+  cut audio index <catalog.json> --bindings <v2.json> --out <index.json> [--json]
+  cut audio search <index.json> --query <text> [--role music|sfx|ambience|dialogue] [--rights declared-commercial-sync] [--limit 20] [--json]
+  cut audio audition <brief.json> --dialogue <voice.wav> --catalog <catalog.json> --bindings <bindings.json> --samples 0:1440000 --out <review-directory> [--music-start-sample 0] [--top 3] [--json]
 
 Local/file packages (no implicit registry)
 
@@ -211,6 +302,187 @@ const maximumCliStdinBytes = 8 * 1024 * 1024;
 
 function codedCliError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
+}
+
+async function requireAbsentCliOutputs(outputs: readonly Readonly<{ path: string; locator: string }>[]) {
+  for (const { path, locator } of outputs) {
+    try {
+      await lstat(path);
+      throw codedCliError("CUT_AUDIO_AUDITION_OUTPUT_EXISTS", `Audio audition refuses to replace existing output ${JSON.stringify(locator)}.`);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+}
+
+async function requireAbsentAudioAnalysisOutput(path: string, locator: string) {
+  try {
+    await lstat(path);
+    throw codedCliError("CUT_AUDIO_ANALYSIS_OUTPUT_EXISTS", `Audio analysis refuses to replace existing output ${JSON.stringify(locator)}.`);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
+const maximumDialogueProsodyArtifactBytes = 32 * 1024 * 1024;
+
+async function requireAbsentDialogueProsodyOutput(path: string, locator: string) {
+  try {
+    await lstat(path);
+    throw codedCliError("CUT_DIALOGUE_PROSODY_OUTPUT_EXISTS", `Dialogue prosody refuses to replace existing output ${JSON.stringify(locator)}.`);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    if (error && typeof error === "object" && "code" in error && error.code === "CUT_DIALOGUE_PROSODY_OUTPUT_EXISTS") throw error;
+    throw codedCliError(
+      "CUT_DIALOGUE_PROSODY_PUBLICATION_PREFLIGHT",
+      `Dialogue prosody could not safely inspect create-only output ${JSON.stringify(locator)}; no output was published.`,
+    );
+  }
+}
+
+function sanitizeDialogueProsodyPublicationError(error: unknown, locator: string) {
+  if (error && typeof error === "object" && "code" in error && error.code === "CUT_DIALOGUE_PROSODY_CANCELLED") return error;
+  if (error instanceof StagedFileTransactionError) {
+    if (error.code === "CUT_PUBLISH_EXISTS") {
+      return codedCliError("CUT_DIALOGUE_PROSODY_OUTPUT_EXISTS", `Dialogue prosody refuses to replace existing output ${JSON.stringify(locator)}.`);
+    }
+    if (error.code === "CUT_PUBLISH_PREFLIGHT") {
+      return codedCliError(
+        "CUT_DIALOGUE_PROSODY_PUBLICATION_PREFLIGHT",
+        `Dialogue prosody could not safely prepare create-only output ${JSON.stringify(locator)}; no output was published.`,
+      );
+    }
+    if (error.code === "CUT_PUBLISH_COMMIT") {
+      return codedCliError(
+        "CUT_DIALOGUE_PROSODY_PUBLICATION_COMMIT",
+        `Dialogue prosody could not commit create-only output ${JSON.stringify(locator)}; rollback completed and no success was reported.`,
+      );
+    }
+    return codedCliError(
+      "CUT_DIALOGUE_PROSODY_PUBLICATION_ROLLBACK",
+      `Dialogue prosody could not close rollback for project-relative output ${JSON.stringify(locator)}; no success was reported and preserved residue requires inspection.`,
+    );
+  }
+  return codedCliError(
+    "CUT_DIALOGUE_PROSODY_PUBLICATION",
+    `Dialogue prosody could not publish project-relative output ${JSON.stringify(locator)}; no success was reported.`,
+  );
+}
+
+async function requireAbsentAudioSearchOutput(path: string, locator: string) {
+  try {
+    await lstat(path);
+    throw codedCliError("CUT_AUDIO_SEARCH_OUTPUT_EXISTS", `Audio semantic indexing refuses to replace existing output ${JSON.stringify(locator)}.`);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
+async function requireAbsentNarrationOutputs(outputs: readonly Readonly<{ path: string; locator: string }>[]) {
+  for (const output of outputs) {
+    try {
+      await lstat(output.path);
+      throw codedCliError("CUT_KOKORO_MLX_OUTPUT_EXISTS", `Narration refuses to replace existing output ${JSON.stringify(output.locator)}.`);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      if (error && typeof error === "object" && "code" in error && error.code === "CUT_KOKORO_MLX_OUTPUT_EXISTS") throw error;
+      throw codedCliError("CUT_KOKORO_MLX_PUBLICATION_PREFLIGHT", `Narration could not safely inspect create-only output ${JSON.stringify(output.locator)}; no output was published.`);
+    }
+  }
+}
+
+const maximumKokoroNarrationReceiptBytes = 1024 * 1024;
+
+function sanitizeNarrationPublicationError(error: unknown) {
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    && error.code.startsWith("CUT_KOKORO_MLX_")) return error;
+  if (error instanceof StagedFileTransactionError) {
+    if (error.code === "CUT_PUBLISH_EXISTS") {
+      return codedCliError("CUT_KOKORO_MLX_OUTPUT_EXISTS", "Narration refuses to replace either create-only output.");
+    }
+    if (error.code === "CUT_PUBLISH_PREFLIGHT") {
+      return codedCliError("CUT_KOKORO_MLX_PUBLICATION_PREFLIGHT", "Narration could not safely prepare both create-only outputs; neither was published.");
+    }
+    if (error.code === "CUT_PUBLISH_COMMIT") {
+      return codedCliError("CUT_KOKORO_MLX_PUBLICATION_COMMIT", "Narration could not commit both create-only outputs; rollback completed and no success was reported.");
+    }
+    return codedCliError("CUT_KOKORO_MLX_PUBLICATION_ROLLBACK", "Narration rollback did not close exactly; no success was reported and preserved residue requires inspection.");
+  }
+  return codedCliError("CUT_KOKORO_MLX_PUBLICATION", "Narration could not publish both project-relative outputs; no success was reported.");
+}
+
+async function requireAbsentArrangementOutputs(outputs: readonly Readonly<{ path: string; locator: string }>[]) {
+  for (const output of outputs) {
+    try {
+      await lstat(output.path);
+      throw codedCliError("CUT_AUDIO_ARRANGEMENT_OUTPUT_EXISTS", `Audio arrangement refuses to replace existing output ${JSON.stringify(output.locator)}.`);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      if (error && typeof error === "object" && "code" in error && error.code === "CUT_AUDIO_ARRANGEMENT_OUTPUT_EXISTS") throw error;
+      throw codedCliError("CUT_AUDIO_ARRANGEMENT_PUBLICATION_PREFLIGHT", `Audio arrangement could not safely inspect create-only output ${JSON.stringify(output.locator)}; no output was published.`);
+    }
+  }
+}
+
+function sanitizeArrangementPublicationError(error: unknown) {
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    && error.code.startsWith("CUT_AUDIO_ARRANGEMENT_")) return error;
+  if (error instanceof StagedFileTransactionError) {
+    if (error.code === "CUT_PUBLISH_EXISTS") {
+      return codedCliError("CUT_AUDIO_ARRANGEMENT_OUTPUT_EXISTS", "Audio arrangement refuses to replace either create-only output.");
+    }
+    if (error.code === "CUT_PUBLISH_PREFLIGHT") {
+      return codedCliError("CUT_AUDIO_ARRANGEMENT_PUBLICATION_PREFLIGHT", "Audio arrangement could not safely prepare both create-only outputs; neither was published.");
+    }
+    if (error.code === "CUT_PUBLISH_COMMIT") {
+      return codedCliError("CUT_AUDIO_ARRANGEMENT_PUBLICATION_COMMIT", "Audio arrangement could not commit both create-only outputs; rollback completed and no success was reported.");
+    }
+    return codedCliError("CUT_AUDIO_ARRANGEMENT_PUBLICATION_ROLLBACK", "Audio arrangement rollback did not close exactly; no success was reported and preserved residue requires inspection.");
+  }
+  return codedCliError("CUT_AUDIO_ARRANGEMENT_PUBLICATION", "Audio arrangement could not publish both project-relative outputs; no success was reported.");
+}
+
+function parseNarrationSpeedMicros(value: string) {
+  if (!/^(?:0|1)(?:\.[0-9]{1,6})?$/u.test(value)) {
+    throw new CutCliUsageError("CUTC1007", "audio narrate", "--speed must be a decimal from 0.75 through 1.25 with at most six fractional digits.");
+  }
+  const [whole, fraction = ""] = value.split(".");
+  const micros = Number(whole) * 1_000_000 + Number(fraction.padEnd(6, "0"));
+  if (micros < 750_000 || micros > 1_250_000) {
+    throw new CutCliUsageError("CUTC1007", "audio narrate", "--speed must be a decimal from 0.75 through 1.25 with at most six fractional digits.");
+  }
+  return micros;
+}
+
+function decodeNarrationScript(bytes: Buffer) {
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+  catch { throw codedCliError("CUT_KOKORO_MLX_SCRIPT_UTF8", "Narration script must be strict UTF-8."); }
+  if (text.endsWith("\r\n")) text = text.slice(0, -2);
+  else if (text.endsWith("\n")) text = text.slice(0, -1);
+  if (!text || text !== text.trim() || text.normalize("NFC") !== text
+    || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(text)) {
+    throw codedCliError(
+      "CUT_KOKORO_MLX_SCRIPT_TEXT",
+      "Narration script must currently be one non-empty, trimmed, NFC, control-free paragraph, optionally followed by one LF or CRLF file terminator.",
+    );
+  }
+  return text;
+}
+
+function verifyAudioAnalysisPublication(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw codedCliError("CUT_YAMNET_CANCELLED", "YAMNet command was cancelled during publication; the output transaction was rolled back.");
+  }
+}
+
+function verifyDialogueProsodyPublication(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw codedCliError("CUT_DIALOGUE_PROSODY_CANCELLED", "Dialogue prosody was cancelled during publication; the output transaction was rolled back.");
+  }
 }
 
 async function withFootageSignals<T>(operation: (signal: AbortSignal) => Promise<T>) {
@@ -343,6 +615,18 @@ const cliCommandSchemas: Readonly<Record<string, CliCommandSchema>> = Object.fre
   "footage-index": schema(1, { "--out": "value", "--json": "flag" }, ["--out"]),
   "footage-search": schema(1, { "--query": "value", "--out": "value", "--json": "flag" }, ["--query", "--out"]),
   "footage-extract": schema(1, { "--match": "value", "--handles": "value", "--out": "value", "--json": "flag" }, ["--match", "--out"]),
+  "audio-doctor": schema(0, { "--setup": "value", "--json": "flag" }, ["--setup"]),
+  "audio-setup": schema(1, { "--out": "value", "--json": "flag" }, ["--out"]),
+  "audio-transcribe": schema(1, { "--setup": "value", "--out": "value", "--receipt": "value", "--stream": "value", "--language": "value", "--threads": "value", "--json": "flag" }, ["--setup", "--out", "--receipt"]),
+  "audio-prosody": schema(1, { "--transcript": "value", "--out": "value", "--json": "flag" }, ["--transcript", "--out"]),
+  "audio-analyze-setup": schema(1, { "--out": "value", "--json": "flag" }, ["--out"]),
+  "audio-analyze-doctor": schema(0, { "--setup": "value", "--json": "flag" }, ["--setup"]),
+  "audio-analyze": schema(1, { "--setup": "value", "--out": "value", "--top": "value", "--json": "flag" }, ["--setup", "--out"]),
+  "audio-narrate": schema(1, { "--recipe": "value", "--out": "value", "--receipt": "value", "--language": "value", "--speed": "value", "--seed": "value", "--sample-rate": "value", "--json": "flag" }, ["--recipe", "--out", "--receipt"]),
+  "audio-arrange": schema(1, { "--out": "value", "--manifest": "value", "--json": "flag" }, ["--out", "--manifest"]),
+  "audio-index": schema(1, { "--bindings": "value", "--out": "value", "--json": "flag" }, ["--bindings", "--out"]),
+  "audio-search": schema(1, { "--query": "value", "--role": "value", "--rights": "value", "--limit": "value", "--json": "flag" }, ["--query"]),
+  "audio-audition": schema(1, { "--dialogue": "value", "--catalog": "value", "--bindings": "value", "--samples": "value", "--out": "value", "--music-start-sample": "value", "--top": "value", "--json": "flag" }, ["--dialogue", "--catalog", "--bindings", "--samples", "--out"]),
 
   "legacy-auth": schema(1),
   "legacy-ingest": schema(1, { "--out": "value", "--transcribe": "flag" }),
@@ -367,13 +651,14 @@ function commandLabel(command: string) {
   if (command.startsWith("agent-")) return `agent ${command.slice("agent-".length)}`;
   if (command.startsWith("asset-")) return `asset ${command.slice("asset-".length)}`;
   if (command.startsWith("footage-")) return `footage ${command.slice("footage-".length)}`;
+  if (command.startsWith("audio-")) return `audio ${command.slice("audio-".length)}`;
   return command.replace("otio-", "otio ");
 }
 
 function cliHelpReport() {
   const commands = Object.entries(cliCommandSchemas).map(([command, contract]) => ({
     command: commandLabel(command),
-    category: command.startsWith("legacy-") ? "legacy" : command.startsWith("package-") ? "package" : command.startsWith("agent-") ? "agent" : command.startsWith("footage-") ? "footage" : command.startsWith("otio-") ? "interchange" : "formal",
+    category: command.startsWith("legacy-") ? "legacy" : command.startsWith("package-") ? "package" : command.startsWith("agent-") ? "agent" : command.startsWith("footage-") ? "footage" : command.startsWith("audio-") ? "audio" : command.startsWith("otio-") ? "interchange" : "formal",
     stability: command.startsWith("legacy-") ? "legacy" : "alpha",
     positionals: contract.positionals,
     options: Object.entries(contract.options).sort(([left], [right]) => left.localeCompare(right)).map(([name, kind]) => ({ name, kind, required: contract.requiredOptions.includes(name) })),
@@ -409,6 +694,7 @@ function cliHelpReport() {
       package: commands.filter((command) => command.category === "package").length,
       agent: commands.filter((command) => command.category === "agent").length,
       footage: commands.filter((command) => command.category === "footage").length,
+      audio: commands.filter((command) => command.category === "audio").length,
       legacy: commands.filter((command) => command.category === "legacy").length,
     },
   };
@@ -422,6 +708,7 @@ function requestedCommandLabel() {
   if (raw === "agent") return `agent ${process.argv[3] ?? ""}`.trim();
   if (raw === "asset") return `asset ${process.argv[3] ?? ""}`.trim();
   if (raw === "footage") return `footage ${process.argv[3] ?? ""}`.trim();
+  if (raw === "audio") return `audio ${process.argv[3] ?? ""}`.trim();
   if (raw === "--version" || raw === "-v") return "version";
   return raw ?? "cut";
 }
@@ -565,7 +852,1035 @@ async function main() {
     command = `footage-${subject}`;
     subject = process.argv[4];
   }
-  validateCliInvocation(command, process.argv.slice(command.startsWith("otio-") || command.startsWith("legacy-") || command.startsWith("package-") || command.startsWith("agent-") || command.startsWith("asset-") || command.startsWith("footage-") ? 4 : 3));
+  if (command === "audio") {
+    const audioCommands = ["setup", "doctor", "transcribe", "prosody", "analyze-setup", "analyze-doctor", "analyze", "narrate", "arrange", "index", "search", "audition"];
+    if (!subject || !audioCommands.includes(subject)) {
+      throw new CutCliUsageError("CUTC1007", "audio", `audio needs one of: ${audioCommands.join(", ")}.`);
+    }
+    command = `audio-${subject}`;
+    subject = process.argv[4];
+  }
+  validateCliInvocation(command, process.argv.slice(command.startsWith("otio-") || command.startsWith("legacy-") || command.startsWith("package-") || command.startsWith("agent-") || command.startsWith("asset-") || command.startsWith("footage-") || command.startsWith("audio-") ? 4 : 3));
+  if (command === "audio-arrange") {
+    return withFootageSignals(async (signal) => {
+      const projectRoot = resolve("."), inputLocator = validateProjectLocator(subject, "audio arrangement input locator");
+      const outputLocator = validateProjectLocator(option("--out"), "audio arrangement CUT output locator");
+      const manifestLocator = validateProjectLocator(option("--manifest"), "audio arrangement manifest output locator");
+      if (outputLocator.includes("/") || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.cut$/u.test(outputLocator)) {
+        throw new CutCliUsageError("CUTC1007", "audio arrange", "--out must be one root-level portable .cut filename so project-relative asset locators retain their meaning.");
+      }
+      if (new Set([inputLocator, outputLocator, manifestLocator]).size !== 3) {
+        throw new CutCliUsageError("CUTC1007", "audio arrange", "input, CUT output, and manifest locators must be distinct.");
+      }
+      const outputPath = resolve(projectRoot, outputLocator), manifestPath = resolve(projectRoot, manifestLocator);
+      await requireAbsentArrangementOutputs([
+        { path: outputPath, locator: outputLocator },
+        { path: manifestPath, locator: manifestLocator },
+      ]);
+      const authenticated = await prepareAuthenticatedProjectAudioArrangement({ projectRoot, inputLocator, signal });
+      if (authenticated.assets.some((asset) => asset.locator === outputLocator || asset.locator === manifestLocator)) {
+        throw new CutCliUsageError("CUTC1007", "audio arrange", "outputs must be distinct from every bound audio asset locator.");
+      }
+      const sourceBytes = Buffer.from(authenticated.arrangement.source, "utf8");
+      const manifestBytes = Buffer.from(`${stableJsonStringify(authenticated.arrangement.manifest)}\n`, "utf8");
+      if (sourceBytes.byteLength > cutAudioArrangementLimits.maximumSourceBytes
+        || manifestBytes.byteLength > cutAudioArrangementWorkflowLimits.maximumManifestBytes) {
+        throw codedCliError("CUT_AUDIO_ARRANGEMENT_LIMIT", "Generated arrangement source or manifest exceeds the public artifact limit.");
+      }
+      if (createHash("sha256").update(sourceBytes).digest("hex") !== authenticated.arrangement.sourceSha256
+        || authenticated.arrangement.manifest.authority.sourceSha256 !== authenticated.arrangement.sourceSha256) {
+        throw codedCliError("CUT_AUDIO_ARRANGEMENT_IDENTITY", "Generated source bytes do not match the pure arrangement authority.");
+      }
+      try {
+        await writeProjectArtifacts([projectRoot], [
+          {
+            destination: outputPath,
+            contents: sourceBytes,
+            order: 100,
+            role: "audio-arrangement-cut-source",
+            expectedDestinationSnapshot: { state: "absent" as const },
+          },
+          {
+            destination: manifestPath,
+            contents: manifestBytes,
+            order: 200,
+            role: "audio-arrangement-manifest",
+            expectedDestinationSnapshot: { state: "absent" as const },
+          },
+        ], authenticated.verifyInputsUnchanged);
+      } catch (error) { throw sanitizeArrangementPublicationError(error); }
+      const [publishedSource, publishedManifest] = await Promise.all([
+        loadCutAudioAuditionProjectFile(projectRoot, outputLocator, cutAudioArrangementLimits.maximumSourceBytes),
+        loadCutAudioAuditionProjectFile(projectRoot, manifestLocator, cutAudioArrangementWorkflowLimits.maximumManifestBytes),
+      ]);
+      const sourceFileSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+      const manifestFileSha256 = createHash("sha256").update(manifestBytes).digest("hex");
+      if (publishedSource.bytes !== sourceBytes.byteLength || publishedSource.sha256 !== sourceFileSha256
+        || publishedManifest.bytes !== manifestBytes.byteLength || publishedManifest.sha256 !== manifestFileSha256) {
+        throw codedCliError("CUT_AUDIO_ARRANGEMENT_PUBLICATION", "Published source or manifest differs from the authenticated kernel output.");
+      }
+      const report = Object.freeze({
+        format: "cut-audio-arrange-result" as const,
+        version: 1 as const,
+        status: "pass" as const,
+        input: authenticated.input,
+        assets: Object.freeze({
+          count: authenticated.assets.length,
+          encodedBytes: authenticated.work.encodedAssetBytes,
+          channelSampleReads: authenticated.work.channelSampleReads,
+        }),
+        output: Object.freeze({ locator: outputLocator, bytes: publishedSource.bytes, sha256: publishedSource.sha256 }),
+        manifest: Object.freeze({
+          locator: manifestLocator,
+          bytes: publishedManifest.bytes,
+          fileSha256: publishedManifest.sha256,
+          manifestSha256: authenticated.arrangement.manifest.manifestSha256,
+        }),
+        arrangementSha256: authenticated.arrangement.arrangementSha256,
+        limitations: Object.freeze({
+          authoring: "editable-proposal-not-lock-render-or-main-source-mutation" as const,
+          review: "normal-speed-listening-and-rights-review-unperformed" as const,
+        }),
+      });
+      if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+      else {
+        console.log(`${green("✓")} authored audio arrangement proposal ${outputLocator}`);
+        console.log(dim(`  ${authenticated.assets.length} authenticated asset(s) · ${authenticated.arrangement.manifest.placements.length} placement(s) · ${authenticated.arrangement.sourceSha256.slice(0, 12)}…`));
+        console.log(yellow(`Inspect and edit ${outputLocator}, then run cut lock explicitly; no lock or render was performed.`));
+      }
+    });
+  }
+  if (command === "audio-narrate") {
+    return withFootageSignals(async (signal) => {
+      const projectRoot = resolve("."), scriptLocator = validateProjectLocator(subject, "narration script locator");
+      const recipeLocator = validateProjectLocator(option("--recipe"), "Kokoro MLX recipe locator");
+      const outputLocator = validateProjectLocator(option("--out"), "narration WAV output locator");
+      const receiptLocator = validateProjectLocator(option("--receipt"), "narration receipt output locator");
+      const locators = [scriptLocator, recipeLocator, outputLocator, receiptLocator];
+      if (new Set(locators).size !== locators.length) {
+        throw new CutCliUsageError("CUTC1007", "audio narrate", "script, recipe, WAV output, and receipt locators must be distinct.");
+      }
+      const language = option("--language", "en-us")!;
+      if (language !== "en-us") {
+        throw new CutCliUsageError("CUTC1007", "audio narrate", "--language currently accepts only en-us.");
+      }
+      const speedMicros = parseNarrationSpeedMicros(option("--speed", "0.96")!);
+      const seedText = option("--seed", "0")!;
+      if (!/^(?:0|[1-9][0-9]{0,9})$/u.test(seedText) || Number(seedText) > 0xffff_ffff) {
+        throw new CutCliUsageError("CUTC1007", "audio narrate", "--seed must be an integer from 0 through 4294967295.");
+      }
+      const sampleRateText = option("--sample-rate", "48000")!;
+      if (sampleRateText !== "24000" && sampleRateText !== "48000") {
+        throw new CutCliUsageError("CUTC1007", "audio narrate", "--sample-rate must be 24000 or 48000.");
+      }
+      const outputPath = resolve(projectRoot, outputLocator), receiptPath = resolve(projectRoot, receiptLocator);
+      await requireAbsentNarrationOutputs([
+        { path: outputPath, locator: outputLocator },
+        { path: receiptPath, locator: receiptLocator },
+      ]);
+      const [scriptFile, recipeFile] = await Promise.all([
+        loadCutAudioAuditionProjectFile(projectRoot, scriptLocator, cutKokoroMlxLocalPolicy.maximumTextBytes),
+        loadCutAudioAuditionProjectFile(projectRoot, recipeLocator, cutKokoroMlxLocalRecipePolicy.maximumBytes),
+      ]);
+      const scriptText = decodeNarrationScript(scriptFile.contents);
+      const recipe = parseStrictPackageJson(recipeFile.contents, {
+        limits: {
+          maxInputBytes: cutKokoroMlxLocalRecipePolicy.maximumBytes,
+          maxDepth: 12,
+          maxNodes: 10_000,
+          maxStringBytes: 16 * 1024,
+          maxTotalStringBytes: 128 * 1024,
+        },
+      });
+      if (!isCutKokoroMlxLocalPlatformSupported()) {
+        throw codedCliError("CUT_KOKORO_MLX_PLATFORM", "Kokoro MLX local narration currently requires macOS arm64.");
+      }
+      const authorities = await collectBundledKokoroMlxLocalAuthorities(recipe);
+      const result = await narrateWithKokoroMlxLocal(Object.freeze({
+        ...authorities,
+        synthesis: Object.freeze({
+          text: scriptText,
+          language,
+          speedMicros,
+          seed: Number(seedText),
+          sampleRate: Number(sampleRateText) as 24_000 | 48_000,
+        }),
+        signal,
+      }));
+      if (result.wavBytes.byteLength > cutAudioAuditionLimits.maximumWaveBytes) {
+        throw codedCliError("CUT_KOKORO_MLX_OUTPUT", `Narration WAV exceeds the ${cutAudioAuditionLimits.maximumWaveBytes}-byte public artifact limit.`);
+      }
+      if (result.receiptBytes.byteLength > maximumKokoroNarrationReceiptBytes) {
+        throw codedCliError("CUT_KOKORO_MLX_OUTPUT", `Narration receipt exceeds the ${maximumKokoroNarrationReceiptBytes}-byte public artifact limit.`);
+      }
+      const verifyInputs = async () => {
+        if (signal.aborted) throw codedCliError("CUT_KOKORO_MLX_CANCELLED", "Narration was cancelled during publication; both outputs were rolled back.");
+        const [scriptConfirmation, recipeConfirmation] = await Promise.all([
+          loadCutAudioAuditionProjectFile(projectRoot, scriptLocator, cutKokoroMlxLocalPolicy.maximumTextBytes),
+          loadCutAudioAuditionProjectFile(projectRoot, recipeLocator, cutKokoroMlxLocalRecipePolicy.maximumBytes),
+        ]);
+        if (scriptConfirmation.bytes !== scriptFile.bytes || scriptConfirmation.sha256 !== scriptFile.sha256
+          || recipeConfirmation.bytes !== recipeFile.bytes || recipeConfirmation.sha256 !== recipeFile.sha256) {
+          throw codedCliError("CUT_KOKORO_MLX_INPUT_CHANGED", "Narration script or recipe changed during execution; both outputs were rolled back.");
+        }
+      };
+      await verifyInputs();
+      try {
+        await writeProjectArtifacts([projectRoot], [
+          {
+            destination: outputPath,
+            contents: result.wavBytes,
+            order: 100,
+            role: "kokoro-mlx-narration-wave",
+            expectedDestinationSnapshot: { state: "absent" as const },
+          },
+          {
+            destination: receiptPath,
+            contents: result.receiptBytes,
+            order: 200,
+            role: "kokoro-mlx-narration-receipt",
+            expectedDestinationSnapshot: { state: "absent" as const },
+          },
+        ], verifyInputs);
+      } catch (error) { throw sanitizeNarrationPublicationError(error); }
+      const [publishedWave, publishedReceipt] = await Promise.all([
+        loadCutAudioAuditionProjectFile(projectRoot, outputLocator, cutAudioAuditionLimits.maximumWaveBytes),
+        loadCutAudioAuditionProjectFile(projectRoot, receiptLocator, maximumKokoroNarrationReceiptBytes),
+      ]);
+      if (publishedWave.bytes !== result.wavBytes.byteLength || publishedWave.sha256 !== result.receipt.output.sha256
+        || publishedReceipt.bytes !== result.receiptBytes.byteLength
+        || publishedReceipt.sha256 !== createHash("sha256").update(result.receiptBytes).digest("hex")) {
+        throw codedCliError("CUT_KOKORO_MLX_PUBLICATION", "Published narration bytes do not match the authenticated provider result.");
+      }
+      const report = Object.freeze({
+        format: "cut-audio-narrate-result" as const,
+        version: 1 as const,
+        status: "pass" as const,
+        provider: result.receipt.provider,
+        syntheticSpeech: true as const,
+        script: Object.freeze({ locator: scriptLocator, bytes: scriptFile.bytes, sha256: scriptFile.sha256 }),
+        recipe: Object.freeze({ locator: recipeLocator, bytes: recipeFile.bytes, sha256: recipeFile.sha256 }),
+        synthesis: Object.freeze({
+          voice: result.receipt.synthesis.voice,
+          language: result.receipt.synthesis.language,
+          speedMicros: result.receipt.synthesis.speedMicros,
+          seed: result.receipt.synthesis.seed,
+          sampleRate: result.receipt.synthesis.sampleRate,
+        }),
+        output: Object.freeze({
+          locator: outputLocator,
+          bytes: publishedWave.bytes,
+          sha256: publishedWave.sha256,
+          durationSamples: result.receipt.output.durationSamples,
+        }),
+        receipt: Object.freeze({
+          locator: receiptLocator,
+          bytes: publishedReceipt.bytes,
+          sha256: publishedReceipt.sha256,
+          executionSha256: result.receipt.executionSha256,
+        }),
+        limitations: Object.freeze({
+          inferenceReproducibility: "generated-wav-bytes-are-the-deterministic-asset-boundary-not-future-inference" as const,
+          network: "offline-provider-guards-are-not-an-operating-system-sandbox" as const,
+          licenses: "caller-declared-not-verified" as const,
+          creativeApproval: "normal-speed-human-listening-not-performed" as const,
+        }),
+      });
+      if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+      else {
+        console.log(`${green("✓")} synthesized local narration ${scriptLocator} → ${outputLocator}`);
+        console.log(dim(`  ${result.receipt.output.durationSamples.toLocaleString()} samples · ${publishedWave.sha256.slice(0, 12)}… · receipt ${result.receipt.executionSha256.slice(0, 12)}…`));
+        console.log(yellow("Synthetic speech: listen at normal speed before editorial or release use."));
+      }
+    });
+  }
+  if (command === "audio-prosody") {
+    return withFootageSignals(async (signal) => {
+      const projectRoot = resolve("."), sourceLocator = validateProjectLocator(subject, "dialogue prosody WAVE locator");
+      const transcriptLocator = validateProjectLocator(option("--transcript"), "dialogue prosody transcript locator");
+      const outputLocator = validateProjectLocator(option("--out"), "dialogue prosody output locator");
+      if (sourceLocator === transcriptLocator || outputLocator === sourceLocator || outputLocator === transcriptLocator) {
+        throw new CutCliUsageError("CUTC1007", "audio prosody", "WAVE, transcript, and analysis output locators must be distinct.");
+      }
+      const outputPath = resolve(projectRoot, outputLocator);
+      await requireAbsentDialogueProsodyOutput(outputPath, outputLocator);
+      const [sourceFile, transcriptFile] = await Promise.all([
+        loadCutAudioAuditionProjectFile(projectRoot, sourceLocator, cutDialogueProsodyWaveDecodeLimits.maximumWaveBytes),
+        loadCutAudioAuditionProjectFile(projectRoot, transcriptLocator, 16 * 1024 * 1024),
+      ]);
+      if (signal.aborted) throw codedCliError("CUT_DIALOGUE_PROSODY_CANCELLED", "Dialogue prosody was cancelled before analysis; no output was published.");
+      const transcript = parseCutTranscript(transcriptFile.contents, { maxWords: dialogueProsodyLimits.maximumWords });
+      if (transcript.media.sha256 !== sourceFile.sha256) {
+        throw codedCliError("CUT_DIALOGUE_PROSODY_MEDIA_AUTHORITY", "Transcript media SHA-256 does not match the authenticated WAVE bytes.");
+      }
+      if (transcript.media.audioStreamIndex !== 0) {
+        throw codedCliError("CUT_DIALOGUE_PROSODY_MEDIA_AUTHORITY", "A standalone WAVE has exactly audio stream index 0; the transcript binds a different stream.");
+      }
+      const normalized = decodeCutWaveIntegerPcmNativeRate(sourceFile.contents, {
+        bytes: sourceFile.bytes,
+        sha256: sourceFile.sha256,
+      }, cutDialogueProsodyWaveDecodeLimits);
+      if (transcript.media.audioSampleRate !== normalized.wave.sampleRate) {
+        throw codedCliError("CUT_DIALOGUE_PROSODY_CLOCK", "Transcript audioSampleRate does not match the authenticated WAVE sample rate.");
+      }
+      const analysis = analyzeDialogueProsody({
+        source: Object.freeze({
+          mediaSha256: sourceFile.sha256,
+          audioStreamIndex: 0,
+          normalizedPcmSha256: hashDialogueProsodyPcmF32(normalized.pcm),
+          transcriptSha256: hashDialogueProsodyTranscript(transcript),
+          sampleRate: normalized.wave.sampleRate,
+          channels: 1,
+          durationSamples: normalized.wave.durationSamples,
+        }),
+        pcm: normalized.pcm,
+        transcript,
+      });
+      const analysisBytes = Buffer.from(`${stableJsonStringify(analysis)}\n`, "utf8");
+      if (analysisBytes.byteLength > maximumDialogueProsodyArtifactBytes) {
+        throw codedCliError("CUT_DIALOGUE_PROSODY_OUTPUT_LIMIT", `Dialogue prosody analysis exceeds ${maximumDialogueProsodyArtifactBytes} bytes; no output was published.`);
+      }
+      const [sourceConfirmation, transcriptConfirmation] = await Promise.all([
+        loadCutAudioAuditionProjectFile(projectRoot, sourceLocator, cutDialogueProsodyWaveDecodeLimits.maximumWaveBytes),
+        loadCutAudioAuditionProjectFile(projectRoot, transcriptLocator, 16 * 1024 * 1024),
+      ]);
+      if (sourceConfirmation.bytes !== sourceFile.bytes || sourceConfirmation.sha256 !== sourceFile.sha256
+        || transcriptConfirmation.bytes !== transcriptFile.bytes || transcriptConfirmation.sha256 !== transcriptFile.sha256) {
+        throw codedCliError("CUT_DIALOGUE_PROSODY_INPUT_CHANGED", "WAVE or transcript changed during analysis; no output was published.");
+      }
+      try {
+        await writeProjectArtifacts([projectRoot], [{
+          destination: outputPath,
+          contents: analysisBytes,
+          order: 100,
+          role: "dialogue-prosody-analysis",
+          expectedDestinationSnapshot: { state: "absent" as const },
+        }], () => verifyDialogueProsodyPublication(signal));
+      } catch (error) {
+        throw sanitizeDialogueProsodyPublicationError(error, outputLocator);
+      }
+      const published = await loadCutAudioAuditionProjectFile(projectRoot, outputLocator, maximumDialogueProsodyArtifactBytes);
+      const report = Object.freeze({
+        format: "cut-audio-prosody-result" as const,
+        version: 1 as const,
+        status: "pass" as const,
+        source: Object.freeze({ locator: sourceLocator, bytes: sourceFile.bytes, sha256: sourceFile.sha256 }),
+        transcript: Object.freeze({
+          locator: transcriptLocator,
+          bytes: transcriptFile.bytes,
+          fileSha256: transcriptFile.sha256,
+          transcriptSha256: analysis.authority.transcriptSha256,
+        }),
+        normalization: Object.freeze({
+          contract: "authenticated-native-rate-equal-weight-mono-f32-v1" as const,
+          formatVariant: normalized.wave.formatVariant,
+          sourceChannels: normalized.wave.sourceChannels,
+          outputChannels: normalized.wave.outputChannels,
+          sampleRate: normalized.wave.sampleRate,
+          durationSamples: normalized.wave.durationSamples,
+          normalizedPcmSha256: analysis.authority.normalizedPcmSha256,
+          work: normalized.work,
+        }),
+        output: Object.freeze({
+          locator: outputLocator,
+          bytes: published.bytes,
+          fileSha256: published.sha256,
+          analysisSha256: analysis.analysisSha256,
+        }),
+        measured: Object.freeze({
+          words: analysis.speakingRate.lexicalWordCount,
+          phrases: analysis.phrases.length,
+          pauses: analysis.pauses.length,
+          emphasisCandidates: analysis.emphasisCandidates.length,
+          wordsPerMinuteMilli: analysis.speakingRate.wordsPerMinuteMilli,
+        }),
+        limitations: Object.freeze({
+          interpretation: analysis.interpretation,
+          emotion: "no-emotion-inference-claim" as const,
+          masking: "no-measured-masking-or-final-mix-approval" as const,
+          speaker: "speaker-identity-is-transcript-declared-not-inferred" as const,
+        }),
+      });
+      if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+      else {
+        console.log(`${green("✓")} measured dialogue prosody ${sourceLocator} → ${outputLocator}`);
+        console.log(dim(`  ${analysis.phrases.length} phrase(s) · ${analysis.pauses.length} pause(s) · ${analysis.analysisSha256.slice(0, 12)}…`));
+        console.log(yellow("Measured timing and level only: no emotion, speaker identity, masking, or performance-approval claim."));
+      }
+    });
+  }
+  if (command === "audio-analyze-setup") {
+    return withFootageSignals(async (signal) => {
+    const projectRoot = resolve("."), recipeLocator = validateProjectLocator(subject, "YAMNet setup recipe locator");
+    const outputLocator = validateProjectLocator(option("--out"), "YAMNet setup output locator");
+    if (recipeLocator === outputLocator) {
+      throw new CutCliUsageError("CUTC1007", "audio analyze-setup", "recipe and setup output locators must be distinct.");
+    }
+    const outputPath = resolve(projectRoot, outputLocator);
+    await requireAbsentAudioAnalysisOutput(outputPath, outputLocator);
+    const recipeFile = await loadCutAudioAuditionProjectFile(projectRoot, recipeLocator, 256 * 1024);
+    const recipe = parseStrictPackageJson(recipeFile.contents, {
+      limits: { maxInputBytes: 256 * 1024, maxDepth: 8, maxNodes: 1_000 },
+    });
+    const collected = await collectBundledYamnetLocalSetup(recipe);
+    const doctor = await doctorYamnetLocal(collected, { signal });
+    const setupBytes = cutYamnetLocalSetupBytes(collected);
+    if (setupBytes.byteLength > 1024 * 1024) {
+      throw codedCliError("CUT_AUDIO_ANALYSIS_SETUP_LIMIT", "YAMNet setup exceeds the one-MiB public CLI setup limit.");
+    }
+    await writeProjectArtifacts([projectRoot], [{
+      destination: outputPath,
+      contents: setupBytes,
+      order: 100,
+      role: "yamnet-local-setup",
+      expectedDestinationSnapshot: { state: "absent" as const },
+    }], () => verifyAudioAnalysisPublication(signal));
+    const published = await loadCutAudioAuditionProjectFile(projectRoot, outputLocator, 1024 * 1024);
+    const report = Object.freeze({
+      format: "cut-audio-analyze-setup-result" as const,
+      version: 1 as const,
+      status: "pass" as const,
+      provider: cutYamnetLocalPolicy.provider,
+      recipe: Object.freeze({ locator: recipeLocator, sha256: recipeFile.sha256 }),
+      setup: Object.freeze({ locator: outputLocator, bytes: published.bytes, sha256: published.sha256 }),
+      authorities: doctor.authorities,
+      doctor: Object.freeze({ status: doctor.status, receiptSha256: doctor.receiptSha256 }),
+      limitations: Object.freeze({
+        rights: "caller-declared-not-verified" as const,
+        network: "adapter-denies-network-but-is-not-an-operating-system-sandbox" as const,
+      }),
+    });
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      console.log(`${green("✓")} authenticated local YAMNet setup written to ${outputLocator}`);
+      console.log(dim(`  LiteRT ${doctor.runtime.liteRtVersion} · model ${doctor.authorities.modelSha256.slice(0, 12)}… · one inference thread`));
+    }
+    });
+  }
+  if (command === "audio-analyze-doctor") {
+    const projectRoot = resolve("."), setupLocator = validateProjectLocator(option("--setup"), "YAMNet setup locator");
+    const setupFile = await loadCutAudioAuditionProjectFile(projectRoot, setupLocator, 1024 * 1024);
+    const setup = parseCutYamnetLocalSetup(parseStrictPackageJson(setupFile.contents, {
+      limits: { maxInputBytes: 1024 * 1024, maxDepth: 12, maxNodes: 100_000 },
+    }));
+    const report = await withFootageSignals((signal) => doctorYamnetLocal(setup, { signal }));
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      console.log(`${green("✓")} caller-authenticated local YAMNet bytes are compatible`);
+      console.log(dim(`  ${report.runtime.platform}-${report.runtime.machine} · LiteRT ${report.runtime.liteRtVersion} · receipt ${report.receiptSha256.slice(0, 12)}…`));
+    }
+    return;
+  }
+  if (command === "audio-analyze") {
+    return withFootageSignals(async (signal) => {
+    const projectRoot = resolve("."), sourceLocator = validateProjectLocator(subject, "audio analysis source locator");
+    const setupLocator = validateProjectLocator(option("--setup"), "YAMNet setup locator");
+    const outputLocator = validateProjectLocator(option("--out"), "audio analysis output locator");
+    const topText = option("--top", "8")!;
+    if (!/^(?:[1-9]|1[0-9]|20)$/u.test(topText)) {
+      throw new CutCliUsageError("CUTC1007", "audio analyze", "--top must be an integer from 1 through 20.");
+    }
+    if (sourceLocator === outputLocator || setupLocator === outputLocator) {
+      throw new CutCliUsageError("CUTC1007", "audio analyze", "analysis output must be distinct from source and setup locators.");
+    }
+    const outputPath = resolve(projectRoot, outputLocator);
+    await requireAbsentAudioAnalysisOutput(outputPath, outputLocator);
+    const [sourceFile, setupFile] = await Promise.all([
+      loadCutAudioAuditionProjectFile(projectRoot, sourceLocator, 64 * 1024 * 1024),
+      loadCutAudioAuditionProjectFile(projectRoot, setupLocator, 1024 * 1024),
+    ]);
+    const setup = parseCutYamnetLocalSetup(parseStrictPackageJson(setupFile.contents, {
+      limits: { maxInputBytes: 1024 * 1024, maxDepth: 12, maxNodes: 100_000 },
+    }));
+    const normalization = normalizeCutWaveForYamnet(sourceFile.contents, {
+      bytes: sourceFile.bytes,
+      sha256: sourceFile.sha256,
+    });
+    const provider = await analyzeWithYamnetLocal({
+      setup,
+      pcm: normalization.pcmBytes,
+      topK: Number(topText),
+      signal,
+    });
+    const analysis = materializeCutYamnetSemanticAnalysis({
+      source: Object.freeze({ locator: sourceLocator, bytes: sourceFile.bytes, sha256: sourceFile.sha256 }),
+      sourceBytes: sourceFile.contents,
+      normalization: normalization.evidence,
+      pcm: normalization.pcmBytes,
+      providerAnalysis: provider.analysis,
+      rawScoreBytes: provider.rawScoreBytes,
+      classMapBytes: provider.classMapBytes,
+    });
+    const [sourceConfirmation, setupConfirmation] = await Promise.all([
+      loadCutAudioAuditionProjectFile(projectRoot, sourceLocator, 64 * 1024 * 1024),
+      loadCutAudioAuditionProjectFile(projectRoot, setupLocator, 1024 * 1024),
+    ]);
+    if (sourceConfirmation.bytes !== sourceFile.bytes || sourceConfirmation.sha256 !== sourceFile.sha256
+      || setupConfirmation.bytes !== setupFile.bytes || setupConfirmation.sha256 !== setupFile.sha256) {
+      throw codedCliError("CUT_AUDIO_ANALYSIS_INPUT_CHANGED", "Audio source or YAMNet setup changed during analysis; no output was published.");
+    }
+    const analysisBytes = Buffer.from(`${stableJsonStringify(analysis)}\n`, "utf8");
+    await writeProjectArtifacts([projectRoot], [{
+      destination: outputPath,
+      contents: analysisBytes,
+      order: 100,
+      role: "yamnet-semantic-analysis",
+      expectedDestinationSnapshot: { state: "absent" as const },
+    }], () => verifyAudioAnalysisPublication(signal));
+    const published = await loadCutAudioAuditionProjectFile(projectRoot, outputLocator, 4 * 1024 * 1024);
+    const report = Object.freeze({
+      format: "cut-audio-analyze-result" as const,
+      version: 1 as const,
+      status: "pass" as const,
+      source: Object.freeze({ locator: sourceLocator, bytes: sourceFile.bytes, sha256: sourceFile.sha256 }),
+      setup: Object.freeze({ locator: setupLocator, bytes: setupFile.bytes, sha256: setupFile.sha256 }),
+      output: Object.freeze({ locator: outputLocator, bytes: published.bytes, fileSha256: published.sha256, analysisSha256: analysis.analysisSha256 }),
+      provider: Object.freeze({ id: analysis.provider.provider, analysisSha256: analysis.provider.analysisSha256, topK: analysis.provider.topK }),
+      suggestions: analysis.taxonomy.aggregate,
+      limitations: analysis.limitations,
+    });
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      console.log(`${green("✓")} analyzed ${sourceLocator} → ${outputLocator}`);
+      console.log(dim(`  ${analysis.normalization.output.samples.toLocaleString()} samples at 16 kHz · ${analysis.provider.patches.length} patch(es) · ${analysis.analysisSha256.slice(0, 12)}…`));
+      console.log(yellow("Editorial suggestions only: no emotion, rights, provenance, or ground-truth claim."));
+    }
+    });
+  }
+  if (command === "audio-index") {
+    return withFootageSignals(async (signal) => {
+      const projectRoot = resolve("."), catalogLocator = validateProjectLocator(subject, "audio catalog locator");
+      const bindingsLocator = validateProjectLocator(option("--bindings"), "audio semantic bindings locator");
+      const outputLocator = validateProjectLocator(option("--out"), "audio semantic index output locator");
+      if (outputLocator === catalogLocator || outputLocator === bindingsLocator) {
+        throw new CutCliUsageError("CUTC1007", "audio index", "index output must be distinct from catalog and binding locators.");
+      }
+      const outputPath = resolve(projectRoot, outputLocator);
+      await requireAbsentAudioSearchOutput(outputPath, outputLocator);
+      const authenticated = await buildAuthenticatedProjectAudioSemanticIndex({
+        projectRoot,
+        catalogLocator,
+        bindingsLocator,
+        signal,
+      });
+      const outputBytes = Buffer.from(`${stableJsonStringify(authenticated.index)}\n`, "utf8");
+      if (outputBytes.byteLength > cutAudioSemanticIndexFileLimits.maximumBytes) {
+        throw codedCliError("CUT_AUDIO_SEARCH_LIMIT", `Audio semantic index exceeds the ${cutAudioSemanticIndexFileLimits.maximumBytes}-byte installed artifact limit.`);
+      }
+      try {
+        await writeProjectArtifacts([projectRoot], [{
+          destination: outputPath,
+          contents: outputBytes,
+          order: 100,
+          role: "audio-semantic-index",
+          expectedDestinationSnapshot: { state: "absent" as const },
+        }], authenticated.verifyInputsUnchanged);
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error
+          && typeof error.code === "string" && error.code.startsWith("CUT_AUDIO_SEARCH_")) throw error;
+        throw codedCliError("CUT_AUDIO_SEARCH_PUBLICATION", `Audio semantic index could not publish ${JSON.stringify(outputLocator)}.`);
+      }
+      const published = await loadCutAudioAuditionProjectFile(projectRoot, outputLocator, cutAudioSemanticIndexFileLimits.maximumBytes);
+      const outputSha256 = createHash("sha256").update(outputBytes).digest("hex");
+      if (published.bytes !== outputBytes.byteLength || published.sha256 !== outputSha256) {
+        throw codedCliError("CUT_AUDIO_SEARCH_PUBLICATION", `Published audio semantic index ${JSON.stringify(outputLocator)} does not match the authenticated result.`);
+      }
+      if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(authenticated.index)}\n`);
+      else {
+        console.log(`${green("✓")} indexed ${authenticated.index.entries.length} authenticated audio candidate${authenticated.index.entries.length === 1 ? "" : "s"} → ${outputLocator}`);
+        console.log(dim(`  ${authenticated.index.indexSha256.slice(0, 12)}… · ${authenticated.index.coverage.omittedAudioEntryIds.length} unbound catalog audio entr${authenticated.index.coverage.omittedAudioEntryIds.length === 1 ? "y" : "ies"}`));
+        console.log(yellow("Editorial retrieval only: no model re-execution, emotion inference, listening, or rights clearance."));
+      }
+    });
+  }
+  if (command === "audio-search") {
+    return withFootageSignals(async (signal) => {
+      const projectRoot = resolve("."), indexLocator = validateProjectLocator(subject, "audio semantic index locator");
+      const query = option("--query")!;
+      const roleText = option("--role"), rightsText = option("--rights"), limitText = option("--limit", "20")!;
+      if (roleText !== undefined && !["music", "sfx", "ambience", "dialogue"].includes(roleText)) {
+        throw new CutCliUsageError("CUTC1007", "audio search", "--role must be music, sfx, ambience, or dialogue.");
+      }
+      if (rightsText !== undefined && rightsText !== "declared-commercial-sync") {
+        throw new CutCliUsageError("CUTC1007", "audio search", "--rights accepts only declared-commercial-sync; omit it for all authenticated candidates.");
+      }
+      if (!/^(?:[1-9]|[1-9][0-9]|100)$/u.test(limitText)) {
+        throw new CutCliUsageError("CUTC1007", "audio search", "--limit must be an integer from 1 through 100.");
+      }
+      if (signal.aborted) throw codedCliError("CUT_AUDIO_SEARCH_CANCELLED", "Audio semantic search was cancelled.");
+      const indexFile = await loadCutAudioAuditionProjectFile(projectRoot, indexLocator, cutAudioSemanticIndexFileLimits.maximumBytes);
+      const decoded = parseStrictPackageJson(indexFile.contents, {
+        limits: {
+          maxInputBytes: cutAudioSemanticIndexFileLimits.maximumBytes,
+          maxDepth: cutAudioSemanticIndexFileLimits.maximumJsonDepth,
+          maxNodes: cutAudioSemanticIndexFileLimits.maximumJsonNodes,
+          maxStringBytes: cutAudioSemanticIndexFileLimits.maximumJsonStringBytes,
+          maxTotalStringBytes: cutAudioSemanticIndexFileLimits.maximumJsonTotalStringBytes,
+        },
+      });
+      if (signal.aborted) throw codedCliError("CUT_AUDIO_SEARCH_CANCELLED", "Audio semantic search was cancelled.");
+      const report = searchCutAudioSemanticIndex(parseCutAudioSemanticIndexSnapshot(decoded), {
+        indexLocator,
+        query,
+        ...(roleText === undefined ? {} : { role: roleText as "music" | "sfx" | "ambience" | "dialogue" }),
+        rights: rightsText === "declared-commercial-sync" ? "declared-commercial-sync" : "any",
+        limit: Number(limitText),
+      });
+      const confirmation = await loadCutAudioAuditionProjectFile(projectRoot, indexLocator, cutAudioSemanticIndexFileLimits.maximumBytes);
+      if (confirmation.bytes !== indexFile.bytes || confirmation.sha256 !== indexFile.sha256) {
+        throw codedCliError("CUT_AUDIO_SEARCH_INPUT_CHANGED", `Audio semantic index ${JSON.stringify(indexLocator)} changed during search.`);
+      }
+      if (signal.aborted) throw codedCliError("CUT_AUDIO_SEARCH_CANCELLED", "Audio semantic search was cancelled.");
+      if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+      else {
+        console.log(`${green("✓")} ${report.results.length} canonical-evidence candidate${report.results.length === 1 ? "" : "s"} for ${JSON.stringify(report.query.text)}`);
+        for (const result of report.results) {
+          console.log(`${cyan(`#${result.rank}`)} ${result.id} · ${result.role} · ${result.score.totalPpm} ppm`);
+          const why = result.score.evidence.map((evidence) => evidence.source === "declared-catalog-metadata"
+            ? `${evidence.token}: catalog metadata`
+            : `${evidence.token}: AudioSet ${JSON.stringify(evidence.label)} ${evidence.scorePpm} ppm`).join("; ");
+          console.log(dim(`  ${why}`));
+        }
+        console.log(yellow("Candidate evidence only: listen in context and retain human rights review before use."));
+      }
+    });
+  }
+  if (command === "audio-setup") {
+    const projectRoot = resolve("."), recipeLocator = validateProjectLocator(subject, "Whisper setup recipe locator");
+    const outputLocator = validateProjectLocator(option("--out"), "Whisper setup output locator");
+    if (recipeLocator === outputLocator) {
+      throw new CutCliUsageError("CUTC1007", "audio setup", "recipe and setup output locators must be distinct.");
+    }
+    const recipeFile = await loadCutAudioAuditionProjectFile(projectRoot, recipeLocator, 256 * 1024);
+    const collected = await collectCutWhisperLocalSetup(parseStrictPackageJson(recipeFile.contents, {
+      limits: { maxInputBytes: 256 * 1024, maxDepth: 8, maxNodes: 1_000 },
+    }));
+    await writeProjectArtifacts([projectRoot], [{
+      destination: resolve(projectRoot, outputLocator),
+      contents: collected.canonicalSetupBytes,
+      order: 100,
+      role: "whisper-local-setup",
+      expectedDestinationSnapshot: { state: "absent" as const },
+    }]);
+    const published = await loadCutAudioAuditionProjectFile(projectRoot, outputLocator, 1024 * 1024);
+    const report = Object.freeze({
+      format: "cut-audio-setup-result" as const,
+      version: 1 as const,
+      status: "pass" as const,
+      provider: cutWhisperLocalWorkflowContract.provider,
+      recipe: Object.freeze({ locator: recipeLocator, sha256: recipeFile.sha256 }),
+      setup: Object.freeze({ locator: outputLocator, bytes: published.contents.byteLength, sha256: published.sha256 }),
+      authorities: Object.freeze({
+        ffmpegSha256: collected.setup.ffmpeg.sha256,
+        whisperCliSha256: collected.setup.whisperCli.sha256,
+        modelSha256: collected.setup.model.sha256,
+      }),
+      doctor: Object.freeze({ status: collected.doctor.status, modelInferenceSmoke: collected.doctor.modelInferenceSmoke }),
+    });
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      console.log(`${green("✓")} authenticated local Whisper setup written to ${outputLocator}`);
+      console.log(dim(`  compatible whisper.cpp ${collected.setup.whisperCli.version} · model inference ${collected.doctor.modelInferenceSmoke}`));
+    }
+    return;
+  }
+  if (command === "audio-doctor") {
+    const projectRoot = resolve("."), setupLocator = validateProjectLocator(option("--setup"), "Whisper setup locator");
+    const setupFile = await loadCutAudioAuditionProjectFile(projectRoot, setupLocator, 1024 * 1024);
+    const setup = parseCutWhisperLocalSetup(parseStrictPackageJson(setupFile.contents, {
+      limits: { maxInputBytes: 1024 * 1024, maxDepth: 12, maxNodes: 10_000 },
+    }));
+    const report = await doctorCutWhisperLocalSetup(setup);
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      console.log(`${green("✓")} caller-authenticated local Whisper bytes are compatible`);
+      console.log(dim(`  whisper.cpp ${report.whisperCli.version} · ${report.model.bytes.toLocaleString()} model bytes · inference smoke ${report.modelInferenceSmoke}`));
+    }
+    return;
+  }
+  if (command === "audio-transcribe") {
+    const projectRoot = resolve("."), sourceLocator = validateProjectLocator(subject, "audio source locator");
+    const setupLocator = validateProjectLocator(option("--setup"), "Whisper setup locator");
+    const transcriptLocator = validateProjectLocator(option("--out"), "transcript output locator");
+    const receiptLocator = validateProjectLocator(option("--receipt"), "transcription receipt locator");
+    const language = option("--language", "en")!;
+    const threadsText = option("--threads", "8")!;
+    if (!/^(?:[1-9]|[1-5][0-9]|6[0-4])$/u.test(threadsText)) {
+      throw new CutCliUsageError("CUTC1007", "audio transcribe", "--threads must be an integer from 1 through 64.");
+    }
+    const requestedStreamText = option("--stream");
+    if (requestedStreamText !== undefined && (!/^(?:0|[1-9][0-9]*)$/u.test(requestedStreamText)
+      || !Number.isSafeInteger(Number(requestedStreamText)))) {
+      throw new CutCliUsageError("CUTC1007", "audio transcribe", "--stream must be one non-negative absolute media stream index.");
+    }
+    const setupFile = await loadCutAudioAuditionProjectFile(projectRoot, setupLocator, 1024 * 1024);
+    const setup = parseCutWhisperLocalSetup(parseStrictPackageJson(setupFile.contents, {
+      limits: { maxInputBytes: 1024 * 1024, maxDepth: 12, maxNodes: 10_000 },
+    }));
+    const ffmpeg = await bindReferenceNativeMediaTool("ffmpeg", setup.ffmpeg.path);
+    if (ffmpeg.evidence.bytes !== setup.ffmpeg.bytes || ffmpeg.evidence.sha256 !== setup.ffmpeg.sha256) {
+      throw new Error("CUT_WHISPER_WORKFLOW_AUTHORITY: configured FFmpeg bytes differ from the native process authority.");
+    }
+    const ffprobe = await bindReferenceNativeMediaTool("ffprobe", resolve(dirname(setup.ffmpeg.path), "ffprobe"));
+    const ffmpegCollector = createReferenceNativeProcessCollector(ffmpeg), ffprobeCollector = createReferenceNativeProcessCollector(ffprobe);
+    const sourceBytes = await probeProjectBytes(projectRoot, sourceLocator, { maxFileBytes: 64 * 1024 * 1024 * 1024 });
+    const context = (ordinal: number, operation: ReferenceNativeProcessContext["operation"], streamIndex?: number): ReferenceNativeProcessContext => Object.freeze({
+      ordinal,
+      operation,
+      resourceId: sourceLocator,
+      resourceSha256: sourceBytes.file.sha256,
+      resourceBytes: sourceBytes.file.bytes,
+      variant: "master" as const,
+      ...(streamIndex === undefined ? {} : { streamIndex }),
+    });
+    let media: Awaited<ReturnType<typeof probeProjectMedia>> | undefined;
+    let decoded: Awaited<ReturnType<typeof probeProjectDecodedAudioSamples>> | undefined;
+    let selectedStream: Awaited<ReturnType<typeof probeProjectMedia>>["streams"][number] | undefined;
+    let operationError: unknown;
+    try {
+      media = await probeProjectMedia(projectRoot, sourceLocator, { maxFileBytes: 64 * 1024 * 1024 * 1024 }, { ffprobe: ffprobe.executablePath }, {
+        authority: ffprobe,
+        collector: ffprobeCollector,
+        context: context(0, "media-metadata"),
+        terminateProcessTree: true,
+      });
+      if (media.file.bytes !== sourceBytes.file.bytes || media.file.sha256 !== sourceBytes.file.sha256) {
+        throw new Error("CUT_WHISPER_WORKFLOW_AUTHORITY: source media changed between byte and stream authentication.");
+      }
+      const audioStreams = media.streams.filter((stream) => stream.type === "audio");
+      const requestedStream = requestedStreamText === undefined ? undefined : Number(requestedStreamText);
+      if (requestedStream === undefined && audioStreams.length !== 1) {
+        throw new CutCliUsageError("CUTC1007", "audio transcribe", `source contains ${audioStreams.length} audio streams; choose one with --stream.`);
+      }
+      selectedStream = requestedStream === undefined
+        ? audioStreams[0]
+        : audioStreams.find((stream) => stream.index === requestedStream);
+      if (!selectedStream || selectedStream.type !== "audio" || !selectedStream.sampleRate) {
+        throw new CutCliUsageError("CUTC1007", "audio transcribe", "--stream must select one audio stream with an exact sample rate.");
+      }
+      decoded = await probeProjectDecodedAudioSamples(
+        projectRoot,
+        sourceLocator,
+        media,
+        selectedStream.index,
+        { maxFileBytes: 64 * 1024 * 1024 * 1024 },
+        { ffmpeg: ffmpeg.executablePath, ffprobe: ffprobe.executablePath },
+        {
+          pcm: { authority: ffmpeg, collector: ffmpegCollector, context: context(0, "decoded-audio-pcm", selectedStream.index), terminateProcessTree: true },
+          frames: { authority: ffprobe, collector: ffprobeCollector, context: context(1, "decoded-audio-samples", selectedStream.index), terminateProcessTree: true },
+        },
+      );
+    } catch (error) { operationError = error; }
+    const nativeClosures = await Promise.allSettled([ffmpegCollector.seal(), ffprobeCollector.seal()]);
+    if (operationError !== undefined) throw operationError;
+    const nativeFailure = nativeClosures.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (nativeFailure) throw nativeFailure.reason;
+    if (!media || !decoded || !selectedStream?.sampleRate) throw new Error("CUT_WHISPER_WORKFLOW_AUTHORITY: source probe did not close completely.");
+    const durationSamples = Number(decoded.decodedSampleCount);
+    if (!Number.isSafeInteger(durationSamples) || durationSamples < 1 || decoded.sampleRate !== selectedStream.sampleRate) {
+      throw new Error("CUT_WHISPER_WORKFLOW_AUTHORITY: decoded source sample extent is invalid.");
+    }
+    const result = await transcribeProjectAudioWithWhisperLocal({
+      projectRoot,
+      setup,
+      source: {
+        locator: sourceLocator,
+        bytes: media.file.bytes,
+        sha256: media.file.sha256,
+        streamIndex: selectedStream.index,
+        sampleRate: selectedStream.sampleRate,
+        durationSamples,
+      },
+      settings: { language, temperatureMilli: 0, noFallback: true },
+      threads: Number(threadsText),
+      transcriptLocator,
+      receiptLocator,
+    });
+    const [publishedTranscript, publishedReceipt] = await Promise.all([
+      loadCutAudioAuditionProjectFile(projectRoot, transcriptLocator, 16 * 1024 * 1024),
+      loadCutAudioAuditionProjectFile(projectRoot, receiptLocator, 4 * 1024 * 1024),
+    ]);
+    const report = Object.freeze({
+      format: "cut-audio-transcribe-result" as const,
+      version: 1 as const,
+      status: "pass" as const,
+      source: Object.freeze({ locator: sourceLocator, sha256: media.file.sha256, streamIndex: selectedStream.index, sampleRate: selectedStream.sampleRate, durationSamples }),
+      transcript: Object.freeze({
+        locator: transcriptLocator,
+        fileSha256: publishedTranscript.sha256,
+        canonicalSha256: result.transcriptSha256,
+        words: result.receipt.providerJson.wordCount,
+      }),
+      receipt: Object.freeze({
+        locator: receiptLocator,
+        fileSha256: publishedReceipt.sha256,
+        canonicalSha256: result.receipt.receiptSha256,
+      }),
+    });
+    if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);
+    else {
+      console.log(`${green("✓")} transcribed ${report.transcript.words} word(s) to ${transcriptLocator}`);
+      console.log(dim(`  source stream ${selectedStream.index} · ${durationSamples.toLocaleString()} samples at ${selectedStream.sampleRate.toLocaleString()} Hz · receipt ${result.receipt.receiptSha256.slice(0, 12)}…`));
+    }
+    return;
+  }
+  if (command === "audio-audition") {
+    const projectRoot = resolve("."), briefLocator = validateProjectLocator(subject, "audio brief locator");
+    const dialogueLocator = validateProjectLocator(option("--dialogue"), "dialogue locator");
+    const catalogLocator = validateProjectLocator(option("--catalog"), "catalog locator");
+    const bindingsLocator = validateProjectLocator(option("--bindings"), "audio audition bindings locator");
+    const outputLocator = validateProjectLocator(option("--out"), "audio audition output directory");
+    const topText = option("--top", "3")!;
+    if (!/^[1-3]$/u.test(topText)) throw new CutCliUsageError("CUTC1007", "audio audition", "--top must be an integer from 1 through 3.");
+    const range = parseReferenceSampleRange(option("--samples"));
+    const musicStartText = option("--music-start-sample", "0")!;
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(musicStartText) || !Number.isSafeInteger(Number(musicStartText))) {
+      throw new CutCliUsageError("CUTC1007", "audio audition", "--music-start-sample must be one non-negative safe integer on the audition sample clock.");
+    }
+    const musicStartSample = Number(musicStartText);
+    const [briefInput, catalogInput, bindingsInput] = await Promise.all([
+      loadCutAudioAuditionProjectFile(projectRoot, briefLocator, 1024 * 1024),
+      loadCutAudioAuditionProjectFile(projectRoot, catalogLocator, 1024 * 1024),
+      loadCutAudioAuditionProjectFile(projectRoot, bindingsLocator, cutAudioAuditionLimits.maximumBindingsBytes),
+    ]);
+    const brief = parseCutAudioBrief(briefInput.contents), catalog = parseCutAssetCatalog(catalogInput.contents), bindings = parseCutAudioAuditionBindings(bindingsInput.contents);
+    if (range.end > brief.durationSamples) throw codedCliError("CUT_AUDIO_AUDITION_RANGE", `--samples must remain inside [0, ${brief.durationSamples}) on the brief sample clock.`);
+    if (musicStartSample >= range.end - range.start) throw codedCliError("CUT_AUDIO_AUDITION_RANGE", "--music-start-sample must remain inside the selected audition window.");
+    const verified = await verifyCutAudioAuditionInputs({ projectRoot, dialogueLocator, brief, catalog, bindings, startSample: range.start, endSample: range.end, musicStartSample });
+    const ranked = rankCutAudioAuditionCandidates({ brief, candidates: verified.candidates, startSample: range.start, endSample: range.end, musicStartSample, top: Number(topText) });
+    const planIdentity = cutAudioAuditionSelectionSha256({
+      format: "cut-audio-audition-plan",
+      version: 1,
+      inputs: {
+        brief: { locator: briefLocator, fileSha256: briefInput.sha256, briefSha256: brief.briefSha256 },
+        catalog: { locator: catalogLocator, fileSha256: catalogInput.sha256, catalogSha256: catalog.catalogSha256 },
+        bindings: { locator: bindingsLocator, fileSha256: bindingsInput.sha256, bindingsSha256: bindings.bindingsSha256 },
+        dialogue: verified.dialogue,
+      },
+      range: { ...range, musicStartSample },
+      candidates: ranked.map((candidate) => ({
+        id: candidate.entry.id,
+        rank: candidate.rank,
+        score: candidate.score,
+        file: candidate.file,
+        rightsEvidence: candidate.rightsEvidence,
+        ...(candidate.semantic ? { semantic: candidate.semantic } : {}),
+        signal: candidate.signal,
+        placement: candidate.placement,
+        leveling: candidate.leveling,
+      })),
+    }).slice(0, 16);
+    const generated = ranked.map((candidate) => {
+      const source = createCutAudioAuditionSource({ candidate, dialogueLocator, startSample: range.start, endSample: range.end, sampleRate: brief.sampleRate });
+      const slug = `${String(candidate.rank).padStart(2, "0")}-${candidate.entry.id}`;
+      return Object.freeze({
+        candidate,
+        source: source.source,
+        sourceSha256: source.sourceSha256,
+        sourceLocator: `audio-audition-${planIdentity}-${slug}.cut`,
+        lockLocator: `${outputLocator}/${slug}.cut.lock`,
+        waveLocator: `${outputLocator}/${slug}.wav`,
+        manifestLocator: `${outputLocator}/${slug}.wav.manifest.json`,
+      });
+    });
+    const receiptLocator = `${outputLocator}/selection.json`, allOutputLocators = [
+      ...generated.flatMap((item) => [item.sourceLocator, item.lockLocator, item.waveLocator, item.manifestLocator]),
+      receiptLocator,
+    ];
+    const allOutputs = allOutputLocators.map((locator) => ({ locator, path: resolve(projectRoot, locator) }));
+    await requireAbsentCliOutputs(allOutputs);
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const throwIfCancelled = () => {
+      if (controller.signal.aborted) throw codedCliError("CUT_AUDIO_AUDITION_CANCELLED", "Audio audition was cancelled; exact CUT-owned partial outputs are being rolled back.");
+    };
+    process.on("SIGINT", abort);
+    process.on("SIGTERM", abort);
+    const owned: CutAudioAuditionOwnedArtifact[] = [];
+    const retainPublished = async (artifacts: readonly Readonly<{ path: string; sha256: string; maximumBytes: number }>[]) => {
+      const results = await Promise.allSettled(artifacts.map((artifact) => retainCutAudioAuditionOwnedArtifact(artifact.path, artifact.sha256, artifact.maximumBytes)));
+      for (const result of results) if (result.status === "fulfilled") owned.push(result.value);
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failure) throw failure.reason;
+    };
+    let staging: string | undefined;
+    let stagingAuthority: CutAudioAuditionOwnedDirectory | undefined;
+    try {
+      const stagingRoot = await ensureProjectWriteDirectory(projectRoot, ".cut/audio-audition-staging");
+      staging = await mkdtemp(resolve(stagingRoot, ".cut-audition-"));
+      stagingAuthority = await retainCutAudioAuditionOwnedDirectory(staging);
+      throwIfCancelled();
+      await writeProjectArtifacts([projectRoot], generated.map((item) => ({
+        destination: resolve(projectRoot, item.sourceLocator),
+        contents: item.source,
+        role: "audio-audition-source",
+        expectedDestinationSnapshot: { state: "absent" as const },
+      })));
+      await retainPublished(generated.map((item) => ({
+        path: resolve(projectRoot, item.sourceLocator), sha256: item.sourceSha256, maximumBytes: 1024 * 1024,
+      })));
+      throwIfCancelled();
+      const completed = [];
+      for (const item of generated) {
+        throwIfCancelled();
+        const program = await languageProgram(resolve(projectRoot, item.sourceLocator)), ir = program.compiled.ir;
+        const lock = await createCutLock(ir, projectRoot), lockBytes = Buffer.from(`${JSON.stringify(lock, null, 2)}\n`), lockSha256 = createHash("sha256").update(lockBytes).digest("hex");
+        const applied = await applyCutLockForVerifiedInputSession(ir, lock, projectRoot);
+        assertCutAudioAuditionRenderAuthorities({
+          lockResources: lock.resources,
+          appliedResources: applied.ir.resources,
+          dialogue: verified.dialogue,
+          candidate: item.candidate,
+        });
+        const stagedWavePath = resolve(staging, basename(item.waveLocator));
+        const manifest = await renderReferenceAudioAuditionArtifact(applied.ir, projectRoot, stagedWavePath, {
+          samples: `0:${range.end - range.start}`,
+          outputName: "audition",
+          mediaProfile: "master",
+          lockSha256,
+          __lockedReferenceBackend: applied.referenceBackend,
+        });
+        throwIfCancelled();
+        const stagedWaveLocator = `.cut/audio-audition-staging/${basename(staging)}/${basename(item.waveLocator)}`;
+        const stagedManifestLocator = `${stagedWaveLocator}.manifest.json`;
+        const [waveInput, manifestInput] = await Promise.all([
+          loadCutAudioAuditionProjectFile(projectRoot, stagedWaveLocator, cutAudioAuditionLimits.maximumWaveBytes),
+          loadCutAudioAuditionProjectFile(projectRoot, stagedManifestLocator, 4 * 1024 * 1024),
+        ]);
+        if (waveInput.sha256 !== manifest.artifact.sha256 || waveInput.bytes !== manifest.artifact.bytes) {
+          throw codedCliError("CUT_AUDIO_AUDITION_RENDER_IDENTITY", "Staged audition WAVE does not match its renderer manifest.");
+        }
+        const finalLockPath = resolve(projectRoot, item.lockLocator), finalWavePath = resolve(projectRoot, item.waveLocator), finalManifestPath = resolve(projectRoot, item.manifestLocator);
+        await writeProjectArtifacts([projectRoot], [
+          { destination: finalLockPath, contents: lockBytes, order: 100, role: "audio-audition-lock", expectedDestinationSnapshot: { state: "absent" } },
+          { destination: finalWavePath, contents: waveInput.contents, order: 200, role: "audio-audition-wave", expectedDestinationSnapshot: { state: "absent" } },
+          { destination: finalManifestPath, contents: manifestInput.contents, order: 300, role: "audio-audition-manifest", expectedDestinationSnapshot: { state: "absent" } },
+        ]);
+        await retainPublished([
+          { path: finalLockPath, sha256: lockSha256, maximumBytes: 8 * 1024 * 1024 },
+          { path: finalWavePath, sha256: waveInput.sha256, maximumBytes: cutAudioAuditionLimits.maximumWaveBytes },
+          { path: finalManifestPath, sha256: manifestInput.sha256, maximumBytes: 4 * 1024 * 1024 },
+        ]);
+        throwIfCancelled();
+        completed.push(Object.freeze({
+          rank: item.candidate.rank,
+          id: item.candidate.entry.id,
+          role: item.candidate.entry.audio.role,
+          score: item.candidate.score,
+          catalog: {
+            label: item.candidate.entry.label,
+            creator: item.candidate.entry.provenance.creator,
+            licenseId: item.candidate.entry.rights.licenseId,
+            licenseVersion: item.candidate.entry.rights.licenseVersion,
+            attribution: item.candidate.entry.provenance.attribution,
+          },
+          localAuthority: {
+            audio: item.candidate.file,
+            rightsEvidence: item.candidate.rightsEvidence,
+            ...(item.candidate.semantic ? { semanticAnalysis: item.candidate.semantic } : {}),
+          },
+          measuredSignal: item.candidate.signal,
+          placement: item.candidate.placement,
+          leveling: item.candidate.leveling,
+          source: { locator: item.sourceLocator, bytes: Buffer.byteLength(item.source), sha256: item.sourceSha256 },
+          lock: { locator: item.lockLocator, bytes: lockBytes.byteLength, sha256: lockSha256, sourceHash: lock.sourceHash },
+          audition: {
+            locator: item.waveLocator,
+            sha256: manifest.artifact.sha256,
+            bytes: manifest.artifact.bytes,
+            samples: manifest.artifact.samples,
+            sampleRate: manifest.artifact.sampleRate,
+            manifest: { locator: item.manifestLocator, bytes: manifestInput.bytes, sha256: manifestInput.sha256 },
+          },
+        }));
+      }
+      const body = {
+        format: "cut-audio-audition-selection" as const,
+        version: 1 as const,
+        status: "non-authoritative-candidate-review" as const,
+        planIdentity,
+        inputs: {
+          brief: { locator: briefLocator, bytes: briefInput.bytes, fileSha256: briefInput.sha256, briefSha256: brief.briefSha256 },
+          catalog: { locator: catalogLocator, bytes: catalogInput.bytes, fileSha256: catalogInput.sha256, catalogSha256: catalog.catalogSha256 },
+          bindings: { locator: bindingsLocator, bytes: bindingsInput.bytes, fileSha256: bindingsInput.sha256, bindingsSha256: bindings.bindingsSha256 },
+          dialogue: { ...verified.dialogue, signal: verified.dialogueSignal },
+        },
+        window: { semantics: "half-open-samples" as const, startSample: range.start, endSample: range.end, sampleRate: brief.sampleRate, musicStartSample },
+        ranking: {
+          policy: ranked.every((candidate) => candidate.semantic)
+            ? "brief-catalog-exact-window-signal-and-bounded-semantic-advisory-v3" as const
+            : "brief-catalog-and-exact-window-signal-v2" as const,
+          catalogSemanticWeightPpm: 800_000,
+          measuredSignalWeightPpm: 200_000,
+          ...(ranked.every((candidate) => candidate.semantic) ? {
+            semanticAdvisory: {
+              policy: "whole-source-music-only-centered-four-percent-capped-v1" as const,
+              maximumAbsoluteDeltaPpm: 20_000,
+              modelReexecution: "not-performed" as const,
+              embeddedScoreAndTaxonomyDerivation: "recomputed" as const,
+              sourceNormalizationAndSignal: "recomputed-from-authenticated-source-bytes" as const,
+              unsupportedRolesAndInexactWindows: "evidence-retained-but-unweighted" as const,
+            },
+          } : {}),
+          candidates: completed,
+          exclusions: verified.exclusions,
+        },
+        review: {
+          candidateTrust: "exact-local-bytes-rights-evidence-and-semantic-derivation-verified-not-legal-clearance" as const,
+          generatedPrograms: "ordinary-public-cut-source" as const,
+          loudnessDelivery: "unperformed-draft-audition" as const,
+          humanListening: "unperformed" as const,
+          humanRightsApproval: "unperformed" as const,
+        },
+      };
+      const receipt = Object.freeze({ ...body, selectionSha256: cutAudioAuditionSelectionSha256(body) });
+      const receiptBytes = `${stableJsonStringify(receipt)}\n`, receiptSha256 = createHash("sha256").update(receiptBytes).digest("hex"), receiptPath = resolve(projectRoot, receiptLocator);
+      throwIfCancelled();
+      await writeProjectArtifacts([projectRoot], [{ destination: receiptPath, contents: receiptBytes, role: "audio-audition-selection", expectedDestinationSnapshot: { state: "absent" } }]);
+      await retainPublished([{ path: receiptPath, sha256: receiptSha256, maximumBytes: 4 * 1024 * 1024 }]);
+      throwIfCancelled();
+      const stageCleanup = await removeCutAudioAuditionOwnedDirectory(stagingAuthority);
+      stagingAuthority = undefined;
+      if (stageCleanup !== "removed" && stageCleanup !== "absent") throw codedCliError("CUT_AUDIO_AUDITION_CLEANUP", "Audio audition could not authenticate and remove its private staging directory; publication is not reported as successful.");
+      const released = await Promise.allSettled(owned.map((artifact) => releaseCutAudioAuditionOwnedArtifact(artifact)));
+      owned.length = 0;
+      if (released.some((result) => result.status === "rejected")) throw codedCliError("CUT_AUDIO_AUDITION_CLEANUP", "Audio audition could not release its retained publication authority; publication is not reported as successful.");
+      if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(receipt)}\n`);
+      else {
+        console.log(`${green("✓")} ${completed.length} measured, rights-evidenced candidate audition${completed.length === 1 ? "" : "s"} → ${receiptLocator}`);
+        for (const candidate of completed) console.log(`${cyan(`#${candidate.rank}`)} ${candidate.id} · score ${candidate.score.totalPpm} ppm · ${candidate.audition.locator}`);
+        console.log(yellow("Non-authoritative: normal-speed listening and human rights approval remain unperformed."));
+      }
+      return;
+    } catch (error) {
+      const cleanupResults: string[] = [];
+      let stageCleanupResult: string | undefined;
+      if (stagingAuthority) {
+        for (const artifact of [...owned].reverse()) cleanupResults.push(await removeCutAudioAuditionOwnedArtifact(artifact, stagingAuthority));
+        owned.length = 0;
+        if (cleanupResults.every((result) => result === "removed" || result === "absent")) {
+          stageCleanupResult = await removeCutAudioAuditionOwnedDirectory(stagingAuthority);
+        } else {
+          await releaseCutAudioAuditionOwnedDirectory(stagingAuthority).catch(() => undefined);
+          stageCleanupResult = "staging-preserved-after-foreign-cleanup-state";
+        }
+        stagingAuthority = undefined;
+      } else if (owned.length) {
+        await Promise.allSettled(owned.map((artifact) => releaseCutAudioAuditionOwnedArtifact(artifact)));
+        owned.length = 0;
+        cleanupResults.push("missing-private-quarantine-authority");
+      }
+      if (stageCleanupResult) cleanupResults.push(stageCleanupResult);
+      const cleanupFailed = cleanupResults.some((result) => result !== "removed" && result !== "absent");
+      if (cleanupFailed) {
+        throw codedCliError("CUT_AUDIO_AUDITION_CLEANUP", `Audio audition failed and cleanup did not close exactly (${cleanupResults.join(",")}); foreign or unauthenticated residue was preserved.`);
+      }
+      throw error;
+    } finally {
+      process.off("SIGINT", abort);
+      process.off("SIGTERM", abort);
+    }
+  }
   if (command === "footage-setup") {
     const report = await withFootageSignals((signal) => setupCutFootageLocalBackend({ backend: option("--backend")!, signal }));
     if (process.argv.includes("--json")) process.stdout.write(`${stableJsonStringify(report)}\n`);

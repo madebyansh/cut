@@ -1,0 +1,20 @@
+{
+  "ffmpeg": {
+    "path": "/absolute/path/to/ffmpeg",
+    "version": "7.1.1",
+    "revision": "ffmpeg-n7.1.1"
+  },
+  "whisperCli": {
+    "path": "/absolute/path/to/whisper-cli",
+    "revision": "whisper.cpp-v1.9.2",
+    "sourceArchiveSha256": "a6abd064fcca8b85e794d205abf328c522e9451db43a3eadc178b883b7d0e9cd",
+    "buildPolicy": "darwin-arm64-static-cpu-accelerate-v1"
+  },
+  "model": {
+    "path": "/absolute/path/to/ggml-base.en-q5_1.bin",
+    "locator": ".cut/models/ggml-base.en-q5_1.bin",
+    "name": "ggml-base.en-q5_1",
+    "revision": "c521a4b02f422512d734391fdf08bb08c0862f68",
+    "license": "MIT"
+  }
+}

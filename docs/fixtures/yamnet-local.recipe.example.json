@@ -1,0 +1,32 @@
+{
+  "python": {
+    "path": "/absolute/path/to/python3.12",
+    "pythonVersion": "3.12.4",
+    "platform": "darwin",
+    "machine": "arm64"
+  },
+  "environment": {
+    "sitePackagesRoot": "/absolute/path/to/site-packages",
+    "roots": [
+      "ai_edge_litert",
+      "ai_edge_litert-2.1.6.dist-info",
+      "numpy"
+    ],
+    "revision": "user-installed-litert-2.1.6-v1"
+  },
+  "liteRt": {
+    "roots": [
+      "ai_edge_litert",
+      "ai_edge_litert-2.1.6.dist-info"
+    ],
+    "packageVersion": "2.1.6",
+    "declaredLicense": "Apache-2.0"
+  },
+  "model": {
+    "path": "/absolute/path/to/yamnet.tflite",
+    "name": "YAMNet TFLite float32",
+    "revision": "mediapipe-yamnet-float32-latest",
+    "declaredLicense": "Apache-2.0",
+    "declaredProvenance": "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/latest/yamnet.tflite"
+  }
+}

@@ -31,6 +31,177 @@ cut footage extract .cut/footage/search.json --match 1 --handles 1s \
   --out selects/dog.mp4 --json
 ```
 
+The audio-intelligence commands are bounded authoring aids, not a final mix or
+a model hidden in the renderer. Local transcription requires an explicit
+caller-authored setup file that binds exact FFmpeg, `whisper-cli`, and model
+bytes; CUT never downloads them during doctor, transcription, lock, preview,
+or render:
+
+```sh
+cut audio setup .cut/audio/whisper-local.recipe.json \
+  --out .cut/audio/whisper-local.setup.json --json
+cut audio doctor --setup .cut/audio/whisper-local.setup.json --json
+cut audio transcribe media/interview.wav \
+  --setup .cut/audio/whisper-local.setup.json \
+  --out assets/interview.cut-transcript.json \
+  --receipt assets/interview.cut-whisper.json \
+  --stream 0 --language en --threads 8 --json
+cut audio prosody media/interview.wav \
+  --transcript assets/interview.cut-transcript.json \
+  --out .cut/audio/interview.prosody.json --json
+cut audio narrate scripts/intro.txt \
+  --recipe .cut/audio/kokoro-mlx-local.recipe.json \
+  --out assets/intro-narration.wav \
+  --receipt assets/intro-narration.kokoro.json \
+  --language en-us --speed 0.96 --seed 17072026 \
+  --sample-rate 48000 --json
+cut audio arrange audio-arrangement-input.json \
+  --out audio-arrangement.cut \
+  --manifest review/audio-arrangement.manifest.json --json
+
+cut audio analyze-setup .cut/audio/yamnet-local.recipe.json \
+  --out .cut/audio/yamnet-local.setup.json --json
+cut audio analyze-doctor --setup .cut/audio/yamnet-local.setup.json --json
+cut audio analyze media/interview.wav \
+  --setup .cut/audio/yamnet-local.setup.json \
+  --out .cut/audio/interview.analysis.json --top 8 --json
+
+cut audio index audio-catalog.json \
+  --bindings audio-bindings-v2.json \
+  --out .cut/audio/semantic-index.json --json
+cut audio search .cut/audio/semantic-index.json \
+  --query "ambient electronic" \
+  --role music --rights declared-commercial-sync --limit 20 --json
+
+cut audio audition brief.json \
+  --dialogue assets/narration.wav \
+  --catalog audio-catalog.json \
+  --bindings audio-bindings.json \
+  --samples 0:1440000 \
+  --music-start-sample 96000 \
+  --out review/audio --top 3 --json
+```
+
+`audio setup` performs no download. Its closed recipe declares canonical
+absolute paths plus FFmpeg/whisper.cpp/model provenance labels; CUT hashes and
+retains the selected bytes, executes only authenticated private copies for the
+version/linkage doctor, and publishes the machine-local setup create-only. Do
+not commit that generated setup when its absolute paths disclose local machine
+layout. The JSON success report omits those paths.
+See the [copyable recipe shape](fixtures/whisper-local.recipe.example.json).
+
+`audio analyze-setup` likewise performs no download. It authenticates a
+caller-installed CPython/LiteRT environment and YAMNet model while resolving
+CUT's exact bundled adapter and 521-row AudioSet label map. The generated setup
+is machine-local and create-only. `audio analyze` accepts one project-relative
+integer-PCM WAV of at most ten seconds in either classic PCM form or CUT's
+strict standard WAVE_FORMAT_EXTENSIBLE PCM subset, normalizes it to mono 16 kHz,
+and materializes exact signal evidence plus bounded AudioSet editorial
+suggestions. These suggestions are not emotion recognition, ground truth,
+license verification, provenance verification, or rights clearance. See the
+[copyable YAMNet recipe](fixtures/yamnet-local.recipe.example.json) and
+[Audio intelligence](AUDIO_INTELLIGENCE.md).
+
+`audio index` does not scan folders or execute YAMNet. It requires one closed
+catalog plus semantic audition bindings v2, authenticates the actual
+project-local source, rights-evidence, and materialized-analysis files, and
+replays the embedded semantic derivation against the source WAV before a
+create-only publication. The canonical index is limited to 1 MiB and validates
+against the shipped
+[`cut-audio-semantic-index-v1.schema.json`](../schemas/cut-audio-semantic-index-v1.schema.json).
+`audio search` validates that closed snapshot and its canonical hash, then
+matches exact catalog tokens and authenticated positive aggregate AudioSet
+labels. `--role` uses only the catalog-declared role. The optional
+`--rights declared-commercial-sync` filter is a narrow metadata predicate, not
+rights clearance. Each result reports the per-token evidence behind its score
+and still requires listening, human rights review, explicit project-local asset
+declaration, and `cut lock`.
+
+Transcription authenticates the selected source stream, privately executes a
+compatible static whisper.cpp 1.9.2 CLI on CPU, maps millisecond output onto
+the source sample grid under an explicit boundary policy, and publishes the
+ordinary `cut-transcript` plus a receipt create-only. The current compatible
+execution policy is Darwin arm64; the setup's provenance and license labels
+remain caller declarations even though the selected bytes are authenticated.
+
+`audio narrate` is the separate optional local Kokoro MLX path. Its closed,
+machine-local recipe selects canonical CPython, complete Python/native runtime
+component roots, one model, one voice, and eSpeak bytes; CUT supplies and
+authenticates its own bundled adapter. The command performs no setup, install,
+download, network or cloud call. On supported macOS arm64 it privately stages
+the authenticated closure, synthesizes one bounded `en-us` script, rechecks the
+raw script and recipe bytes, and publishes the mono PCM16 WAV plus canonical
+receipt in one create-only transaction. The script may have exactly one final
+LF or CRLF, removed before synthesis while its raw identity remains reported;
+leading whitespace, extra blank lines, internal line breaks and controls remain
+invalid. Start from the
+[recipe shape](fixtures/kokoro-mlx-local.recipe.example.json), replacing paths,
+versions, licenses and component roots with the exact dedicated environment.
+One component may name up to 256 roots; the collector still enforces the
+aggregate 128-component, 256-package, 32,768-file and 512 MiB runtime boundary
+and rejects overlapping files. The recipe can reveal local paths and should
+not be committed unchanged.
+
+The receipt authenticates the executed closure and resulting WAV but does not
+prove declared licenses, operating-system network isolation, cross-run PCM
+reproducibility, emotional intent, voice quality or normal-speed human review.
+`cut lock`, preview and render consume only the published WAV bytes and never
+rerun Kokoro.
+
+`audio arrange` is model-free authoring over an explicit
+`cut-audio-arrangement-input` v1. It authenticates every project-relative bound
+asset against `lockedResourceSha256`, decodes each as strict integer-PCM WAVE,
+and requires the declared sample rate and source range to fit the actual file.
+Work is sequential and capped at 64 assets, 64 MiB per asset, 512 MiB of
+aggregate encoded input, and 100 million aggregate channel-sample reads.
+
+The `--out` filename must be a root-level `.cut` file so locators such as
+`assets/dialogue.wav` keep the same project-relative meaning in generated
+source. The manifest may be nested. CUT rechecks the input and every asset
+before and during a single create-only two-output transaction. It writes the
+pure kernel's exact editable source and canonical manifest; it does not change
+`main.cut`, lock, render, audition, normalize, download, select, or infer any
+media. Inspect and edit the proposal, listen in context, retain rights review,
+then explicitly run `cut lock` on the accepted source.
+
+Start from the
+[arrangement input example](fixtures/audio-arrangement-input.example.json).
+Its all-zero script/resource digests are intentional placeholders. After
+selecting real local WAVs, replace them and regenerate `briefSha256` and
+`inputSha256`; CUT rejects stale canonical identities rather than silently
+repairing them.
+
+`audio prosody` is model-free. It accepts the exact project-relative integer-PCM
+WAVE named by a `cut-transcript` v1 sidecar: the transcript media SHA-256 must
+equal the WAVE bytes, its stream index must be zero, and its sample rate and
+duration must equal the WAVE sample clock. CUT authenticates both files,
+decodes the same strict classic or WAVE_FORMAT_EXTENSIBLE 16/24/32-bit subset,
+and equally downmixes channels to native-rate mono Float32 without resampling.
+The source is limited to 64 MiB, 100 million PCM frames, and 100 million channel
+sample reads; the create-only canonical analysis is limited to 32 MiB. CUT
+rechecks both inputs before transactional publication. The result measures
+speaking and articulation rate, pauses, phrases, level contours, and bounded
+emphasis candidates. It does not infer emotion or speaker identity, measure
+masking, approve a performance, or alter deterministic preview/render output.
+
+Audition authenticates local classic PCM WAVs and separate rights-evidence bytes,
+measures the exact rendered source intervals, level-calibrates candidates under
+one bounded draft policy, emits ordinary public `.cut` source with buses and
+sidechain ducking, locks that source, and renders deterministic review WAVs.
+Legacy v1 bindings retain the existing catalog-plus-signal ranking. V2 bindings
+also bind one exact `audio analyze` artifact per candidate. Only exact
+whole-source music evidence can adjust rank, by at most plus or minus 20,000
+ppm; ambience, SFX, mood, and partial-window evidence is retained but not
+weighted, and provider inference is not re-executed. The optional music-start
+sample is relative to the selected review range. The selection receipt remains
+explicitly non-authoritative: no stock download, legal clearance, human
+listening, final normalization, AAC delivery, or stems are implied by this
+alpha slice. See
+[Audio intelligence](AUDIO_INTELLIGENCE.md), the closed
+[v1 bindings schema](../schemas/cut-audio-audition-bindings-v1.schema.json),
+[v2 semantic bindings schema](../schemas/cut-audio-audition-bindings-v2.schema.json),
+and their copyable examples.
+
 ## First project
 
 ```sh

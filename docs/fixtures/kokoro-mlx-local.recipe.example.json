@@ -1,0 +1,61 @@
+{
+  "format": "cut-kokoro-mlx-local-recipe",
+  "version": 1,
+  "python": {
+    "path": "/absolute/path/to/venv/bin/python3.12",
+    "pythonVersion": "3.12.4"
+  },
+  "runtime": {
+    "sitePackagesRoot": "/absolute/path/to/venv/lib/python3.12/site-packages",
+    "components": [
+      {
+        "id": "kokoro-python-runtime",
+        "roots": [
+          "kokoro_mlx",
+          "kokoro_mlx-0.1.2.dist-info",
+          "misaki",
+          "misaki-0.9.4.dist-info",
+          "numpy",
+          "numpy-2.5.1.dist-info",
+          "safetensors",
+          "safetensors-0.8.0.dist-info"
+        ],
+        "packages": [
+          { "name": "kokoro-mlx", "packageVersion": "0.1.2", "license": "MIT" },
+          { "name": "misaki", "packageVersion": "0.9.4", "license": "Apache-2.0" },
+          { "name": "numpy", "packageVersion": "2.5.1", "license": "BSD-3-Clause" },
+          { "name": "safetensors", "packageVersion": "0.8.0", "license": "Apache-2.0" }
+        ]
+      },
+      {
+        "id": "mlx-native-runtime",
+        "roots": [
+          "mlx",
+          "mlx-0.32.0.dist-info",
+          "mlx_metal-0.32.0.dist-info"
+        ],
+        "packages": [
+          { "name": "mlx", "packageVersion": "0.32.0", "license": "MIT" },
+          { "name": "mlx-metal", "packageVersion": "0.32.0", "license": "MIT" }
+        ]
+      }
+    ]
+  },
+  "model": {
+    "name": "Kokoro-82M-bf16",
+    "revision": "replace-with-exact-model-revision",
+    "license": "Apache-2.0",
+    "configPath": "/absolute/path/to/Kokoro-82M-bf16/config.json",
+    "weightsPath": "/absolute/path/to/Kokoro-82M-bf16/kokoro-v1_0.safetensors"
+  },
+  "voice": {
+    "name": "af_heart",
+    "license": "Apache-2.0",
+    "weightsPath": "/absolute/path/to/Kokoro-82M-bf16/voices/af_heart.safetensors"
+  },
+  "phonemizer": {
+    "version": "1.52.0",
+    "libraryPath": "/absolute/path/to/libespeak-ng.1.dylib",
+    "dataRoot": "/absolute/path/to/espeak-ng-data"
+  }
+}

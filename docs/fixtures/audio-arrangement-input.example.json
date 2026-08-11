@@ -1,0 +1,55 @@
+{
+  "format": "cut-audio-arrangement-input",
+  "version": 1,
+  "profile": "documentary-podcast-arrangement-v1",
+  "brief": {
+    "format": "cut-audio-brief",
+    "version": 1,
+    "sampleRate": 8000,
+    "durationSamples": 8000,
+    "sourceScriptSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "acts": [
+      {
+        "id": "opening",
+        "range": { "startSample": 0, "endSample": 8000 },
+        "narrativeTurn": "hook",
+        "desiredRoles": ["silence"],
+        "moods": ["clear"],
+        "energyPpm": 300000,
+        "densityPpm": 200000,
+        "dialogueSpacePpm": 900000,
+        "intent": "Keep the spoken line clear and leave one intentional breath."
+      }
+    ],
+    "events": [],
+    "intentionalSilences": [
+      {
+        "range": { "startSample": 4000, "endSample": 4800 },
+        "purpose": "Hold one deliberate breath in supporting sound."
+      }
+    ],
+    "briefSha256": "793a808911937552bb3d138cc0ef81d68e2df0ce9c6605bc9a004f8d23dcc998"
+  },
+  "prosody": null,
+  "assets": [
+    {
+      "id": "host-dialogue",
+      "role": "dialogue",
+      "locator": "assets/host-dialogue.wav",
+      "lockedResourceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "sampleRate": 8000,
+      "sourceRange": { "startSample": 0, "endSample": 8000 },
+      "assignment": { "kind": "program-dialogue" },
+      "perspective": {
+        "distance": "near",
+        "gainDbMilli": 0,
+        "panPpm": 0,
+        "eqFrequencyHz": 3000,
+        "eqGainDbMilli": 0,
+        "eqQMilli": 1000,
+        "reverbWetPpm": 0
+      }
+    }
+  ],
+  "inputSha256": "65af54b7d62569d37634dd6759950ab40dbd1cde38e9071fd8648e953424af66"
+}

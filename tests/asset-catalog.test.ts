@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import {
+  cutAssetCatalogLimits,
   CutAssetCatalogError,
+  doesCutAudioCatalogMetadataDeclareCommercialSyncUse,
   loadCutAssetCatalogFile,
   parseCutAssetCatalog,
   searchCutAssetCatalog,
@@ -54,6 +56,49 @@ const fixture = () => ({
   ],
 });
 
+const audiovisualGrant = () => ({
+  commercialUse: true,
+  modification: true,
+  audiovisualSynchronization: true,
+  standaloneRedistribution: false,
+  attributionRequired: true,
+  shareAlike: false,
+});
+
+const audioCandidate = () => ({
+  ...fixture().entries[1],
+  id: "restrained-tension-bed",
+  label: "Restrained tension bed",
+  description: "A restrained music cue with a clean loop and gradual build.",
+  tags: ["underscore"],
+  audio: {
+    role: "music",
+    durationSamples: 5_760_000,
+    sampleRate: 48_000,
+    channels: 2,
+    bpmMilli: 120_000,
+    key: "D minor",
+    energy: "high",
+    moods: ["Tense", "restrained"],
+    loopable: true,
+  },
+  rights: {
+    basis: "source-asserted",
+    licenseId: "CC-BY-4.0",
+    licenseVersion: "4.0",
+    licenseUrl: "https://creativecommons.org/licenses/by/4.0/",
+    evidenceSha256: "3".repeat(64),
+    compositionGrant: audiovisualGrant(),
+    masterGrant: audiovisualGrant(),
+    reviewStatus: "approved",
+  },
+});
+
+const catalogWithAudio = (entry: unknown = audioCandidate()) => ({
+  ...fixture(),
+  entries: [entry],
+});
+
 test("closed asset catalog search is deterministic, provenance-bearing, and explicitly non-authoritative", () => {
   const source = `${JSON.stringify(fixture(), null, 2)}\n`;
   const first = parseCutAssetCatalog(source), second = parseCutAssetCatalog(source);
@@ -73,6 +118,135 @@ test("closed asset catalog search is deterministic, provenance-bearing, and expl
     searchCutAssetCatalog(first, { query: "harbour", limit: 10 }).results.map((entry) => entry.id),
     ["harbour-cargo-wide", "harbour-water-bed"],
   );
+  assert.equal(Object.hasOwn(first.entries[1]!, "audio"), false);
+  assert.equal(Object.hasOwn(first.entries[1]!, "rights"), false);
+});
+
+test("audio metadata remains optional, normalizes bounded moods, and participates in textual search", () => {
+  const catalog = parseCutAssetCatalog(JSON.stringify(catalogWithAudio()));
+  const entry = catalog.entries[0]!;
+  assert.equal(entry.kind, "audio");
+  assert.deepEqual(entry.audio?.moods, ["tense", "restrained"]);
+  assert.equal(entry.audio?.bpmMilli, 120_000);
+  assert.equal(entry.rights?.licenseId, "CC-BY-4.0");
+  assert.deepEqual(
+    searchCutAssetCatalog(catalog, { query: "music tense high", kind: "audio" }).results.map((result) => result.id),
+    ["restrained-tension-bed"],
+  );
+  assert.deepEqual(
+    searchCutAssetCatalog(catalog, { query: "120000 d minor loopable" }).results.map((result) => result.id),
+    ["restrained-tension-bed"],
+  );
+  assert.deepEqual(
+    searchCutAssetCatalog(catalog, { query: "cc-by-4.0 approved" }).results.map((result) => result.id),
+    ["restrained-tension-bed"],
+  );
+});
+
+test("audio and rights metadata are closed, audio-only, bounded, and duplicate-normalized", () => {
+  const entry = audioCandidate();
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify(catalogWithAudio({ ...entry, audio: { ...entry.audio, unknown: true } }))),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_UNKNOWN_FIELD",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify(catalogWithAudio({
+      ...entry,
+      rights: {
+        ...entry.rights,
+        masterGrant: { ...entry.rights.masterGrant, unknown: true },
+      },
+    }))),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_UNKNOWN_FIELD",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify({
+      ...fixture(),
+      entries: [{ ...fixture().entries[0], audio: entry.audio }],
+    })),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_KIND",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify({
+      ...fixture(),
+      entries: [{ ...fixture().entries[0], rights: entry.rights }],
+    })),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_KIND",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify(catalogWithAudio({
+      ...entry,
+      audio: { ...entry.audio, durationSamples: cutAssetCatalogLimits.maximumAudioDurationSamples + 1 },
+    }))),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_LIMIT",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify(catalogWithAudio({
+      ...entry,
+      audio: { ...entry.audio, moods: ["Tense", "tense"] },
+    }))),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_DUPLICATE",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify(catalogWithAudio({
+      ...entry,
+      audio: { ...entry.audio, moods: ["not one token"] },
+    }))),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_TEXT",
+  );
+  assert.throws(
+    () => parseCutAssetCatalog(JSON.stringify(catalogWithAudio({
+      ...entry,
+      audio: { ...entry.audio, moods: Array.from({ length: cutAssetCatalogLimits.maximumAudioMoods + 1 }, (_, index) => `mood-${index}`) },
+    }))),
+    (error: unknown) => error instanceof CutAssetCatalogError && error.code === "CUT_ASSET_CATALOG_LIMIT",
+  );
+});
+
+test("audio grant metadata policy is conservative classification, never clearance", () => {
+  const parsedEntry = (entry: unknown) => parseCutAssetCatalog(JSON.stringify(catalogWithAudio(entry))).entries[0]!;
+  const approved = audioCandidate();
+  assert.equal(doesCutAudioCatalogMetadataDeclareCommercialSyncUse(parsedEntry(approved)), true);
+  assert.equal(doesCutAudioCatalogMetadataDeclareCommercialSyncUse(parsedEntry({
+    ...approved,
+    rights: { ...approved.rights, licenseId: "CC0-1.0", licenseVersion: "1.0" },
+  })), true);
+  assert.equal(doesCutAudioCatalogMetadataDeclareCommercialSyncUse(parsedEntry({
+    ...approved,
+    rights: {
+      ...approved.rights,
+      basis: "contract-receipt",
+      licenseId: "LicenseRef-Acme-Sync-2026",
+      licenseVersion: "2026.1",
+    },
+  })), true);
+  assert.equal(doesCutAudioCatalogMetadataDeclareCommercialSyncUse(parseCutAssetCatalog(JSON.stringify(fixture())).entries[0]!), false);
+
+  const rejectedRights = [
+    { ...approved.rights, reviewStatus: "pending" },
+    { ...approved.rights, reviewStatus: "rejected" },
+    { ...approved.rights, licenseId: "CC-BY-NC-4.0" },
+    { ...approved.rights, licenseId: "CC-BY-ND-4.0" },
+    { ...approved.rights, licenseId: "CC-BY-SA-4.0" },
+    { ...approved.rights, licenseId: "NOASSERTION" },
+    { ...approved.rights, licenseId: "LicenseRef-Private", licenseVersion: "1" },
+    {
+      ...approved.rights,
+      compositionGrant: { ...approved.rights.compositionGrant, modification: false },
+    },
+    {
+      ...approved.rights,
+      masterGrant: { ...approved.rights.masterGrant, shareAlike: true },
+    },
+    {
+      ...approved.rights,
+      basis: "contract-receipt",
+      licenseId: "CC-BY-NC-4.0",
+    },
+  ];
+  for (const rights of rejectedRights) {
+    assert.equal(doesCutAudioCatalogMetadataDeclareCommercialSyncUse(parsedEntry({ ...approved, rights })), false);
+  }
 });
 
 test("catalog and query boundaries fail closed without filename or URL trust", () => {

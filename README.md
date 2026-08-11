@@ -52,18 +52,19 @@ FFmpeg version; `cut doctor` is the installability gate because CUT depends on
 specific codecs, filters, and probe behavior rather than a version string alone.
 Windows descriptor-bound media execution is not supported.
 
-Install the published package into a project:
+Install the GitHub alpha package into a project. npm registry publication is a
+separate release step and may lag this GitHub prerelease.
 
 ```sh
 mkdir my-cut-project && cd my-cut-project
 npm init -y
-npm install --save-exact cut-lang@0.4.0-alpha.4
+npm install --save-exact https://github.com/madebyansh/cut/releases/download/v0.4.0-alpha.4/cut-lang-0.4.0-alpha.4.tgz
 npx cut doctor
 npx cut init film --name "My first CUT film"
 ```
 
 For an audited offline install, download the tarball and checksum from the
-[latest GitHub release](https://github.com/madebyansh/cut/releases/latest).
+[v0.4.0-alpha.4 GitHub release](https://github.com/madebyansh/cut/releases/tag/v0.4.0-alpha.4).
 On macOS, verify with `shasum -a 256 -c CUT-0.4.0-alpha.4-SHA256SUMS.txt`;
 on Linux, use `sha256sum -c CUT-0.4.0-alpha.4-SHA256SUMS.txt`, then install the
 verified tarball with `npm install --save-exact /path/to/cut-lang-0.4.0-alpha.4.tgz`.

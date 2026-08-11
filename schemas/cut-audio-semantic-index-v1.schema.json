@@ -1,0 +1,304 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:cut:schema:audio-semantic-index:1",
+  "title": "CUT authenticated audio semantic index v1",
+  "description": "Closed deterministic projection of catalog metadata and authenticated materialized AudioSet aggregate labels. It is candidate retrieval evidence, not emotion inference, listening, or rights clearance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bindings", "catalog", "coverage", "entries", "format", "indexSha256", "limitations", "policy", "status", "version"],
+  "properties": {
+    "format": { "const": "cut-audio-semantic-index" },
+    "version": { "const": 1 },
+    "status": { "const": "pass" },
+    "catalog": { "$ref": "#/definitions/inputAuthority" },
+    "bindings": { "$ref": "#/definitions/bindingAuthority" },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": { "$ref": "#/definitions/entry" }
+    },
+    "coverage": { "$ref": "#/definitions/coverage" },
+    "policy": { "$ref": "#/definitions/policy" },
+    "limitations": { "$ref": "#/definitions/limitations" },
+    "indexSha256": { "$ref": "#/definitions/sha256" }
+  },
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "safeNonnegativeInteger": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "safePositiveInteger": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "boundedText": {
+      "type": "string",
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]*$"
+    },
+    "projectLocator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]+$"
+    },
+    "fileIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "locator", "sha256"],
+      "properties": {
+        "locator": { "$ref": "#/definitions/projectLocator" },
+        "bytes": { "$ref": "#/definitions/safePositiveInteger" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "inputAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "catalogSha256", "fileSha256", "locator"],
+      "properties": {
+        "locator": { "$ref": "#/definitions/projectLocator" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "fileSha256": { "$ref": "#/definitions/sha256" },
+        "catalogSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "bindingAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bindingsSha256", "bytes", "fileSha256", "locator"],
+      "properties": {
+        "locator": { "$ref": "#/definitions/projectLocator" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "fileSha256": { "$ref": "#/definitions/sha256" },
+        "bindingsSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attribution", "creator", "license", "licenseUrl", "sourceUrl"],
+      "properties": {
+        "creator": { "$ref": "#/definitions/boundedText" },
+        "license": { "$ref": "#/definitions/boundedText" },
+        "licenseUrl": { "type": "string", "format": "uri", "maxLength": 4096 },
+        "sourceUrl": { "type": "string", "format": "uri", "maxLength": 4096 },
+        "attribution": { "$ref": "#/definitions/boundedText" }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels", "durationSamples", "loopable", "moods", "role", "sampleRate"],
+      "properties": {
+        "role": { "enum": ["music", "sfx", "ambience", "dialogue"] },
+        "durationSamples": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "sampleRate": { "type": "integer", "minimum": 1, "maximum": 768000 },
+        "channels": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "bpmMilli": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "key": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "energy": { "enum": ["low", "medium", "high"] },
+        "moods": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[a-z0-9][a-z0-9-]*$" }
+        },
+        "loopable": { "type": "boolean" }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attributionRequired", "audiovisualSynchronization", "commercialUse", "modification", "shareAlike", "standaloneRedistribution"],
+      "properties": {
+        "commercialUse": { "type": "boolean" },
+        "modification": { "type": "boolean" },
+        "audiovisualSynchronization": { "type": "boolean" },
+        "standaloneRedistribution": { "type": "boolean" },
+        "attributionRequired": { "type": "boolean" },
+        "shareAlike": { "type": "boolean" }
+      }
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basis", "compositionGrant", "evidenceSha256", "licenseId", "licenseUrl", "licenseVersion", "masterGrant", "reviewStatus"],
+      "properties": {
+        "basis": { "enum": ["source-asserted", "user-attested", "contract-receipt"] },
+        "licenseId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$" },
+        "licenseVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "licenseUrl": { "type": "string", "format": "uri", "maxLength": 4096 },
+        "evidenceSha256": { "$ref": "#/definitions/sha256" },
+        "compositionGrant": { "$ref": "#/definitions/grant" },
+        "masterGrant": { "$ref": "#/definitions/grant" },
+        "reviewStatus": { "enum": ["pending", "approved", "rejected"] }
+      }
+    },
+    "catalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio", "bytes", "description", "downloadUrl", "id", "kind", "label", "provenance", "sha256", "tags"],
+      "properties": {
+        "id": { "$ref": "#/definitions/stableId" },
+        "label": { "$ref": "#/definitions/boundedText" },
+        "kind": { "const": "audio" },
+        "description": { "$ref": "#/definitions/boundedText" },
+        "tags": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/definitions/boundedText" } },
+        "downloadUrl": { "type": "string", "format": "uri", "maxLength": 4096 },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "bytes": { "$ref": "#/definitions/safePositiveInteger" },
+        "provenance": { "$ref": "#/definitions/provenance" },
+        "audio": { "$ref": "#/definitions/audio" },
+        "rights": { "$ref": "#/definitions/rights" }
+      }
+    },
+    "semanticAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analysisSha256", "contract", "file", "provider", "taxonomy"],
+      "properties": {
+        "contract": { "const": "authenticated-source-and-embedded-semantic-derivation-recomputed-without-model-reexecution-v1" },
+        "file": { "$ref": "#/definitions/fileIdentity" },
+        "analysisSha256": { "$ref": "#/definitions/sha256" },
+        "provider": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["analysisSha256", "authoritiesSha256", "id", "rawScoreSha256"],
+          "properties": {
+            "id": { "const": "cut-yamnet-litert-local-v1" },
+            "analysisSha256": { "$ref": "#/definitions/sha256" },
+            "rawScoreSha256": { "$ref": "#/definitions/sha256" },
+            "authoritiesSha256": { "$ref": "#/definitions/sha256" }
+          }
+        },
+        "taxonomy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["interpretation", "musicMoodScope", "policySha256", "suggestionsSha256"],
+          "properties": {
+            "policySha256": { "$ref": "#/definitions/sha256" },
+            "suggestionsSha256": { "$ref": "#/definitions/sha256" },
+            "interpretation": { "const": "editorial-suggestions-not-ground-truth-v1" },
+            "musicMoodScope": { "const": "music-only-no-unmapped-mood-inference-v1" }
+          }
+        }
+      }
+    },
+    "observedClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classIndex", "label", "scorePpm"],
+      "properties": {
+        "classIndex": { "type": "integer", "minimum": 0, "maximum": 520 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "scorePpm": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aggregateTopClasses", "catalogEntry", "declaredCommercialSync", "declaredTokens", "id", "rightsEvidence", "semanticAnalysis", "source"],
+      "properties": {
+        "id": { "$ref": "#/definitions/stableId" },
+        "catalogEntry": { "$ref": "#/definitions/catalogEntry" },
+        "source": { "$ref": "#/definitions/fileIdentity" },
+        "rightsEvidence": { "$ref": "#/definitions/fileIdentity" },
+        "semanticAnalysis": { "$ref": "#/definitions/semanticAnalysis" },
+        "declaredTokens": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        },
+        "aggregateTopClasses": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/definitions/observedClass" } },
+        "declaredCommercialSync": { "type": "boolean" }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalogAudioEntries", "catalogEntries", "indexedEntries", "omittedAudioEntryIds"],
+      "properties": {
+        "catalogEntries": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "catalogAudioEntries": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "indexedEntries": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "omittedAudioEntryIds": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "$ref": "#/definitions/stableId" } }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declaredMetadata", "duplicateQueryTokens", "format", "matching", "observedSemantics", "policySha256", "ranking", "rightsFilter", "roleFilter", "tokenization", "version"],
+      "properties": {
+        "format": { "const": "cut-audio-semantic-search-policy" },
+        "version": { "const": 1 },
+        "tokenization": { "const": "nfkc-lowercase-unicode-letter-or-number-exact-token-v1" },
+        "duplicateQueryTokens": { "const": "first-occurrence-only-v1" },
+        "declaredMetadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fields", "matchedTokenScorePpm"],
+          "properties": {
+            "fields": {
+              "type": "array",
+              "items": [
+                { "const": "id" }, { "const": "label" }, { "const": "kind" }, { "const": "description" }, { "const": "tags" },
+                { "const": "provenance.creator" }, { "const": "provenance.license" }, { "const": "audio.role" },
+                { "const": "audio.durationSamples" }, { "const": "audio.sampleRate" }, { "const": "audio.channels" },
+                { "const": "audio.bpmMilli" }, { "const": "audio.key" }, { "const": "audio.energy" }, { "const": "audio.moods" },
+                { "const": "audio.loopable" }, { "const": "rights.basis" }, { "const": "rights.licenseId" },
+                { "const": "rights.licenseVersion" }, { "const": "rights.reviewStatus" }
+              ],
+              "additionalItems": false,
+              "minItems": 20,
+              "maxItems": 20
+            },
+            "matchedTokenScorePpm": { "const": 1000000 }
+          }
+        },
+        "observedSemantics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["providerExecution", "score", "source", "taxonomyMoods", "taxonomyRoles"],
+          "properties": {
+            "source": { "const": "authenticated-provider-aggregate-top-classes-only-v1" },
+            "score": { "const": "unit-interval-round-half-up-to-ppm-v1" },
+            "providerExecution": { "const": "not-reexecuted-v1" },
+            "taxonomyRoles": { "const": "not-used-for-role-filter-or-rank-v1" },
+            "taxonomyMoods": { "const": "not-used-for-rank-v1" }
+          }
+        },
+        "matching": { "const": "every-query-token-needs-declared-or-positive-observed-evidence-v1" },
+        "ranking": { "const": "mean-best-per-token-ppm-then-declared-count-then-bytewise-id-v1" },
+        "roleFilter": { "const": "catalog-declared-audio-role-only-v1" },
+        "rightsFilter": { "const": "declared-commercial-sync-metadata-predicate-not-clearance-v1" },
+        "policySha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "limitations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["emotion", "provider", "rights", "selection", "semantics"],
+      "properties": {
+        "semantics": { "const": "editorial-retrieval-evidence-not-ground-truth" },
+        "emotion": { "const": "no-emotion-inference-claim" },
+        "provider": { "const": "authenticated-materialized-evidence-not-provider-reexecution" },
+        "rights": { "const": "declared-metadata-filter-not-rights-clearance" },
+        "selection": { "const": "candidate-only-index-snapshot-not-cut-lock" }
+      }
+    }
+  },
+  "x-cut-semanticConstraints": [
+    "indexSha256 equals SHA-256 of canonical JSON for every other top-level field",
+    "catalog and bindings hashes match their exact authenticated project-local input bytes and canonical contents",
+    "entries are unique and bytewise id-sorted and every entry cross-binds catalog, binding, source, rights and semantic identities",
+    "declaredTokens exactly equal the current catalog metadata projection and are bytewise sorted",
+    "aggregateTopClasses are unique and ordered by descending scorePpm then ascending classIndex",
+    "declaredCommercialSync exactly equals CUT's narrow catalog metadata predicate and is not rights clearance",
+    "coverage counts and omitted ids equal the authenticated catalog and binding projection"
+  ]
+}

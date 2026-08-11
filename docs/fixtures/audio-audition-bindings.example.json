@@ -1,0 +1,12 @@
+{
+  "format": "cut-audio-audition-bindings",
+  "version": 1,
+  "entries": [
+    {
+      "id": "harbour-water-ambience",
+      "audioLocator": "assets/harbour-water-ambience.wav",
+      "rightsEvidenceLocator": "rights/harbour-water-ambience-license.txt"
+    }
+  ],
+  "bindingsSha256": "d4608f944fab55cc5c67cde670a2a2c861f7a04f4f2172b7335806aaeb53d15d"
+}

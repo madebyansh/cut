@@ -46,6 +46,37 @@ media; use a container or disposable account for untrusted files. Keep the
 backend lock current, review `npm audit --prefix adapters/footage-local
 --omit=dev`, and run both `cut doctor` and `cut footage doctor` before use.
 
+## Optional local audio-intelligence backends
+
+Local transcription, semantic analysis, and optional Kokoro MLX narration
+execute caller-selected native or Python model runtimes with the invoking
+user's permissions. CUT setup commands
+do not download them: they authenticate explicit local executables, model
+files, and runtime trees, then write machine-local setup records. Those records
+contain absolute paths and should not be committed when they disclose private
+filesystem layout.
+
+The YAMNet adapter uses direct LiteRT, accepts bounded normalized PCM only on
+stdin, and ships only its adapter, notices, and exact AudioSet label map. CUT
+does not bundle Python, NumPy, LiteRT, a virtual environment, or model bytes.
+The adapter's socket and subprocess guards are defense in depth, not an
+operating-system sandbox. Use an isolated account or container for an
+untrusted native runtime or model. License and provenance strings in setup and
+analysis receipts are caller declarations; hashes prove byte identity, not
+rights or legal clearance.
+
+Whisper, YAMNet, and Kokoro inference remain authoring-time operations. `cut
+lock`, preview, and render consume only materialized project artifacts and
+never start these models or contact a model service.
+
+Kokoro narration has no setup or download command. Its machine-local recipe
+selects a complete Python/native component closure, model, voice and eSpeak;
+CUT injects its bundled adapter, privately stages authenticated bytes, and
+publishes only the generated WAV and path-free receipt. Offline flags and the
+adapter's socket/subprocess denial are defense in depth, not an OS sandbox.
+The recipe contains absolute paths, the receipt contains the supplied script,
+and neither should be published when that information is sensitive.
+
 ## Secrets and publication
 
 - Never commit `.env` files, tokens, private keys, credentials, or signed URLs.
